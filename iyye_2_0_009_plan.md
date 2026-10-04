@@ -34,7 +34,7 @@ Iyye's **character** is a small, explicit, versioned state (temperaments, style,
 ### 2.3 The voice: a separate, tunable small rephrasing model (owner requirement)
 
 - **What it does:** input = the finished output text + the character's style dials + the mood + the audience (owner / contact, language) → the same message, rephrased. Nothing else: no tools, no memory access, no conversation history beyond the one output.
-- **Where it sits (owner decision 1): only Telegram messages to contacts.** Replies to contacts, and messages Iyye sends them (`telegram_send` text, but not its label line; reminder delivery wrappers, but not the reminder's own words). The owner's web chat, the owner's linked Telegram accounts (they are the owner, not a contact), notices and the day summary are never rephrased. One pass per output, between Pi's final answer (or the composed send) and the outbox, inside the turn's device hold.
+- **Where it sits (owner decisions 1, 6): only Telegram messages, to every contact and to the owner's linked Telegram accounts alike.** Replies, and messages Iyye sends (`telegram_send` text, but not its label line; reminder delivery wrappers, but not the reminder's own words). The owner's web chat, notices and the day summary are never rephrased. One pass per output, between Pi's final answer (or the composed send) and the outbox, inside the turn's device hold.
 - **What it never touches:** owner command replies (deterministic), quoted words of a person (reminder texts, the label lines), tool-result quotes, receipts and status reports, trust/security messages, refusals of authorization. These are marked as fixed segments that the voice receives as placeholders and the host re-inserts.
 - **The meaning check (host, deterministic, like `summaryProblem` and `checkCitations`):** every number, date, time, URL, file name, hash, proper name and quoted string in the original must appear in the rephrasing; no new ones may appear; a promise or "I did X" claim may not appear unless it was there; negations and problem words ("could not", "failed", "may not have arrived") must survive; the language must match; length within bounds. On failure → the original goes out unchanged (journaled). Later a Kev "same meaning?" role runs in shadow next to it.
 - **The model, chosen by A/B testing** (owner decision 3): its own registry selection (`/use <model> voice`); candidates from `models.json`: `minicpm5-2b`, `qwen35-4b-tak`, `gemma-4-E4B` (already resident as the background model). Two kinds of A/B, both feeding one report (`/voice ab`):
@@ -99,7 +99,6 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
 
 ## 5. Still open
 
-- Whether the owner's linked Telegram accounts should also get the voice later (decision 1 reads "contacts", and those accounts are the owner).
 - When Stage 4's nightly job is built relative to CH6, since the voice depends on it.
 
 ## 6. Owner decisions (2026-10-04)
@@ -109,3 +108,6 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
 3. **Voice model:** chosen by A/B testing.
 4. **One voice** for all contacts.
 5. **Tuning:** the voice is one of the nightly tunables, trained with the others.
+6. **The owner's linked Telegram accounts get the voice too**, like every contact (2026-10-04, later).
+
+Next: collect two days of M8 data (until about 2026-10-06), then CH0 on it.
