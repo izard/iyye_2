@@ -1,6 +1,6 @@
 # Iyye 2.0.009 — Stage 3, Developing Character: Rough Plan
 
-- Status (2026-10-04): **rough draft for discussion; nothing built.** Starts after M8 has produced a few real days of records (the evidence character learns from). Owner requirement: one part is **a separate, tunable small model that only rephrases outputs according to character and mood**.
+- Status (2026-10-04): **rough draft; owner decisions on the voice in §6; nothing built.** Starts after M8 has produced a few real days of records (the evidence character learns from). Owner requirement: one part is **a separate, tunable small model that only rephrases outputs according to character and mood**.
 - Design source: [`iyye_2_0_hld.md`](iyye_2_0_hld.md) §4 (stable identity, developing character, prompt composition), §5.2 (motivations), §6.4 (relationship context), §8.2 (adenosine), §9.3 (models are replaceable, character persists), §10 (learning), §11 (a recognizable day, reinforcement with damping), §14 Stage 3, §15 #12, #13, #15.
 - Builds on: adenosine (0.007 S2), the day summary and night (0.002, 0.007 S3), Kev and the decision journal (0.003), outcome records (receipts, commitments, findings, plans, `/sent`), `/forget` and tombstones.
 
@@ -28,19 +28,23 @@ Iyye's **character** is a small, explicit, versioned state (temperaments, style,
   - **engagement** ← recent interaction (a lively conversation vs a quiet day), per conversation;
   - **valence of the current exchange** ← a Kev role on the incoming message (shadow first), per conversation only.
 - Global parts (energy, ease) decay toward baseline and reset at a completed night; conversational parts live only in that conversation. A rude contact cannot make Iyye curt with the owner.
-- Mood is honest and bounded: it may colour phrasing ("long day; here's the short version") but never invents feelings beyond what the records support (identity rule: "do not invent … feelings"), and never changes what Iyye does or promises.
+- Mood is honest and bounded. **It mostly colours phrasing** (owner decision 2): word choice, length, warmth. **Saying it in words is the exception**: the kernel allows one short mood remark ("long day here, so briefly:") only when a dimension is clearly away from baseline, at most once per conversation per day, and the meaning check accepts that one added sentence only when it was allowed and carries no fact. It never invents feelings beyond what the records support (identity rule: "do not invent … feelings"), and never changes what Iyye does or promises.
 - `/mood` shows it with its sources; journaled (`mood_samples`) so the voice's training examples carry the mood they were written in.
 
 ### 2.3 The voice: a separate, tunable small rephrasing model (owner requirement)
 
 - **What it does:** input = the finished output text + the character's style dials + the mood + the audience (owner / contact, language) → the same message, rephrased. Nothing else: no tools, no memory access, no conversation history beyond the one output.
-- **Where it sits:** between Pi's final answer and `Outbox.deliver` (and before `sendOwn` for Iyye's own notices, findings, day summary text and `telegram_send` messages). One pass per output, inside the turn's device hold.
+- **Where it sits (owner decision 1): only Telegram messages to contacts.** Replies to contacts, and messages Iyye sends them (`telegram_send` text, but not its label line; reminder delivery wrappers, but not the reminder's own words). The owner's web chat, the owner's linked Telegram accounts (they are the owner, not a contact), notices and the day summary are never rephrased. One pass per output, between Pi's final answer (or the composed send) and the outbox, inside the turn's device hold.
 - **What it never touches:** owner command replies (deterministic), quoted words of a person (reminder texts, the label lines), tool-result quotes, receipts and status reports, trust/security messages, refusals of authorization. These are marked as fixed segments that the voice receives as placeholders and the host re-inserts.
 - **The meaning check (host, deterministic, like `summaryProblem` and `checkCitations`):** every number, date, time, URL, file name, hash, proper name and quoted string in the original must appear in the rephrasing; no new ones may appear; a promise or "I did X" claim may not appear unless it was there; negations and problem words ("could not", "failed", "may not have arrived") must survive; the language must match; length within bounds. On failure → the original goes out unchanged (journaled). Later a Kev "same meaning?" role runs in shadow next to it.
-- **The model:** a small instruct model, its own registry selection (`/use <model> voice`), candidates from `models.json`: `minicpm5-2b`, `qwen35-4b-tak`, `gemma-4-E4B` (already resident as the background model, so no extra memory), chosen by the V0 spike on latency and meaning preservation.
+- **The model, chosen by A/B testing** (owner decision 3): its own registry selection (`/use <model> voice`); candidates from `models.json`: `minicpm5-2b`, `qwen35-4b-tak`, `gemma-4-E4B` (already resident as the background model). Two kinds of A/B, both feeding one report (`/voice ab`):
+  - **blind owner comparison:** for a sample of real contact messages, `/voice compare` shows the original's two rephrasings from two candidates, unlabeled, and the owner picks one (or neither). Each pick is also a preference pair for tuning;
+  - **live split:** each contact-day is assigned one candidate (deterministic, balanced, journaled), comparing meaning-check failure rate, latency, and weak outcome signals (the contact replied; no "what do you mean?" follow-up).
+  The owner reads the figures and picks; the loser is unloaded.
+- **One voice for everyone** (owner decision 4): one style for all contacts at first; no per-contact styles.
 - **Tunable, in three layers:**
   1. **Conditioning** (day one): character and mood as a compact structured header; a `strength` dial (0 = pass-through, the safe default) per surface: owner web, owner Telegram, contacts, Iyye's own messages.
-  2. **A voice LoRA** trained on preferred rephrasings: pairs (original → the version the owner preferred) from explicit owner feedback (`/voice better <id>` with their own wording, `/voice worse <id>`, "shorter please" detected by a Kev role and confirmed). Owner-scope data only; contacts' conversations never enter the voice's training set. Trained at night through the Stage 4 machinery (registry, held-out set, promotion/rollback); this may be the first generative adapter that machinery serves.
+  2. **A voice LoRA, one of the nightly tunables** (owner decision 5): trained by the same bounded nightly tuning job as Kev's decision adapters (Stage 4), with the same registry, held-out set, promotion discipline and rollback, and the meaning check as a hard gate on every candidate. Its examples are preference pairs: the owner's blind A/B picks, `/voice better <id>` with the owner's own wording, `/voice worse <id>`. **Scope safety:** the voice now speaks to contacts, so its training text comes from their conversations; one shared adapter could carry one contact's facts into another's messages through its weights (HLD §15 #3). So examples are stored and trained **with the facts masked**: every fixed segment (names, numbers, dates, quotes, files) is a placeholder, as the voice itself sees it, and an example whose text still names a person is dropped. `/forget` removes a person's examples and deactivates an adapter trained on them until it is rebuilt clean (§10.5).
   3. **Per-request LoRA scale** (if the V0 spike confirms llama.cpp applies per-request adapter scales in router mode): the character's dials can blend adapters ("warmer" vs "terser") without retraining.
 - **Why separate:** the chat model can be swapped (HLD §9.3) without losing Iyye's voice; the voice can be tuned cheaply and rolled back without touching judgment; and its narrow job makes its failures checkable.
 - **Costs:** an extra generation per output (a few hundred tokens on a 2–4B model; the spike measures it). Owner directive holds: no time limit; if the voice model is not loaded, the original goes out (never a wait or a load on the chat path).
@@ -78,25 +82,30 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
 - **CH0 — Spike:** pick the voice model (latency, meaning preservation on ~200 real replies from the M8 journal, English and Russian); measure the meaning check's false-reject rate; verify llama.cpp per-request LoRA in router mode; measure a small mlx/llama LoRA training run's time and memory on this machine (owner approval needed before any training).
 - **CH1 — Character state:** migration, revisions, `character.json`, `/character …`, prompt composition reads style (HLD §4.3); no learning yet; temperament wired into the kernel's dials at 1.0 (no behaviour change).
 - **CH2 — Mood:** deterministic mood from records, `/mood`, journal; the valence Kev role in shadow.
-- **CH3 — Voice, shadow:** the voice runs on every eligible output and the meaning check judges it, but the **original is delivered**; `/voice` shows both. Owner then decides per surface when to let it act.
-- **CH4 — Voice, acting:** strength dials per surface, fixed segments, fallback to the original, owner feedback commands collecting pairs.
+- **CH3 — Voice, shadow, and A/B:** the voice runs on every Telegram message to a contact and the meaning check judges it, but the **original is delivered**; `/voice` shows both; `/voice compare` and the live split collect the A/B figures; the owner picks the model and when to let it act.
+- **CH4 — Voice, acting:** on contacts' Telegram messages only; one strength dial; fixed segments; the bounded mood remark; fallback to the original; owner feedback commands collecting masked pairs.
 - **CH5 — Nightly character review:** bounded deltas from evidence, interests/habits, undo/freeze/reset, forgetting.
-- **CH6 — Voice tuning:** the first voice LoRA from owner-approved pairs through the Stage 4 registry (held-out pairs, the meaning check as a hard gate, promotion/rollback).
+- **CH6 — Voice in the nightly tuning:** the voice LoRA becomes one tunable of the Stage 4 nightly job (built with it, or this stage builds the job's generic part first: candidate registry, held-out sets, promotion and rollback, preemption by owner input). Character review (CH5) and the temperament tuning stay deterministic and bounded; only the voice and Kev adapters are trained weights.
 - **CH7 — Evaluation (exit gate):** two scratch installations fed different evidence for several simulated days develop different, repeatable habits and voices; the same installation keeps them across restart and a chat-model change; reset removes them; generated self-praise moves nothing.
 
 ## 4. Risks
 
 - **The voice changes meaning.** The host check plus fallback is the guard; shadow first; the check errs toward refusing.
-- **Latency.** One more generation per reply on a shared device; the spike decides whether it fits, and strength 0 is a per-surface off switch.
+- **Latency.** One more generation per contact reply on a shared device; the A/B figures include it, and strength 0 switches the voice off.
 - **Mood as manipulation.** A contact steering Iyye's mood: conversational mood is confined to that conversation and bounded; global mood comes only from records.
 - **Feedback loops.** Style drifting toward whatever got any reply: bounded steps, total budget, regularization, distinct-day evidence, owner feedback weighted above volume (§11.2).
 - **Over-anthropomorphising.** Mood is presented as what it is, a summary of real state; the identity rule against invented feelings stays above it.
-- **Training on private words.** The voice trains on owner-scope pairs only; forgetting deactivates affected adapters.
+- **Training on private words.** The voice speaks to contacts, so its examples come from their conversations: facts are masked, named people dropped, and forgetting deactivates affected adapters.
 
-## 5. Open questions for the owner
+## 5. Still open
 
-1. Which surfaces get the voice first: the owner's web chat only, or also Telegram, contacts, Iyye's own messages?
-2. May Iyye mention its mood in words ("I'm a bit tired tonight"), or should mood only colour phrasing?
-3. Voice model size: share the resident `gemma-4-E4B`, or a dedicated smaller one (2B) for speed?
-4. Should contacts each get their own style (e.g. simpler words with Jacob), learned from stated preferences, or one voice for everyone at first?
-5. Training approval: the voice LoRA (CH6) is local training on this machine; it needs your explicit go-ahead (HLD §12.2), as Kev training does.
+- Whether the owner's linked Telegram accounts should also get the voice later (decision 1 reads "contacts", and those accounts are the owner).
+- When Stage 4's nightly job is built relative to CH6, since the voice depends on it.
+
+## 6. Owner decisions (2026-10-04)
+
+1. **Surfaces:** the voice rephrases only Telegram messages to contacts.
+2. **Mood:** mostly colours phrasing; saying it in words is an exception.
+3. **Voice model:** chosen by A/B testing.
+4. **One voice** for all contacts.
+5. **Tuning:** the voice is one of the nightly tunables, trained with the others.
