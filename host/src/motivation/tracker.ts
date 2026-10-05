@@ -1,0 +1,185 @@
+// Copyright 2026 Alexander Komarov
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * The motivation tracker, shadow only (plan 0.010 M0, §4): every sweep it
+ * collects the need signals, combines them into a raw need per motivation,
+ * smooths it, and counts how many sweeps it stayed at or above the
+ * threshold. When it has stayed there long enough, the sample names the
+ * evidence cluster an opportunity *would* be opened for. Nothing is opened,
+ * notified or acted on in M0: the samples are evidence for tuning the
+ * weights and the threshold before M1 lets them act.
+ *
+ * The smoothed need and the sustain counts survive restarts: they are
+ * restored from each motivation's latest sample (1.x lost its need average
+ * on every restart, which defeated the smoothing).
+ */
+
+import type { Logger } from "../log.ts";
+import type { Db } from "../state/db.ts";
+import {
+	collectSignals,
+	MOTIVATIONS,
+	type Motivation,
+	rawNeed,
+	type Signal,
+	type SignalSources,
+	strength,
+} from "./signals.ts";
+
+export interface TrackerDeps {
+	db: Db;
+	log: Logger;
+	mode: () => "awake" | "winding_down" | "asleep";
+	sources: Omit<SignalSources, "db" | "now">;
+	now?: () => Date;
+	newId?: () => string;
+	sweepMs?: number;
+	/** Smoothing: need ← need·(1−α) + raw·α. */
+	alpha?: number;
+	threshold?: number;
+	/** Sweeps at or above the threshold before an opportunity would be opened. */
+	sustain?: number;
+	/** Samples older than this are pruned. */
+	keepDays?: number;
+}
+
+interface State {
+	smoothed: number;
+	sustained: number;
+}
+
+export class MotivationTracker {
+	private readonly d: Required<TrackerDeps>;
+	private timer: NodeJS.Timeout | null = null;
+	private running: Promise<void> | null = null;
+
+	constructor(deps: TrackerDeps) {
+		this.d = {
+			now: () => new Date(),
+			newId: () => crypto.randomUUID(),
+			sweepMs: 600_000,
+			alpha: 0.3,
+			threshold: 0.6,
+			sustain: 3,
+			keepDays: 14,
+			...deps,
+		};
+	}
+
+	start(): void {
+		if (this.timer) return;
+		this.timer = setInterval(() => void this.sweep(), this.d.sweepMs);
+		this.timer.unref();
+	}
+
+	async stop(): Promise<void> {
+		if (this.timer) clearInterval(this.timer);
+		this.timer = null;
+		await this.running;
+	}
+
+	/** One sweep (awake only). Public for tests. */
+	sweep(): Promise<void> {
+		if (this.running) return this.running;
+		this.running = Promise.resolve()
+			.then(() => this.sweepOnce())
+			.catch((err) => this.d.log.warn("motivation: sweep failed", { error: (err as Error).message }))
+			.finally(() => {
+				this.running = null;
+			});
+		return this.running;
+	}
+
+	private sweepOnce(): void {
+		if (this.d.mode() !== "awake") return;
+		const now = this.d.now();
+		const signals = collectSignals({ ...this.d.sources, db: this.d.db, now });
+		const at = now.toISOString();
+		this.d.db.transaction(() => {
+			for (const m of MOTIVATIONS) {
+				const mine = signals.filter((s) => s.motivation === m);
+				const raw = rawNeed(mine, now);
+				const prev = this.state(m);
+				const smoothed = prev ? prev.smoothed * (1 - this.d.alpha) + raw * this.d.alpha : raw * this.d.alpha;
+				const sustained = smoothed >= this.d.threshold ? (prev?.sustained ?? 0) + 1 : 0;
+				const top = [...mine].sort((a, b) => strength(b, now) - strength(a, now));
+				this.d.db
+					.prepare(
+						`INSERT INTO motivation_samples (id, at, motivation, raw, smoothed, sustained, signals_json, would_open)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					)
+					.run(
+						this.d.newId(),
+						at,
+						m,
+						round(raw),
+						round(smoothed),
+						sustained,
+						JSON.stringify(top.slice(0, 10).map((s) => brief(s, now))),
+						sustained >= this.d.sustain && top[0] ? top[0].cluster : null,
+					);
+			}
+			this.d.db
+				.prepare("DELETE FROM motivation_samples WHERE at < ?")
+				.run(new Date(now.getTime() - this.d.keepDays * 86_400_000).toISOString());
+		})();
+	}
+
+	/** The latest sample of a motivation: restores the smoothing and the sustain count after a restart. */
+	private state(m: Motivation): State | null {
+		const r = this.d.db
+			.prepare(
+				"SELECT smoothed, sustained FROM motivation_samples WHERE motivation = ? ORDER BY at DESC, rowid DESC LIMIT 1",
+			)
+			.get(m) as State | undefined;
+		return r ?? null;
+	}
+
+	/** `/motivation`: each need, its top signals with evidence, and what would be opened (shadow). */
+	report(): string {
+		const now = this.d.now();
+		const lines = [
+			`motivations (shadow: nothing acts on these yet; need is smoothed, α ${this.d.alpha}; an opportunity would open after ${this.d.sustain} sweeps at ≥ ${this.d.threshold}):`,
+		];
+		for (const m of MOTIVATIONS) {
+			const r = this.d.db
+				.prepare("SELECT * FROM motivation_samples WHERE motivation = ? ORDER BY at DESC, rowid DESC LIMIT 1")
+				.get(m) as
+				| {
+						at: string;
+						raw: number;
+						smoothed: number;
+						sustained: number;
+						signals_json: string;
+						would_open: string | null;
+				  }
+				| undefined;
+			if (!r) {
+				lines.push(`  ${m}: no sample yet`);
+				continue;
+			}
+			const sigs = JSON.parse(r.signals_json) as ReturnType<typeof brief>[];
+			const min = Math.round((now.getTime() - Date.parse(r.at)) / 60_000);
+			lines.push(
+				`  ${m}: need ${r.smoothed.toFixed(2)} (raw ${r.raw.toFixed(2)}, ${min} min ago)${r.sustained ? ` · high for ${r.sustained} sweep(s)` : ""}${r.would_open ? ` · would open: ${r.would_open}` : ""}`,
+				...sigs.slice(0, 3).map((s) => `    ${s.strength.toFixed(2)} ${s.kind}: ${s.text}`),
+			);
+		}
+		return lines.join("\n");
+	}
+}
+
+function brief(s: Signal, now: Date) {
+	return {
+		kind: s.kind,
+		cluster: s.cluster,
+		strength: round(strength(s, now)),
+		text: s.text,
+		evidence: s.evidence.slice(0, 5),
+	};
+}
+
+function round(x: number): number {
+	return Math.round(x * 1000) / 1000;
+}

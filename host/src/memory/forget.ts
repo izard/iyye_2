@@ -25,6 +25,7 @@
 
 import { forgetReplyReviews } from "../decisions/reply-review.ts";
 import type { Logger } from "../log.ts";
+import { forgetSelfFacts } from "../self/model.ts";
 import { accountsOf, type Contact, OWNER_CONTACT_ID, resolvePerson, scopeFor } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
@@ -229,6 +230,8 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			db.prepare("DELETE FROM stm_episodes WHERE event_id = ?").run(r.event_id);
 		}
 		// The same replies are copied into reply-review rows (future training data): those go too, for good.
+		// The owner's statements about who they are (plan 0.010 self model).
+		forgetSelfFacts(db, [t.person.id]);
 		forgetReplyReviews(
 			db,
 			ownerTurns.map((r) => r.action_id),

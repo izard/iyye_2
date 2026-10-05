@@ -1,0 +1,262 @@
+// Copyright 2026 Alexander Komarov
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Need signals for the four motivations (plan 0.010 §3, HLD §5.2), from
+ * records only. Each signal names its evidence (record ids or the state it
+ * read). Iyye's own replies, summaries and step answers are never read here:
+ * self-authored text is never evidence of need (the 1.x lesson).
+ *
+ * M0 computes what the records already hold; the detectors that need a
+ * model (unanswered questions, intentions, dated events) come in M2.
+ */
+
+import { CLAIM_QUESTION, commitmentsOfReply, REPLY_REVIEW } from "../decisions/reply-review.ts";
+import type { Gap } from "../self/model.ts";
+import type { Db } from "../state/db.ts";
+import { getKv } from "../state/kv.ts";
+
+export const MOTIVATIONS = ["self_preservation", "curiosity", "agency", "social"] as const;
+export type Motivation = (typeof MOTIVATIONS)[number];
+
+export interface Signal {
+	motivation: Motivation;
+	kind: string;
+	/** The evidence cluster: one opportunity at most per cluster (M1). */
+	cluster: string;
+	evidence: string[];
+	/** Fixed per kind, in [0, 1]. */
+	weight: number;
+	/** When the evidence was observed; state read now is observed now. */
+	observedAt: string;
+	text: string;
+}
+
+export interface SignalSources {
+	db: Db;
+	now: Date;
+	/** The self model's gaps (curiosity's first signals, §3.1). */
+	selfGaps: () => Gap[];
+	/** The model manager's self-healing (read-only). */
+	healing: () => { model: string; attempts: number; gaveUp: boolean; lastError: string }[];
+	/** The self model's sleep facet: did the computer sleep on battery in the last day, and how long. */
+	sleep: () => { sleptOnBattery: boolean; asleepMinutes: number } | null;
+}
+
+const H = 3_600_000;
+const OK_SERVICES = new Set(["up", "connected", "disabled", "not installed", "starting", "restarting"]);
+
+export function collectSignals(s: SignalSources): Signal[] {
+	const now = s.now.toISOString();
+	const ago = (h: number) => new Date(s.now.getTime() - h * H).toISOString();
+	const out: Signal[] = [];
+	const add = (x: Omit<Signal, "observedAt"> & { observedAt?: string }) => out.push({ observedAt: now, ...x });
+	const db = s.db;
+
+	// ---------------------------------------------------------------- self-preservation
+	const machine = db
+		.prepare("SELECT id, at, result_json FROM observations WHERE domain = 'machine' ORDER BY at DESC LIMIT 1")
+		.get() as { id: string; at: string; result_json: string } | undefined;
+	if (machine) {
+		const r = JSON.parse(machine.result_json) as Record<string, unknown>;
+		const pct = Number(r.diskFreePct);
+		const gb = Number(r.diskFreeGb);
+		if (pct < 10 && gb < 100)
+			add({
+				motivation: "self_preservation",
+				kind: "disk_low",
+				cluster: "disk",
+				evidence: [`observation:${machine.id}`],
+				weight: 0.8,
+				observedAt: machine.at,
+				text: `free disk ${gb} GB (${pct}%)`,
+			});
+		if (Number(r.memAvailableGb) < 4)
+			add({
+				motivation: "self_preservation",
+				kind: "memory_low",
+				cluster: "memory",
+				evidence: [`observation:${machine.id}`],
+				weight: 0.6,
+				observedAt: machine.at,
+				text: `only ${r.memAvailableGb} GB memory available`,
+			});
+		for (const [name, state] of Object.entries((r.services ?? {}) as Record<string, string>)) {
+			if (OK_SERVICES.has(state)) continue;
+			add({
+				motivation: "self_preservation",
+				kind: "service_down",
+				cluster: `service:${name}`,
+				evidence: [`observation:${machine.id}`],
+				weight: 0.6,
+				observedAt: machine.at,
+				text: `${name} is ${state}`,
+			});
+		}
+	}
+	for (const h of s.healing())
+		add({
+			motivation: "self_preservation",
+			kind: h.gaveUp ? "model_gave_up" : "model_reloading",
+			cluster: `model:${h.model}`,
+			evidence: [`model_ops:${h.model}`],
+			weight: h.gaveUp ? 0.9 : 0.5,
+			text: `${h.model} ${h.gaveUp ? "could not be loaded" : "is being loaded again"} (${h.attempts} attempt(s); ${h.lastError.slice(0, 80)})`,
+		});
+	const backlog = (db.prepare("SELECT count(*) AS n FROM stm_episodes WHERE state = 'backlog'").get() as { n: number })
+		.n;
+	if (backlog > 0)
+		add({
+			motivation: "self_preservation",
+			kind: "memory_backlog",
+			cluster: "memory-backlog",
+			evidence: [`stm_backlog:${backlog}`],
+			weight: Math.min(0.2 + 0.02 * backlog, 0.6),
+			text: `${backlog} conversation(s) still waiting to be stored in long-term memory`,
+		});
+	const lastNight = getKv(db, "rhythm.last_night_at");
+	const lastSummary = getKv(db, "rhythm.last_summary") ?? "";
+	if (lastNight && lastNight >= ago(36) && /stopped early/.test(lastSummary))
+		add({
+			motivation: "self_preservation",
+			kind: "night_cut_short",
+			cluster: `night:${lastNight.slice(0, 10)}`,
+			evidence: [`rhythm.last_night_at:${lastNight}`],
+			weight: 0.6,
+			observedAt: lastNight,
+			text: `the last night stopped early: ${lastSummary.slice(lastSummary.indexOf("stopped early")).slice(0, 100)}`,
+		});
+	const unknown = db
+		.prepare("SELECT id, created_at FROM actions WHERE state = 'unknown' AND created_at >= ? ORDER BY created_at")
+		.all(ago(7 * 24)) as { id: string; created_at: string }[];
+	if (unknown.length)
+		add({
+			motivation: "self_preservation",
+			kind: "unconfirmed_deliveries",
+			cluster: "unconfirmed",
+			evidence: unknown.slice(0, 10).map((a) => `action:${a.id}`),
+			weight: 0.5,
+			observedAt: unknown.at(-1)!.created_at,
+			text: `${unknown.length} message(s) may or may not have arrived`,
+		});
+	const sleep = s.sleep();
+	if (sleep?.sleptOnBattery && sleep.asleepMinutes >= 60)
+		add({
+			motivation: "self_preservation",
+			kind: "slept_on_battery",
+			cluster: `sleep:${now.slice(0, 10)}`,
+			evidence: ["self_facts:sleep"],
+			weight: 0.4,
+			text: `the computer slept ${Math.round(sleep.asleepMinutes / 60)} h on battery in the last day`,
+		});
+
+	// ---------------------------------------------------------------- curiosity
+	for (const g of s.selfGaps())
+		add({
+			motivation: "curiosity",
+			kind: `self_${g.kind}`,
+			cluster: `self:${g.facet}:${g.field}`,
+			evidence: [`self_facts:${g.facet}:${g.field}`],
+			weight: g.kind === "contradicted" ? 0.8 : g.kind === "missing" ? 0.6 : 0.4,
+			text: g.why,
+		});
+	for (const o of db
+		.prepare("SELECT id, question, created_at FROM opportunities WHERE status IN ('open', 'running')")
+		.all() as { id: string; question: string; created_at: string }[])
+		add({
+			motivation: "curiosity",
+			kind: "open_question",
+			cluster: `opportunity:${o.id}`,
+			evidence: [`opportunity:${o.id}`],
+			weight: 0.4,
+			observedAt: o.created_at,
+			text: o.question.slice(0, 100),
+		});
+
+	// ---------------------------------------------------------------- agency
+	for (const p of db
+		.prepare("SELECT id, intent, state, updated_at FROM plans WHERE state IN ('suspended', 'active', 'proposed')")
+		.all() as { id: string; intent: string; state: string; updated_at: string }[]) {
+		const stalled = p.state === "active" && p.updated_at < ago(24);
+		const waiting = p.state === "proposed" && p.updated_at < ago(24);
+		if (p.state !== "suspended" && !stalled && !waiting) continue;
+		add({
+			motivation: "agency",
+			kind: p.state === "suspended" ? "plan_suspended" : stalled ? "plan_stalled" : "plan_awaiting_approval",
+			cluster: `plan:${p.id}`,
+			evidence: [`plan:${p.id}`],
+			weight: p.state === "suspended" ? 0.6 : stalled ? 0.4 : 0.3,
+			observedAt: p.updated_at,
+			text: `plan ${JSON.stringify(p.intent.slice(0, 60))} is ${stalled ? "active with no progress for a day" : p.state}`,
+		});
+	}
+	for (const c of db
+		.prepare(
+			"SELECT id, state, coalesce(settled_at, due_at) AS at FROM commitments WHERE (state = 'unknown') OR (state = 'failed' AND settled_at >= ?)",
+		)
+		.all(ago(7 * 24)) as { id: string; state: string; at: string }[])
+		add({
+			motivation: "agency",
+			kind: c.state === "failed" ? "commitment_failed" : "commitment_unconfirmed",
+			cluster: `commitment:${c.id}`,
+			evidence: [`commitment:${c.id}`],
+			weight: 0.5,
+			observedAt: c.at,
+			text: `a reminder ${c.state === "failed" ? "could not be delivered" : "may not have arrived"}`,
+		});
+
+	// ---------------------------------------------------------------- social
+	for (const j of db
+		.prepare(
+			`SELECT j.id, j.scope, j.settled_at FROM jobs j WHERE j.status = 'failed' AND j.settled_at >= ? AND j.scope NOT LIKE 'iyye%'
+			 ORDER BY j.settled_at`,
+		)
+		.all(ago(48)) as { id: string; scope: string; settled_at: string }[])
+		add({
+			motivation: "social",
+			kind: "person_unanswered",
+			cluster: `unanswered:${j.scope}`,
+			evidence: [`job:${j.id}`],
+			weight: 0.7,
+			observedAt: j.settled_at,
+			text: `a message in ${j.scope === "owner" ? "the owner's conversation" : "a contact's conversation"} could not be answered`,
+		});
+	for (const d of db
+		.prepare(
+			"SELECT id, subject_ref, verdicts_json, created_at FROM decisions WHERE role = ? AND schema_version >= 2 AND status = 'ok' AND created_at >= ?",
+		)
+		.all(REPLY_REVIEW.name, ago(72)) as {
+		id: string;
+		subject_ref: string;
+		verdicts_json: string;
+		created_at: string;
+	}[]) {
+		const v = JSON.parse(d.verdicts_json ?? "{}") as Record<string, string>;
+		if (v[CLAIM_QUESTION.id] !== "yes" || commitmentsOfReply(db, d.subject_ref ?? "").length > 0) continue;
+		add({
+			motivation: "social",
+			kind: "claim_without_record",
+			cluster: `claim:${d.subject_ref}`,
+			evidence: [`decision:${d.id}`],
+			weight: 0.5,
+			observedAt: d.created_at,
+			text: "a reply claimed something was set up, and nothing was",
+		});
+	}
+	return out;
+}
+
+/** A signal's weight, faded by its age (a day's half-life, about). */
+export function strength(sig: Signal, now: Date): number {
+	const age = Math.max(0, now.getTime() - Date.parse(sig.observedAt));
+	return sig.weight * Math.exp(-age / (36 * H));
+}
+
+/**
+ * Raw need of one motivation: the signals combined as independent pressures
+ * (1 − Π(1 − strength)), so it stays in [0, 1], one strong signal is
+ * enough, and many weak ones add up without exceeding 1.
+ */
+export function rawNeed(signals: readonly Signal[], now: Date): number {
+	return 1 - signals.reduce((p, sig) => p * (1 - strength(sig, now)), 1);
+}

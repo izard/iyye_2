@@ -57,6 +57,9 @@ export interface CommandContext {
 	} | null;
 	/** /sent: messages sent for the owner (plan 0.008). */
 	sentReport?: (() => string) | null;
+	/** /self, /motivation (plan 0.010 M0b, M0). */
+	self?: { command(args: string[], by: string): string } | null;
+	motivationReport?: (() => string) | null;
 	/** /opportunities: findings that raised a question and their investigations (plan 0.007 S5). */
 	opportunities?: (() => string) | null;
 	/** /domains, /domain enable|disable <name> (plan 0.007 S4). */
@@ -106,6 +109,8 @@ const HELP = [
 	"/cancel <id> — cancel a reminder (yours or a contact's)",
 	"/plans — plans and their states; /plan <id> — its steps and evidence",
 	"/sent — messages Iyye sent to people for you, with their delivery",
+	"/self — what Iyye knows about itself (hardware, power, sleep, versions, place, people) and its gaps; /self set place|expected-hardware <text>, /self relation <contact> <text>",
+	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened (shadow)",
 	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps",
 	"/pause initiative, /resume initiative — stop or allow background work",
 	"/day — awake or asleep, day number, when the next night starts and why",
@@ -145,6 +150,8 @@ const COMMANDS = new Set([
 	"/cancel",
 	"/plans",
 	"/sent",
+	"/self",
+	"/motivation",
 	"/plan",
 	"/domain",
 	"/pause",
@@ -230,6 +237,16 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			if (!rest) return usage("/cancel <id>");
 			return { handled: true, reply: ctx.commitments.cancel(rest, ctx.issuer) };
 		}
+		case "/self":
+			return {
+				handled: true,
+				reply: ctx.self ? ctx.self.command(args, ctx.issuer) : "the self model is not available here",
+			};
+		case "/motivation":
+			return {
+				handled: true,
+				reply: ctx.motivationReport ? ctx.motivationReport() : "motivations are not available here",
+			};
 		case "/sent":
 			return { handled: true, reply: ctx.sentReport ? ctx.sentReport() : "sending is not available here" };
 		case "/plans":

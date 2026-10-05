@@ -347,6 +347,16 @@ export class ModelManager {
 		};
 	}
 
+	/** Self-healing as it stands (read-only, plan 0.010 signals): each model being brought back, and whether Iyye gave up. */
+	healingReport(): { model: string; attempts: number; gaveUp: boolean; lastError: string }[] {
+		return [...this.heal].map(([model, h]) => ({
+			model,
+			attempts: h.attempts,
+			gaveUp: h.attempts >= this.d.healBackoffMs.length,
+			lastError: h.lastError,
+		}));
+	}
+
 	private busyLoading(): OpResult {
 		return { ok: false, busy: true, message: `waiting for ${[...this.loading].join(", ")} to finish loading` };
 	}

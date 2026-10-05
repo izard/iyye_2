@@ -21,7 +21,7 @@ import { TelegramSender } from "./channels/telegram/sender.ts";
 import { WebChatAdapter } from "./channels/web/adapter.ts";
 import { ensureOwnerToken, WebSessions } from "./channels/web/auth.ts";
 import { WebServer } from "./channels/web/server.ts";
-import { ConfigError, loadConfig } from "./config.ts";
+import { ConfigError, loadConfig, PROJECT_ROOT } from "./config.ts";
 import { DecisionClient } from "./decisions/client.ts";
 import { InitiativeShadow } from "./decisions/initiative.ts";
 import { MemorySalience } from "./decisions/memory-salience.ts";
@@ -59,14 +59,17 @@ import { ModelManager } from "./models/manager.ts";
 import { systemMemoryProbe } from "./models/memory.ts";
 import { loadRegistry, RegistryError } from "./models/registry.ts";
 import { pidAlive, RouterProcess } from "./models/router.ts";
+import { MotivationTracker } from "./motivation/tracker.ts";
 import { gitDomain, machineDomain } from "./observe/domains.ts";
 import { Investigations } from "./observe/investigations.ts";
 import { Observer } from "./observe/observer.ts";
 import { ensureWorkspace } from "./observe/workspace.ts";
 import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
+import { SelfModel, selfNoteFor } from "./self/model.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
 import { getJob } from "./state/jobs.ts";
+import { getKv } from "./state/kv.ts";
 import { DAY_KEYS } from "./state/models.ts";
 import { recentSentNote, sentReport } from "./state/sent.ts";
 import { recordIyyeEntry } from "./state/stm.ts";
@@ -245,8 +248,13 @@ async function main(): Promise<number> {
 		memory: gateway,
 		// Reminders just sent in a chat, so the next turn knows what an answer to one means (plan 0.006).
 		// …and messages Iyye sent them for the owner (plan 0.008).
+		// …and, in the owner's turns only, what Iyye knows about itself (plan 0.010 §3.1; owner-only facets).
 		turnNotes: (scope) =>
-			[recentReminderNote(db, scope, new Date()), recentSentNote(db, scope, new Date())]
+			[
+				recentReminderNote(db, scope, new Date()),
+				recentSentNote(db, scope, new Date()),
+				selfNoteFor(scope, selfModel, db),
+			]
 				.filter(Boolean)
 				.join("\n\n") || null,
 		// Plan 0.004 §3.4: acting toolkit selection before each turn (only adds; `selector` is created below and
@@ -424,6 +432,8 @@ async function main(): Promise<number> {
 				return r.text;
 			},
 			afterWake: async (day, summary) => {
+				// The self model looks at last night first: power, sleep on battery, the network (plan 0.010).
+				await selfModel.afterWake().catch(() => undefined);
 				if (summary) {
 					// Owner decision (2026-10-04): the summary also goes into short-term memory, so Iyye can talk about it.
 					recordIyyeEntry(db, {
@@ -490,10 +500,45 @@ async function main(): Promise<number> {
 		log,
 		contactMax: config.commitments.contactPlansMax,
 	});
+	// Plan 0.010 M0b: the extended self model (observe and record; owner-only facets).
+	const selfModel = new SelfModel({
+		db,
+		log,
+		mode: () => rhythm.mode(),
+		repoDir: PROJECT_ROOT,
+		hostDir: join(PROJECT_ROOT, "host"),
+		llamaServer: config.llamaServer,
+		geoHttp: config.self.geolocation ? webHttp : null,
+		live: () => ({
+			models: Object.fromEntries(DAY_KEYS.map((k) => [k, models.selected(k)])),
+			mode: rhythm.mode(),
+			day: Number(getKv(db, "rhythm.day")) || null,
+		}),
+	});
+	// Plan 0.010 M0: the four motivations' needs, in shadow (journaled, nothing acts on them).
+	const motivation = new MotivationTracker({
+		db,
+		log,
+		mode: () => rhythm.mode(),
+		sweepMs: config.self.motivationSweepS * 1000,
+		threshold: config.self.motivationThreshold,
+		sustain: config.self.motivationSustain,
+		sources: {
+			selfGaps: () => selfModel.gaps(),
+			healing: () => models.healingReport(),
+			sleep: () => {
+				const v = selfModel.value<boolean>("sleep", "sleptOnBattery");
+				const m = selfModel.value<number>("sleep", "asleepMinutes");
+				return v === null || m === null ? null : { sleptOnBattery: v, asleepMinutes: m };
+			},
+		},
+	});
 	const commandExtras = {
 		commitments: new ReminderCommands({ db }),
 		plans,
 		sentReport: () => sentReport(db),
+		self: selfModel,
+		motivationReport: () => motivation.report(),
 		energyReport: () => adenosine.report(),
 		opportunities: () => investigations.report(),
 		domains: {
@@ -672,6 +717,8 @@ async function main(): Promise<number> {
 				await investigations.stop();
 				await commitmentClock.stop();
 				await plans.stop();
+				await motivation.stop();
+				await selfModel.stop();
 				await decisions.stop();
 				await searxng.stop();
 				await passthrough.stop();
@@ -725,6 +772,8 @@ async function main(): Promise<number> {
 	investigations.start();
 	commitmentClock.start();
 	plans.start();
+	selfModel.start();
+	motivation.start();
 	adenosine.start();
 	searxng.start();
 	await models.start();

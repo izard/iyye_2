@@ -36,6 +36,8 @@ export interface Config {
 	sweepS: number;
 	/** Plan 0.006 C1: the commitment clock, lateness notes and limits. Times are in the system's timezone. */
 	commitments: { tickMs: number; lateH: number; maxLateD: number; contactMax: number; contactPlansMax: number };
+	/** Plan 0.010 M0/M0b: the extended self model and the motivations (shadow). */
+	self: { geolocation: boolean; motivationSweepS: number; motivationThreshold: number; motivationSustain: number };
 	/** Messages Iyye sends to people per day (plan 0.008): in all, per trusted contact, on Iyye's own. */
 	send: { dailyMax: number; contactDailyMax: number; iyyeDailyMax: number };
 	defaultModel: string;
@@ -194,6 +196,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			maxLateD: int(env, "IYYE2_REMINDER_MAX_LATE_D", 7, 1, 365),
 			contactMax: int(env, "IYYE2_CONTACT_REMINDERS_MAX", 20, 0, 1000),
 			contactPlansMax: int(env, "IYYE2_CONTACT_PLANS_MAX", 5, 0, 100),
+		},
+		self: {
+			geolocation: env.IYYE2_GEOLOCATION !== "0",
+			motivationSweepS: int(env, "IYYE2_MOTIVATION_SWEEP_S", 600, 10, 86_400),
+			motivationThreshold: Number(env.IYYE2_MOTIVATION_THRESHOLD ?? 0.6),
+			motivationSustain: int(env, "IYYE2_MOTIVATION_SUSTAIN", 3, 1, 1000),
 		},
 		send: {
 			dailyMax: int(env, "IYYE2_SEND_DAILY_MAX", 20, 0, 1000),
