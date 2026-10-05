@@ -31,6 +31,7 @@ async function startHost(sb: Sandbox, extraEnv: Record<string, string> = {}): Pr
 		IYYE2_MEMORY_DIR: "/nonexistent/iyye-memory", // never start the real Hindsight from a test
 		IYYE2_DECISIONS_DIR: "/nonexistent/iyye-kev", // nor the real Kev
 		IYYE2_SEARXNG_DIR: "/nonexistent/iyye-web", // nor the real SearXNG
+		IYYE2_GEOLOCATION: "0", // nor a real geolocation service (plan 0.010 M0b)
 		IYYE2_SEARXNG_PORT: String(await freePort()),
 		IYYE2_DECISIONS_PORT: String(await freePort()),
 		IYYE2_MEMORY_PASSTHROUGH_PORT: String(await freePort()),

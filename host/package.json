@@ -10,7 +10,7 @@
 	},
 	"scripts": {
 		"check": "biome check --write --error-on-warnings . && tsc --noEmit",
-		"test": "node --test \"test/**/*.test.ts\""
+		"test": "node --test --test-timeout=120000 \"test/**/*.test.ts\""
 	},
 	"dependencies": {
 		"@earendil-works/pi-ai": "1.0.0",

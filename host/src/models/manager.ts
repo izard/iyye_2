@@ -635,6 +635,9 @@ export class ModelManager {
 				if (this.stopping || this.nightKeep) return;
 				await this.refresh();
 				if (LOADED_LIKE.has(this.statuses.get(name)?.value ?? "") || this.changing.has(name)) continue;
+				// Decided before the queue reached this step: the owner may have unloaded it meanwhile, or the
+				// selection changed. Ask again now.
+				if (!this.healingState(name)?.retrying) continue;
 				this.d.log.warn("models: a selected model is not loaded; loading it again", {
 					model: name,
 					attempt: (this.heal.get(name)?.attempts ?? 0) + 1,

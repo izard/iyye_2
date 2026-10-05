@@ -272,6 +272,20 @@ describe("model manager", () => {
 			assert.ok((await rig.manager.wakeFromNight("waking")).ok);
 		});
 
+		test("a reload decided just before the owner's /unload does not undo it (race found on 2026-10-05)", async () => {
+			await rig.manager.stop();
+			rig.db.close();
+			rig = await healing({ healthIntervalMs: 60_000 });
+			await rig.manager.start();
+			// The owner's unload is queued first; a self-healing pass decided while the model was still loaded comes after.
+			const unload = rig.manager.unload("small", "owner_web");
+			(rig.manager as unknown as { healSelected(): void }).healSelected();
+			assert.ok((await unload).ok);
+			await new Promise((x) => setTimeout(x, 300));
+			assert.equal((await rig.manager.status()).models.find((m) => m.name === "small")!.status, "unloaded");
+			assert.equal(ops(rig).filter((o) => o.op === "load").length, 1, "only the startup load");
+		});
+
 		test("after every attempt fails Iyye gives up, says so, and the job is no longer told to wait", async () => {
 			await rig.manager.stop();
 			rig.db.close();
