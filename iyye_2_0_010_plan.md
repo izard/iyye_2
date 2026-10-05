@@ -1,6 +1,6 @@
 # Iyye 2.0.010 — Motivations: Four Needs That Drive Initiative (Plan)
 
-- Status (2026-10-05): **draft for the owner; nothing built.** Whether it comes before or alongside Stage 3 (plan 0.009) is an owner decision (§9). It gives Stage 3's temperament something real to scale.
+- Status (2026-10-05): **draft for the owner; nothing built.** Owner direction: curiosity's top priority is a current model of Iyye's extended self (§3.1). Whether it comes before or alongside Stage 3 (plan 0.009) is an owner decision (§9). It gives Stage 3's temperament something real to scale.
 - Design source: [`iyye_2_0_hld.md`](iyye_2_0_hld.md) §5.1 (one focus, precedence), §5.2 (the four motivations, need and service evidence), §5.3 (initiative with a reason), §6.4 (relationship context), §8.2 (adenosine), §11.2 (reinforcement with damping), §15 #9, #10, #12, #16.
 - Builds on: observation domains and findings (0.007 S4), opportunities and investigations (S5), adenosine (S2), background jobs (S1), plans and commitments (0.006), messaging (0.008), the self-healing model manager, Kev's initiative role (shadow), the decision journal (0.003).
 - Lessons from 1.x (its alignment stream and need EMA): keyword-scored "service" saturated and masked real need; narration counted as evidence and spawned plans about plans; completed work re-proposed itself until a fruitless bound existed. Every rule below is shaped against those.
@@ -37,7 +37,8 @@ Each signal is a typed row: `{motivation, kind, cluster, evidence_ids, weight, o
 - unconfirmed deliveries (`actions` in `unknown`, commitments `unknown`);
 - the night was cut short by system sleep (the 2026-10-05 lesson).
 
-**Curiosity**
+**Curiosity** (its first object is the extended self, §3.1; those signals outrank the rest)
+- the **extended self model** is stale, incomplete or contradicted (§3.1);
 - stale observation domains and repository changes (as today, S4/S5);
 - **unanswered questions from conversations:** a turn where Iyye said it could not find or did not know (Kev reply-review role, a new `admits_unknown` question, shadow first) whose topic recurs on another day;
 - **weak or conflicting memory:** Hindsight recall returning low-relevance or contradicting results for a topic asked about twice (recall journal);
@@ -55,6 +56,32 @@ Each signal is a typed row: `{motivation, kind, cluster, evidence_ids, weight, o
 - a promise Iyye made in words that has no commitment (reply review's `claims_arranged` without a ledger entry, 0.006 C2);
 - **a relationship gone quiet** (later, needs relationship context, 0.005 Stage 2): only for people who asked to hear from Iyye.
 
+### 3.1 Curiosity's top priority: a current model of the extended self (owner decision, 2026-10-05)
+
+Iyye first keeps an accurate, current model of *what and where it is*: the machine it runs on, how it runs at low and high level, where it is and what surrounds it, and the people around it. Most of today's failures were self-ignorance: Iyye did not know the Mac was asleep on battery with the lid closed (2026-10-05), answered disk space from a 33-minute-old reading, and was told about its next hardware (a DGX Spark) without having anywhere to keep that.
+
+**The self model** (`self_model` table, migration; `/self`): five facets, each a small structured record whose every field carries its source (probe + time, or the owner's statement + event id) and its own staleness window. Changes are kept as diffs (what changed, when, why we know).
+
+| Facet | Fields (examples) | Sources | Window |
+| --- | --- | --- | --- |
+| **Hardware** | machine model, chip, CPU/GPU cores, unified memory, disks, battery and power adapter, displays; *expected* hardware the owner mentioned (the DGX Spark: 128 GB, ordered) | typed probes: `system_profiler` (hardware, power, storage, displays), `sysctl`; owner statements (Kev role or `/self note`) | a day; at once on change |
+| **Low-level operation** | power state (on battery or AC, lid, sleep and dark-wake history, assertions), thermal state, load, memory pressure, the processes it is (host, router and model instances, Hindsight, PostgreSQL, Kev, SearXNG) with their PIDs, ports and health, loaded models and their RAM | `pmset -g log`/`pmset -g batt`/`pmset -g assertions`, `ps`, the router and service status the host already has | 10 min; at once on a sleep/wake or service change |
+| **High-level operation** | its own code version (the iyye_2 commit), upstream pins (Pi, Hindsight, Kev, SearXNG, llama.cpp build), schema version, model registry and selections, toolkits and who may use them, active roles (shadow/acting), what it did today (turns, findings, plans, sends), its rhythm (awake/asleep, day number), its known limits (no vision, private chats only, …) | the host's own records and config, `git rev-parse` of its repository | a day; at once on restart, upgrade or selection change |
+| **Position and surroundings** | where it is (timezone, the owner-stated location; network place only as "home network" vs other), local time, daylight (sunrise/sunset computed offline from the coordinates), the weather there, devices it can sense (displays, audio, camera presence — not their content) | timezone and locale, owner statements, `web_search` for weather once a location is known, offline solar computation | an hour (weather), a day (place) |
+| **Social circle** | the people it knows: names, channels, links, trust, how often and how recently each writes, stated facts about them ("Jacob is the owner's son"), open commitments and plans per person | contacts, links, events, commitments, plans; owner statements only for relationships (never inferred from tone) | an hour |
+
+**How it drives curiosity:**
+- **Stale** (a field past its window), **incomplete** (a field unknown, e.g. location never stated), **contradicted** (a probe disagrees with a stated fact, e.g. hardware changed after the owner said a new machine arrives) or **changed** (a diff since the last snapshot) each raise a self-model signal with the field as its evidence cluster.
+- Filling a field is a typed read-only probe when one exists (no model call), an investigation with the background toolkits when it needs research (e.g. "what is a DGX Spark, and what will change for me?" with `web_search`, cited), or **a question to the owner** at their next turn when only the owner can know (where are we? who is this person?). Iyye asks at most one such question a day.
+- **Service** = the field is current again, with its source. A contradiction is settled only by a fresh probe or the owner's statement, never by Iyye's own reasoning.
+- **Self-preservation reads the same model:** "on battery, lid closed, the night will be cut short" or "memory pressure high while a night needs the memory model" are self-preservation signals from the low-level facet.
+
+**How it is used:**
+- **In prompts:** a short, current "about me" block built from the model (hardware, state, place, time, people summary) in the owner's turns, so "how much disk do you have?" or "what will the DGX Spark change?" is answered from a fresh model; a fresh probe still wins for live figures (no 33-minute-old disk answers).
+- **In memory:** each change is retained in the `iyye-self` bank as a dated fact ("2026-10-05: Iyye runs on a MacBook Pro M3 with 128 GB; the owner ordered a DGX Spark"), so continuity spans days.
+- **Privacy:** the position, surroundings and social-circle facets are **owner-only**. A contact's turn may know generic facts (Iyye runs locally on its owner's computer) and, under 0.004's decision, the machine toolkit's figures, never where the owner is, who else Iyye talks with, or anything from those facets.
+- **New probes are typed and read-only** (HLD invariant), added to the `machine` toolkit for owner turns and to background work: `self_hardware`, `self_power` (battery/AC, sleep history), `self_versions`, `self_place` (timezone, daylight). No probe sends anything out except the weather search, which uses the existing web budget.
+
 ## 4. Need, smoothing and opportunities
 
 - **Need per motivation** = `clamp(Σ signal weights × recency, 0, 1)`, smoothed per sweep: `need ← need × (1 − α) + raw × α` (α = 0.3), journaled (`motivation_samples`).
@@ -67,7 +94,7 @@ Each signal is a typed row: `{motivation, kind, cluster, evidence_ids, weight, o
 | Motivation | Action | Bounds |
 | --- | --- | --- |
 | Self-preservation | maintenance the kernel already has (reload a model, retry a transfer, resolve a stale state), else a notice to the owner with the evidence | never deletes data, never unloads what is in use, never changes configuration |
-| Curiosity | a read-only investigation (S5 machinery, citation check), on repositories, the machine, the web (`web_search`/`web_fetch` in background, new) or memory (`memory_search`, new for background) | one at a time; 3 fruitless attempts then suspended; web budget per day |
+| Curiosity | first, refresh the self model (§3.1): a typed probe, a cited investigation, or one question a day to the owner; then a read-only investigation (S5 machinery, citation check) on repositories, the machine, the web (`web_search`/`web_fetch` in background, new) or memory (`memory_search`, new for background) | one at a time; 3 fruitless attempts then suspended; web budget per day; self-model work gets first claim on curiosity's share |
 | Agency | propose a plan for the intention (C4: authorized at once only if internal or reminding the owner's web chat; otherwise waiting for `/plan approve`); nudge a stalled plan's owner | at most one Iyye-proposed plan open per evidence cluster; owner approval rules unchanged |
 | Social | write to the person (`telegram_send`, Iyye-initiated, labelled, reported) or mention it to the owner at the next turn | quiet hours; at most one Iyye-initiated message per person per day (0.008) and `IYYE2_SOCIAL_DAILY_MAX`; only to people who wrote to Iyye; never about another person's private matters |
 
@@ -107,6 +134,7 @@ Settled evidence lowers need at the next sweep. Fruitless attempts count against
 ## 10. Milestones
 
 - **M0 — Signals in shadow:** the signal sweep, need and smoothing, journaled; `/motivation`; no opportunities from it yet. Two to three days of real records show whether the weights and θ make sense.
+- **M0b — The extended self model:** the `self_model` table and facets, the typed probes (`self_hardware`, `self_power`, `self_versions`, `self_place`), owner statements (`/self note <text>`, and a Kev role for "you run on / we are in / X is my …" in owner turns, shadow first), `/self`, the "about me" prompt block, changes retained in `iyye-self`. Its staleness and gap signals are the first curiosity signals.
 - **M1 — One opportunity queue:** migration (`motivation`, `signal_kind`, `action_kind` on `opportunities`); S5's curiosity loop moved onto it unchanged; self-preservation maintenance actions; allowances; `/pause <motivation>`.
 - **M2 — New detectors (Kev, shadow first):** `admits_unknown` (curiosity), intentions (agency, owner only), dated events (social); background `web_search`/`memory_search` for curiosity.
 - **M3 — Agency and social acting:** Iyye-proposed plans; Iyye-initiated social messages under quiet hours and caps; service evidence and closure for both.
@@ -116,6 +144,7 @@ Exit gate (HLD §15 #9, #10, #12, #16):
 - a sustained, evidenced need creates exactly one opportunity; its service settles it and need falls; a fruitless cluster is suspended across restarts;
 - a human message preempts initiative without losing its checkpoint;
 - Iyye's own replies, summaries or step answers never raise or settle a need (tested by injecting self-authored text);
+- the self model stays current: after a sleep, an upgrade, a hardware change or a stated fact, the right facet is refreshed and its change retained, and owner-only facets never reach a contact's turn;
 - no motivation exceeds its allowance; social initiative respects quiet hours and caps; an overconfident Kev answer cannot create an action outside §5.
 
 ## 11. Risks
@@ -142,3 +171,5 @@ Exit gate (HLD §15 #9, #10, #12, #16):
 3. May agency propose plans from your passing remarks, or only when you say something like "plan this"?
 4. Social initiative: may Iyye follow up with contacts (e.g. Jacob's exam) on its own, or only with you at first?
 5. Default shares (§7) and the social cap (3/day).
+6. Where Iyye is: from your statement only, or may it also estimate the place from the network (an IP geolocation call reveals the address to that service)?
+7. May Iyye ask you one self-model question a day ("where are we?", "who is this person to you?")?
