@@ -782,6 +782,29 @@ describe("models at night", () => {
 		db.close();
 	});
 
+	test("a chat model lost by day is loaded again, and the waiting message is answered instead of failed (2026-10-05)", async () => {
+		const sb = sandbox();
+		const s = await startStack(sb, { modelWaitMs: 50 });
+		try {
+			assert.ok((await s.models.unload("small", "system")).ok);
+			const ev = admitOwnerWebMessage(
+				{ db: s.db, now: () => new Date(), newId: () => crypto.randomUUID() },
+				{ clientMsgId: "heal-1", text: "hello" },
+			);
+			assert.ok(ev.outcome === "admitted");
+			s.scheduler.wake();
+			await waitFor(
+				() =>
+					(s.db.prepare("SELECT status FROM jobs WHERE id = ?").get(ev.jobId) as { status: string }).status ===
+					"settled",
+				8000,
+			);
+		} finally {
+			await s.stop();
+			sb.cleanup();
+		}
+	});
+
 	test("a job whose model is missing waits while models are restored, and fails only after", async () => {
 		const sb = sandbox();
 		let restoring = true;
@@ -790,7 +813,8 @@ describe("models at night", () => {
 			rhythm: { mode: () => "awake", wakeForOwner: () => "awake", restoring: () => restoring },
 		});
 		try {
-			assert.ok((await s.models.unload("small", "test")).ok);
+			// Unloaded by the owner, so self-healing leaves it alone and only the restore wait applies.
+			assert.ok((await s.models.unload("small", "owner_test")).ok);
 			const ev = admitOwnerWebMessage(
 				{ db: s.db, now: () => new Date(), newId: () => crypto.randomUUID() },
 				{ clientMsgId: "restore-1", text: "hello" },

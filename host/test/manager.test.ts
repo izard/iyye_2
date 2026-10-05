@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, test } from "node:test";
 import { handleOwnerCommand } from "../src/kernel/commands.ts";
-import type { ModelLease, OpResult } from "../src/models/manager.ts";
+import { AwakeStopwatch, type ModelLease, type OpResult } from "../src/models/manager.ts";
 import { pidAlive } from "../src/models/router.ts";
 import { getSelectedModel, type ModelOpRow, setSelectedModel } from "../src/state/models.ts";
 import { type ManagerRig, managerRig, type Sandbox, sandbox, waitFor } from "./model-helpers.ts";
@@ -224,5 +224,109 @@ describe("model manager", () => {
 			requested_by: string;
 		};
 		assert.equal(row.requested_by, "owner_terminal");
+	});
+
+	describe("self-healing and sleep (2026-10-05 incident)", () => {
+		const healing = (overrides = {}) =>
+			managerRig(sb, { healthIntervalMs: 50, healBackoffMs: [0, 50, 50], ...overrides });
+
+		test("a selected chat model that is not loaded is loaded again by day; a job asking for it waits (busy), never fails", async () => {
+			await rig.manager.stop();
+			rig.db.close();
+			rig = await healing();
+			await rig.manager.start();
+			// Gone without the owner asking (e.g. a failed load at waking, or a crash).
+			assert.ok((await rig.manager.unload("small", "system")).ok);
+			const r = await rig.manager.acquire("small");
+			assert.ok(!isLease(r) && r.busy === true, "busy: the scheduler keeps the job waiting");
+			assert.match((r as OpResult).message, /small is not loaded; loading it again/);
+			await waitFor(async () => isLease(await rig.manager.acquire("small")), 5000);
+			assert.deepEqual(ops(rig).at(-1), { op: "load", model_name: "small", state: "done" });
+			assert.equal(
+				(
+					rig.db.prepare("SELECT requested_by FROM model_ops ORDER BY rowid DESC LIMIT 1").get() as {
+						requested_by: string;
+					}
+				).requested_by,
+				"self_heal",
+			);
+		});
+
+		test("a model the owner unloaded stays unloaded, and nothing is reloaded at night", async () => {
+			await rig.manager.stop();
+			rig.db.close();
+			rig = await healing();
+			await rig.manager.start();
+			assert.ok((await rig.manager.unload("small", "owner_web")).ok);
+			const r = await rig.manager.acquire("small");
+			assert.ok(!isLease(r) && !r.busy);
+			await new Promise((x) => setTimeout(x, 300));
+			assert.equal((await rig.manager.status()).models.find((m) => m.name === "small")!.status, "unloaded");
+			// /load brings it back and lifts the hold.
+			assert.ok((await rig.manager.load("small", "owner_web")).ok);
+			// Asleep: the night unloads it, and the health check does not bring it back.
+			await rig.manager.restForNight([], "night");
+			await new Promise((x) => setTimeout(x, 300));
+			assert.equal((await rig.manager.status()).models.find((m) => m.name === "small")!.status, "unloaded");
+			// Waking loads it.
+			assert.ok((await rig.manager.wakeFromNight("waking")).ok);
+		});
+
+		test("after every attempt fails Iyye gives up, says so, and the job is no longer told to wait", async () => {
+			await rig.manager.stop();
+			rig.db.close();
+			rig = await healing();
+			await rig.manager.start();
+			setSelectedModel(rig.db, "web", "broken-x", "test", new Date().toISOString());
+			await rig.manager.acquire("broken-x"); // starts the attempts
+			await waitFor(() => ops(rig).filter((o) => o.op === "load" && o.model_name === "broken-x").length === 3, 8000);
+			await new Promise((x) => setTimeout(x, 200));
+			const r = await rig.manager.acquire("broken-x");
+			assert.ok(!isLease(r) && !r.busy);
+			assert.match(
+				(r as OpResult).message,
+				/could not be loaded after 3 attempts \(last: .*failed to load.*\); \/load it/,
+			);
+			assert.equal(
+				ops(rig).filter((o) => o.op === "load" && o.model_name === "broken-x").length,
+				3,
+				"no fourth try",
+			);
+		});
+
+		test("a load deadline does not count time the computer slept", async () => {
+			await rig.manager.stop();
+			rig.db.close();
+			// The process is frozen while the computer sleeps: the clock jumps by an hour between two polls.
+			const clock = { ms: 0 };
+			rig = await managerRig(sb, { monotonicMs: () => clock.ms, minLoadTimeoutMs: 10_000 });
+			await rig.manager.start();
+			const load = rig.manager.load("slow-x", "owner");
+			await new Promise((x) => setTimeout(x, 100));
+			clock.ms += 3_600_000; // an hour asleep counts as one capped step (5 s max), not an hour
+			await new Promise((x) => setTimeout(x, 300));
+			let settled = false;
+			void load.then(() => {
+				settled = true;
+			});
+			await new Promise((x) => setTimeout(x, 50));
+			assert.equal(settled, false, "still waiting: the hour asleep did not count");
+			// Awake again: time runs in small steps until the 1.5 s deadline passes.
+			const tick = setInterval(() => {
+				clock.ms += 400;
+			}, 20);
+			const r = await load;
+			clearInterval(tick);
+			assert.match(r.message, /slow-x did not finish loading within 10 s/);
+		});
+
+		test("AwakeStopwatch counts small steps and caps a frozen gap", () => {
+			const clock = { ms: 0 };
+			const w = new AwakeStopwatch(() => clock.ms, 5000);
+			clock.ms = 1000;
+			assert.equal(w.elapsed(), 1000);
+			clock.ms += 7 * 3_600_000;
+			assert.equal(w.elapsed(), 6000);
+		});
 	});
 });

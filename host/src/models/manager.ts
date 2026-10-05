@@ -74,6 +74,14 @@ export interface ModelManagerDeps {
 	unloadTimeoutMs?: number;
 	/** Delays between router restart attempts; the last one repeats. */
 	restartBackoffMs?: number[];
+	/**
+	 * Self-healing (2026-10-05 incident): delays before each attempt to load a
+	 * day-selected model that is not loaded; its length is the number of
+	 * attempts before Iyye gives up and says so.
+	 */
+	healBackoffMs?: number[];
+	/** The clock load and unload deadlines are measured with (see `AwakeStopwatch`); for tests. */
+	monotonicMs?: () => number;
 }
 
 export interface OpResult {
@@ -130,6 +138,11 @@ export class ModelManager {
 	private readonly lostListeners: ((lostModels: string[]) => void)[] = [];
 	/** Asleep (plan 0.002): only these models may stay loaded; reloads after a router restart load only them. */
 	private nightKeep: Set<string> | null = null;
+	/** Day-selected models that failed to load: attempts so far, when the next one may start, why the last failed. */
+	private readonly heal = new Map<string, { attempts: number; nextAt: number; lastError: string }>();
+	/** Models the owner unloaded by hand today: never reloaded behind their back (until waking or /load). */
+	private readonly ownerUnloaded = new Set<string>();
+	private healRunning = false;
 
 	constructor(deps: ModelManagerDeps) {
 		this.d = {
@@ -141,6 +154,8 @@ export class ModelManager {
 			minLoadTimeoutMs: 60_000,
 			unloadTimeoutMs: 45_000,
 			restartBackoffMs: [1000, 5000, 30_000],
+			healBackoffMs: [0, 60_000, 120_000, 300_000, 600_000, 900_000],
+			monotonicMs: () => Number(process.hrtime.bigint() / 1_000_000n), // counts sleep on macOS: see AwakeStopwatch
 			defaultMemoryModel: "",
 			defaultBackgroundModel: "",
 			...deps,
@@ -238,7 +253,12 @@ export class ModelManager {
 	}
 
 	unload(name: string, requestedBy: string): Promise<OpResult> {
-		return this.exclusive(() => this.doUnload(name, requestedBy));
+		return this.exclusive(async () => {
+			const r = await this.doUnload(name, requestedBy);
+			// The owner unloaded it on purpose: self-healing leaves it alone until waking or /load.
+			if (r.ok && requestedBy.startsWith("owner")) this.ownerUnloaded.add(name);
+			return r;
+		});
 	}
 
 	/** Restart the router; loaded models are reloaded if they are selected. */
@@ -301,7 +321,15 @@ export class ModelManager {
 		if (this.routerState !== "up") return { ok: false, message: "the model router is not running" };
 		if (this.loading.size > 0) return this.busyLoading();
 		if (this.changing.has(name)) return { ok: false, message: `${name} is being loaded or unloaded` };
-		if (this.statuses.get(name)?.value !== "loaded") return { ok: false, message: `${name} is not loaded` };
+		if (this.statuses.get(name)?.value !== "loaded") {
+			// A day-selected model that should be loaded is being loaded again: callers wait, as for a load.
+			const h = this.healingState(name);
+			if (h?.retrying) {
+				this.healSelected();
+				return { ok: false, busy: true, message: `${name} is not loaded; ${h.message}` };
+			}
+			return { ok: false, message: h ? `${name} is not loaded: ${h.message}` : `${name} is not loaded` };
+		}
 		const gen = this.generation;
 		let released = false;
 		this.inUse.set(name, (this.inUse.get(name) ?? 0) + 1);
@@ -402,7 +430,12 @@ export class ModelManager {
 						: ""),
 			);
 		}
-		return this.recordOp("load", name, requestedBy, () => this.loadAndVerify(spec));
+		const r = await this.recordOp("load", name, requestedBy, () => this.loadAndVerify(spec));
+		if (r.ok) {
+			this.heal.delete(name);
+			this.ownerUnloaded.delete(name);
+		}
+		return r;
 	}
 
 	private async loadAndVerify(spec: ModelSpec): Promise<OpResult> {
@@ -420,10 +453,10 @@ export class ModelManager {
 				}
 			}
 			const timeoutMs = Math.max(spec.startupS * 1000 * this.d.loadTimeoutFactor, this.d.minLoadTimeoutMs);
-			const deadline = Date.now() + timeoutMs;
-			const postedAt = Date.now();
+			// Awake time, not wall time: a sleeping computer must not make a load "time out".
+			const awake = new AwakeStopwatch(this.d.monotonicMs, this.awakeStepMs());
 			let sawLoading = false;
-			while (Date.now() < deadline) {
+			while (awake.elapsed() < timeoutMs) {
 				await sleep(this.d.pollIntervalMs);
 				if (this.stopping) return { ok: false, message: `${name}: load abandoned because the host is stopping` };
 				const s = (await this.d.client.listModels()).get(name);
@@ -436,7 +469,7 @@ export class ModelManager {
 				}
 				if (s?.value === "loading") sawLoading = true;
 				// A stale `failed` flag from an earlier attempt can linger for a moment after the POST.
-				if (s?.value === "unloaded" && (sawLoading || (s.failed && Date.now() - postedAt > 2000))) {
+				if (s?.value === "unloaded" && (sawLoading || (s.failed && awake.elapsed() > 2000))) {
 					return {
 						ok: false,
 						message: `${name} failed to load${s.exitCode !== null ? ` (exit code ${s.exitCode})` : ""}; see the router log`,
@@ -469,8 +502,8 @@ export class ModelManager {
 		return this.recordOp("unload", name, requestedBy, async () => {
 			try {
 				const reply = await this.d.client.unload(name);
-				const deadline = Date.now() + this.d.unloadTimeoutMs;
-				while (Date.now() < deadline && !this.stopping) {
+				const awake = new AwakeStopwatch(this.d.monotonicMs, this.awakeStepMs());
+				while (awake.elapsed() < this.d.unloadTimeoutMs && !this.stopping) {
 					const s = (await this.d.client.listModels()).get(name);
 					if (!s || s.value === "unloaded") {
 						const selectedBy = DAY_KEYS.filter((c) => getSelectedModel(this.d.db, c) === name);
@@ -522,6 +555,8 @@ export class ModelManager {
 	wakeFromNight(requestedBy: string): Promise<OpResult> {
 		return this.exclusive(async () => {
 			this.nightKeep = null;
+			this.ownerUnloaded.clear();
+			this.heal.clear();
 			await this.refresh();
 			const chat = new Set(DAY_KEYS.map((c) => getSelectedModel(this.d.db, c)).filter((m) => m !== null));
 			for (const name of this.loadedModels()) {
@@ -554,7 +589,10 @@ export class ModelManager {
 		for (const name of wanted) {
 			if (this.stopping) return;
 			const r = await this.doLoad(name, requestedBy);
-			if (!r.ok) this.d.log.warn("models: selected model not loaded", { model: name, reason: r.message });
+			if (!r.ok) {
+				this.d.log.warn("models: selected model not loaded", { model: name, reason: r.message });
+				this.noteHealFailure(name, r.message);
+			}
 		}
 	}
 
@@ -564,6 +602,78 @@ export class ModelManager {
 			if (!(await this.refresh())) return { ok: false, message: "router started but GET /models failed" };
 			return { ok: true, message: "started" };
 		});
+	}
+
+	/**
+	 * Self-healing: by day, a model a chat channel or background work is
+	 * selected to use, that is not loaded, is loaded again with backoff
+	 * (`healBackoffMs`), unless the owner unloaded it by hand. Runs from the
+	 * health check and when a job asks for the model; one attempt at a time,
+	 * through the same exclusive chain as every model operation.
+	 */
+	private healSelected(): void {
+		if (this.healRunning || this.stopping || this.nightKeep || this.routerState !== "up") return;
+		const now = this.d.monotonicMs();
+		const due = this.daySelected().filter((name) => {
+			const h = this.healingState(name);
+			return h?.retrying && (this.heal.get(name)?.nextAt ?? 0) <= now;
+		});
+		if (due.length === 0) return;
+		this.healRunning = true;
+		void this.exclusive(async () => {
+			for (const name of due) {
+				if (this.stopping || this.nightKeep) return;
+				await this.refresh();
+				if (LOADED_LIKE.has(this.statuses.get(name)?.value ?? "") || this.changing.has(name)) continue;
+				this.d.log.warn("models: a selected model is not loaded; loading it again", {
+					model: name,
+					attempt: (this.heal.get(name)?.attempts ?? 0) + 1,
+				});
+				const r = await this.doLoad(name, "self_heal");
+				if (!r.ok) this.noteHealFailure(name, r.message);
+			}
+		})
+			.catch((err) => this.d.log.error("models: self-healing failed", { error: (err as Error).message }))
+			.finally(() => {
+				this.healRunning = false;
+			});
+	}
+
+	/** The most one poll may add to a deadline: a longer gap means the process was frozen (the computer slept). */
+	private awakeStepMs(): number {
+		return Math.max(5000, this.d.pollIntervalMs * 10);
+	}
+
+	private noteHealFailure(name: string, message: string): void {
+		const attempts = (this.heal.get(name)?.attempts ?? 0) + 1;
+		const delay = this.d.healBackoffMs[attempts] ?? 0;
+		this.heal.set(name, { attempts, nextAt: this.d.monotonicMs() + delay, lastError: message });
+	}
+
+	/** The models the day needs loaded: the chat channels' and background work's selections. */
+	private daySelected(): string[] {
+		return [...new Set(DAY_KEYS.map((c) => getSelectedModel(this.d.db, c)).filter((m): m is string => m !== null))];
+	}
+
+	/**
+	 * Whether Iyye is bringing a model back: null for a model it is not
+	 * responsible for (not selected by day, asleep, or unloaded by the owner);
+	 * otherwise `retrying`, or given up after every attempt failed.
+	 */
+	private healingState(name: string): { retrying: boolean; message: string } | null {
+		if (this.nightKeep || this.ownerUnloaded.has(name) || !this.daySelected().includes(name)) return null;
+		const h = this.heal.get(name);
+		const max = this.d.healBackoffMs.length;
+		if (!h) return { retrying: true, message: "loading it again" };
+		if (h.attempts >= max)
+			return {
+				retrying: false,
+				message: `it could not be loaded after ${h.attempts} attempts (last: ${h.lastError}); /load it`,
+			};
+		return {
+			retrying: true,
+			message: `loading it again (attempt ${h.attempts + 1} of ${max}; last: ${h.lastError})`,
+		};
 	}
 
 	/** Refresh cached statuses from the router. Returns false if it did not answer. */
@@ -595,6 +705,7 @@ export class ModelManager {
 		try {
 			const healthy = this.routerState === "up" && this.d.router.isAlive() && (await this.refresh());
 			if (!healthy) await this.recoverRouter();
+			else this.healSelected();
 		} catch (err) {
 			this.d.log.error("models: health check failed", { error: (err as Error).message });
 		} finally {
@@ -683,4 +794,31 @@ export class ModelManager {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Elapsed time that skips system sleep (2026-10-05: a 90 s load deadline
+ * expired across 18 minutes of macOS sleep). Node's monotonic clock counts
+ * sleep on macOS (measured: process.hrtime equals the wall time since boot
+ * after a night asleep), so each step between two reads is capped at
+ * `maxStepMs`: a frozen process sees one huge gap, which counts as one step.
+ */
+export class AwakeStopwatch {
+	private readonly clock: () => number;
+	private readonly maxStepMs: number;
+	private last: number;
+	private total = 0;
+
+	constructor(clock: () => number, maxStepMs: number) {
+		this.clock = clock;
+		this.maxStepMs = maxStepMs;
+		this.last = clock();
+	}
+
+	elapsed(): number {
+		const now = this.clock();
+		this.total += Math.min(Math.max(now - this.last, 0), this.maxStepMs);
+		this.last = now;
+		return this.total;
+	}
 }
