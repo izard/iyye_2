@@ -1,6 +1,6 @@
 # Iyye 2.0.010 — Motivations: Four Needs That Drive Initiative (Plan)
 
-- Status (2026-10-05): **draft for the owner; nothing built.** Owner direction: curiosity's top priority is a current model of Iyye's extended self (§3.1). Whether it comes before or alongside Stage 3 (plan 0.009) is an owner decision (§9). It gives Stage 3's temperament something real to scale.
+- Status (2026-10-05): **accepted; nothing built.** Comes **before Stage 3** (owner decision, §13). Owner direction: curiosity's top priority is a current model of Iyye's extended self (§3.1). Whether it comes before or alongside Stage 3 (plan 0.009) is an owner decision (§9). It gives Stage 3's temperament something real to scale.
 - Design source: [`iyye_2_0_hld.md`](iyye_2_0_hld.md) §5.1 (one focus, precedence), §5.2 (the four motivations, need and service evidence), §5.3 (initiative with a reason), §6.4 (relationship context), §8.2 (adenosine), §11.2 (reinforcement with damping), §15 #9, #10, #12, #16.
 - Builds on: observation domains and findings (0.007 S4), opportunities and investigations (S5), adenosine (S2), background jobs (S1), plans and commitments (0.006), messaging (0.008), the self-healing model manager, Kev's initiative role (shadow), the decision journal (0.003).
 - Lessons from 1.x (its alignment stream and need EMA): keyword-scored "service" saturated and masked real need; narration counted as evidence and spawned plans about plans; completed work re-proposed itself until a fruitless bound existed. Every rule below is shaped against those.
@@ -128,9 +128,9 @@ Settled evidence lowers need at the next sweep. Fruitless attempts count against
 - The day summary adds one line: what each motivation did and what served it.
 - `/forget <person>` removes signals and opportunities whose evidence names them.
 
-## 9. Relation to Stage 3 (owner decision pending)
+## 9. Relation to Stage 3 (decided: 0.010 first)
 
-- **Before Stage 3:** temperament has real needs to scale from day one; 0.010's signals and service records become the evidence Stage 3's nightly review learns from. Cost: Stage 3 waits.
+- **Before Stage 3 (chosen):** temperament has real needs to scale from day one; 0.010's signals and service records become the evidence Stage 3's nightly review learns from. Cost: Stage 3 waits.
 - **Alongside:** 0.009 CH1–CH4 (character state, mood, voice) do not depend on 0.010; CH5 (nightly character review) does, since it reads "what served which motivation". So the natural interleave is 0.010 M0–M3 in parallel with 0.009 CH0–CH4, then CH5 after M3.
 
 ## 10. Milestones
@@ -168,12 +168,13 @@ Exit gate (HLD §15 #9, #10, #12, #16):
 | `IYYE2_SELF_QUESTIONS_DAILY` | `3` | self-model questions Iyye may ask the owner per day |
 | `IYYE2_GEOLOCATION` | `1` | estimate the place from the network (once a day and on a network change) |
 
-## 13. Open questions for the owner
+## 13. Owner decisions (2026-10-05)
 
-1. Before or alongside Stage 3 (§9)?
-2. May curiosity use the web in background work (searches it decides on its own, within the daily web budget)?
-3. May agency propose plans from your passing remarks, or only when you say something like "plan this"?
-4. Social initiative: may Iyye follow up with contacts (e.g. Jacob's exam) on its own, or only with you at first?
-5. Default shares (§7) and the social cap (3/day).
-6. ~~Place from the network~~: decided, allowed (§3.1).
-7. ~~Self-model questions~~: decided, more than one a day but limited (default 3, §3.1). Which geolocation service to use is chosen in M0b (no key, HTTPS, city-level).
+1. **Order:** 0.010 comes **before Stage 3** (0.009), which builds on its needs, signals and service records.
+2. **Curiosity may use the web in background work** on its own, within the daily web budget (`web_search`/`web_fetch` in background, M2).
+3. **Agency may propose plans from the owner's passing remarks**, not only from explicit requests: a concrete owner intention ("I need to renew the passport") detected by the Kev role (shadow first) becomes a proposed plan; C4's authorization rules, one open plan per evidence cluster, and the owner's `/plan cancel` still apply.
+4. **Social initiative may follow up with contacts**, not only the owner (e.g. asking Jacob how his exam went): only people who wrote to Iyye first, only about what that person said to Iyye themself (never relaying what someone else said), within quiet hours, one Iyye-initiated message per person per day, `IYYE2_SOCIAL_DAILY_MAX` in all, each reported to the owner (0.008).
+5. **Place from the network** is allowed (§3.1).
+6. **Self-model questions** to the owner: more than one a day, limited (default 3, §3.1).
+
+Still to settle in M0: the default shares (§7) and the social cap (3/day), from M0's shadow figures.
