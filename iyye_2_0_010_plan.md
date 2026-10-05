@@ -67,12 +67,14 @@ Iyye first keeps an accurate, current model of *what and where it is*: the machi
 | **Hardware** | machine model, chip, CPU/GPU cores, unified memory, disks, battery and power adapter, displays; *expected* hardware the owner mentioned (the DGX Spark: 128 GB, ordered) | typed probes: `system_profiler` (hardware, power, storage, displays), `sysctl`; owner statements (Kev role or `/self note`) | a day; at once on change |
 | **Low-level operation** | power state (on battery or AC, lid, sleep and dark-wake history, assertions), thermal state, load, memory pressure, the processes it is (host, router and model instances, Hindsight, PostgreSQL, Kev, SearXNG) with their PIDs, ports and health, loaded models and their RAM | `pmset -g log`/`pmset -g batt`/`pmset -g assertions`, `ps`, the router and service status the host already has | 10 min; at once on a sleep/wake or service change |
 | **High-level operation** | its own code version (the iyye_2 commit), upstream pins (Pi, Hindsight, Kev, SearXNG, llama.cpp build), schema version, model registry and selections, toolkits and who may use them, active roles (shadow/acting), what it did today (turns, findings, plans, sends), its rhythm (awake/asleep, day number), its known limits (no vision, private chats only, …) | the host's own records and config, `git rev-parse` of its repository | a day; at once on restart, upgrade or selection change |
-| **Position and surroundings** | where it is (timezone, the owner-stated location; network place only as "home network" vs other), local time, daylight (sunrise/sunset computed offline from the coordinates), the weather there, devices it can sense (displays, audio, camera presence — not their content) | timezone and locale, owner statements, `web_search` for weather once a location is known, offline solar computation | an hour (weather), a day (place) |
+| **Position and surroundings** | where it is (the owner-stated place; else an estimate from the network), whether it is on its usual network, local time, daylight (sunrise/sunset computed offline from the coordinates), the weather there, devices it can sense (displays, audio, camera presence — not their content) | the owner's statements; **IP geolocation** (owner decision: allowed); timezone and locale; `web_search` for weather once a place is known; offline solar computation | an hour (weather), a day (place); at once on a network change |
 | **Social circle** | the people it knows: names, channels, links, trust, how often and how recently each writes, stated facts about them ("Jacob is the owner's son"), open commitments and plans per person | contacts, links, events, commitments, plans; owner statements only for relationships (never inferred from tone) | an hour |
 
 **How it drives curiosity:**
 - **Stale** (a field past its window), **incomplete** (a field unknown, e.g. location never stated), **contradicted** (a probe disagrees with a stated fact, e.g. hardware changed after the owner said a new machine arrives) or **changed** (a diff since the last snapshot) each raise a self-model signal with the field as its evidence cluster.
-- Filling a field is a typed read-only probe when one exists (no model call), an investigation with the background toolkits when it needs research (e.g. "what is a DGX Spark, and what will change for me?" with `web_search`, cited), or **a question to the owner** at their next turn when only the owner can know (where are we? who is this person?). Iyye asks at most one such question a day.
+- Filling a field is a typed read-only probe when one exists (no model call), an investigation with the background toolkits when it needs research (e.g. "what is a DGX Spark, and what will change for me?" with `web_search`, cited), or **a question to the owner** when only the owner can know (where are we? who is this person to you? is the DGX Spark here yet?).
+- **Questions to the owner** (owner decision: allowed, more than one a day, limited): at most `IYYE2_SELF_QUESTIONS_DAILY` (default 3) a day, one at a time (the next only after the last was answered or a day passed), never the same field twice in a week, never while asleep. Each goes out as Iyye's own web-chat message, held while a conversation is active (as findings are). The owner's answer, in their next turns, is taken as an owner statement for that field by a Kev role (shadow first: until it acts, the answer is recorded and the owner confirms with `/self note`); a question left unanswered settles nothing and is not repeated that week.
+- **Place from the network** (owner decision: allowed): one IP-geolocation lookup through the guarded HTTP client (`tools/http.ts`), at most once a day and on a change of network, counted in the web budget. Its result is stored as an *estimate* (city level, with the service as source); an owner-stated place always wins, and a disagreement between them is a "contradicted" signal (the owner may be travelling) that becomes a question.
 - **Service** = the field is current again, with its source. A contradiction is settled only by a fresh probe or the owner's statement, never by Iyye's own reasoning.
 - **Self-preservation reads the same model:** "on battery, lid closed, the night will be cut short" or "memory pressure high while a night needs the memory model" are self-preservation signals from the low-level facet.
 
@@ -80,7 +82,7 @@ Iyye first keeps an accurate, current model of *what and where it is*: the machi
 - **In prompts:** a short, current "about me" block built from the model (hardware, state, place, time, people summary) in the owner's turns, so "how much disk do you have?" or "what will the DGX Spark change?" is answered from a fresh model; a fresh probe still wins for live figures (no 33-minute-old disk answers).
 - **In memory:** each change is retained in the `iyye-self` bank as a dated fact ("2026-10-05: Iyye runs on a MacBook Pro M3 with 128 GB; the owner ordered a DGX Spark"), so continuity spans days.
 - **Privacy:** the position, surroundings and social-circle facets are **owner-only**. A contact's turn may know generic facts (Iyye runs locally on its owner's computer) and, under 0.004's decision, the machine toolkit's figures, never where the owner is, who else Iyye talks with, or anything from those facets.
-- **New probes are typed and read-only** (HLD invariant), added to the `machine` toolkit for owner turns and to background work: `self_hardware`, `self_power` (battery/AC, sleep history), `self_versions`, `self_place` (timezone, daylight). No probe sends anything out except the weather search, which uses the existing web budget.
+- **New probes are typed and read-only** (HLD invariant), added to the `machine` toolkit for owner turns and to background work: `self_hardware`, `self_power` (battery/AC, sleep history), `self_versions`, `self_place` (timezone, daylight). Only two probes go out to the network, both through the guarded client and the web budget: the weather search and the IP geolocation lookup.
 
 ## 4. Need, smoothing and opportunities
 
@@ -163,6 +165,8 @@ Exit gate (HLD §15 #9, #10, #12, #16):
 | `IYYE2_MOTIVATION_SUSTAIN` | `3` | consecutive sweeps above the threshold |
 | `IYYE2_MOTIVATION_SHARES` | `40,30,30` | curiosity, agency, social shares of background time |
 | `IYYE2_SOCIAL_DAILY_MAX` | `3` | Iyye-initiated social messages per day in all |
+| `IYYE2_SELF_QUESTIONS_DAILY` | `3` | self-model questions Iyye may ask the owner per day |
+| `IYYE2_GEOLOCATION` | `1` | estimate the place from the network (once a day and on a network change) |
 
 ## 13. Open questions for the owner
 
@@ -171,5 +175,5 @@ Exit gate (HLD §15 #9, #10, #12, #16):
 3. May agency propose plans from your passing remarks, or only when you say something like "plan this"?
 4. Social initiative: may Iyye follow up with contacts (e.g. Jacob's exam) on its own, or only with you at first?
 5. Default shares (§7) and the social cap (3/day).
-6. Where Iyye is: from your statement only, or may it also estimate the place from the network (an IP geolocation call reveals the address to that service)?
-7. May Iyye ask you one self-model question a day ("where are we?", "who is this person to you?")?
+6. ~~Place from the network~~: decided, allowed (§3.1).
+7. ~~Self-model questions~~: decided, more than one a day but limited (default 3, §3.1). Which geolocation service to use is chosen in M0b (no key, HTTPS, city-level).
