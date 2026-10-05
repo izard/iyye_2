@@ -1,0 +1,310 @@
+{
+	"models_dir": "~/Downloads/llama.cpp/models",
+	"defaults": {
+		"c": 65536,
+		"np": 1,
+		"timeout": 86400,
+		"repeat-penalty": 1.2
+	},
+	"models": [
+		{
+			"name": "gemma-4-26B",
+			"file": "gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
+			"ram_required_gb": 28.0,
+			"startup_s": 30,
+			"roles": [
+				"chat",
+				"reasoning",
+				"stm",
+				"alignment"
+			],
+			"description": "Primary chat and reasoning model. Gemma-4 26B MoE at Q8. Best response quality for user conversations, self-reflection, and complex analysis.",
+			"server_args": {
+				"reasoning": "off"
+			}
+		},
+		{
+			"name": "gemma-4-E4B",
+			"file": "gemma-4-E4B-it-Q8_0.gguf",
+			"ram_required_gb": 9.0,
+			"startup_s": 10,
+			"roles": [
+				"fast",
+				"stm",
+				"alignment",
+				"chat"
+			],
+			"description": "Fast lightweight model for high-frequency low-stakes tasks. Used for STM fact extraction and alignment scoring where speed matters more than depth.",
+			"server_args": {}
+		},
+		{
+			"name": "gemma-4-31B",
+			"file": "gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
+			"ram_required_gb": 27,
+			"startup_s": 15,
+			"roles": [
+				"chat",
+				"reasoning"
+			],
+			"description": "Large dense Gemma-4 31B, QAT UD-Q4_K_XL (~16G). Google's quantization-aware-training Q4 matches the previous Q8 quality at roughly half the RAM. Alternative to 26B MoE for tasks where dense attention is preferable. Not started by default. Measured ~25.7 GB resident at 64k context (2026-10-02, llama.cpp 11362); tool calling verified.",
+			"server_args": {}
+		},
+		{
+			"name": "qwen36-35b",
+			"file": "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf",
+			"ram_required_gb": 26.0,
+			"startup_s": 35,
+			"roles": [
+				"code",
+				"codegen",
+				"reasoning"
+			],
+			"description": "Primary code and codegen model. Qwen3.6 35B MoE at Q8. Used by StreamFactory for generating new processing stream code.",
+			"server_args": {}
+		},
+		{
+			"name": "qwen36-27b",
+			"file": "Qwen3.6-27B-UD-Q8_K_XL.gguf",
+			"ram_required_gb": 35.0,
+			"startup_s": 40,
+			"roles": [
+				"chat",
+				"reasoning",
+				"code"
+			],
+			"description": "Qwen3.6 27B dense model at Q8. Alternative for chat, reasoning, and code. Not started by default.",
+			"server_args": {}
+		},
+		{
+			"name": "qwen35-122b",
+			"file": "Qwen3.5-122B-A10B-Q5_K_S-00001-of-00003.gguf",
+			"ram_required_gb": 92.0,
+			"startup_s": 90,
+			"roles": [
+				"code",
+				"reasoning"
+			],
+			"description": "Large Qwen3.5 122B MoE. For complex reasoning and large-context code tasks. Requires ~88GB RAM; not started by default.",
+			"server_args": {
+				"c": 32768
+			}
+		},
+		{
+			"name": "qwen3-coder",
+			"file": "Qwen3-Coder-Next-Q8_0-00001-of-00003.gguf",
+			"ram_required_gb": 90.0,
+			"startup_s": 90,
+			"roles": [
+				"code"
+			],
+			"description": "Qwen3 Coder specialised for software engineering tasks. Large model, not started by default.",
+			"server_args": {
+				"c": 32768
+			}
+		},
+		{
+			"name": "devstral-123b",
+			"file": "Devstral-2-123B-Instruct-2512-Q5_K_S-00001-of-00002.gguf",
+			"ram_required_gb": 85.0,
+			"startup_s": 90,
+			"roles": [
+				"code",
+				"reasoning"
+			],
+			"description": "Devstral 123B MoE. Long-context coding and instruction-following. Not started by default.",
+			"server_args": {
+				"c": 32768
+			}
+		},
+		{
+			"name": "glm4",
+			"file": "GLM-4.7-REAP-40p-IQ3_S.gguf",
+			"ram_required_gb": 92.0,
+			"startup_s": 60,
+			"roles": [
+				"chat",
+				"reasoning"
+			],
+			"description": "GLM-4.7 REAP 40B. Alternative reasoning model. Not started by default.",
+			"server_args": {
+				"c": 16384
+			}
+		},
+		{
+			"name": "gpt-oss-120b",
+			"file": "gpt-oss-120b-Q8_0-00001-of-00002.gguf",
+			"ram_required_gb": 63.0,
+			"startup_s": 75,
+			"roles": [
+				"chat",
+				"reasoning",
+				"code"
+			],
+			"description": "OpenAI OSS 120B. High-quality alternative for chat and reasoning. Not started by default.",
+			"server_args": {
+				"c": 32768
+			}
+		},
+		{
+			"name": "qwen35-9b",
+			"file": "Qwen3.5-9B-UD-Q8_K_XL.gguf",
+			"ram_required_gb": 12.0,
+			"startup_s": 10,
+			"roles": [
+				"fast",
+				"stm",
+				"alignment",
+				"codegen"
+			],
+			"description": "Qwen3.5 9B dense at Q8. Quick agentic tasks \u2014 fast STM extraction, alignment scoring, and lightweight codegen. Not started by default.",
+			"server_args": {}
+		},
+		{
+			"name": "gemma-4-12B",
+			"file": "gemma-4-12b-it-UD-Q8_K_XL.gguf",
+			"ram_required_gb": 17,
+			"startup_s": 10,
+			"roles": [
+				"chat",
+				"reasoning",
+				"fast"
+			],
+			"description": "Gemma-4 12B instruct, UD-Q8_K_XL. Mid-size dense model: thinks before answering, tool calling verified (llama.cpp 11362). ~15.6 GB resident at 64k context.",
+			"server_args": {}
+		},
+		{
+			"name": "gemma-4-31B-Q8",
+			"file": "gemma-4-31B-it-Q8_0.gguf",
+			"ram_required_gb": 41,
+			"startup_s": 25,
+			"roles": [
+				"chat",
+				"reasoning"
+			],
+			"description": "Gemma-4 31B instruct at Q8_0: higher-precision sibling of gemma-4-31B (QAT Q4). Tool calling verified; ~40 GB resident at 64k context, slowest to answer of the Gemma family.",
+			"server_args": {}
+		},
+		{
+			"name": "gemma-4-31B-Q4_0",
+			"file": "gemma-4-31B_q4_0-it.gguf",
+			"ram_required_gb": 28,
+			"startup_s": 15,
+			"roles": [
+				"chat",
+				"reasoning"
+			],
+			"description": "Gemma-4 31B instruct, plain Q4_0 quantization (an alternative to the QAT gemma-4-31B). Tool calling verified; ~26 GB resident at 64k context.",
+			"server_args": {}
+		},
+		{
+			"name": "qwen38-27b",
+			"file": "Qwen3.8-27B-UD-Q6_K_M.gguf",
+			"ram_required_gb": 27,
+			"startup_s": 15,
+			"roles": [
+				"chat",
+				"reasoning",
+				"code"
+			],
+			"description": "Qwen3.8 27B (hybrid, reasoning) at UD-Q6_K_M. Tool calling verified; ~25.6 GB resident at 64k context.",
+			"server_args": {}
+		},
+		{
+			"name": "qwen38-27b-uncensored",
+			"file": "Qwen3.8-27B-Uncensored-Q6_K.gguf",
+			"ram_required_gb": 27,
+			"startup_s": 15,
+			"roles": [
+				"chat",
+				"reasoning"
+			],
+			"description": "Qwen3.8 27B abliterated (its refusal tuning removed) at Q6_K. Tool calling verified; ~25 GB resident at 64k context. Iyye's own rules still come from identity.md and the host.",
+			"server_args": {}
+		},
+		{
+			"name": "qwen38-27b-tak",
+			"file": "qwen3.8-27b-tak-reasoning.gguf",
+			"ram_required_gb": 14,
+			"startup_s": 10,
+			"roles": [
+				"chat",
+				"reasoning"
+			],
+			"description": "Qwen3.8 27B 'tak-reasoning' build in a compact quantization (8.4 GB file). Tool calling verified; ~12.3 GB resident at 64k context.",
+			"server_args": {},
+			"thinking": "on"
+		},
+		{
+			"name": "qwen35-4b-tak",
+			"file": "qwen3.5-4b-tak-reasoning.gguf",
+			"ram_required_gb": 5,
+			"startup_s": 5,
+			"roles": [
+				"fast"
+			],
+			"description": "Qwen3.5 4B 'tak-reasoning' build. Small and quick to load (~2.5 s); tool calling verified; ~4 GB resident at 64k context.",
+			"server_args": {}
+		},
+		{
+			"name": "minicpm5-2b",
+			"file": "MiniCPM5-2B-Q6_K_L.gguf",
+			"ram_required_gb": 6,
+			"startup_s": 5,
+			"roles": [
+				"fast"
+			],
+			"description": "MiniCPM5 2B at Q6_K_L. Smallest model here: loads in ~2 s, tool calling verified, ~4.8 GB resident at 64k context. Useful for smoke tests and quick checks.",
+			"server_args": {}
+		},
+		{
+			"name": "muse-glimmer-30b",
+			"file": "Muse-Glimmer-30B-UD-Q6_K_XL.gguf",
+			"ram_required_gb": 27,
+			"startup_s": 15,
+			"roles": [
+				"chat",
+				"reasoning"
+			],
+			"description": "Muse-Glimmer 30B (28B params, muse-glimmer architecture) at UD-Q6_K_XL. Tool calling verified; ~25.4 GB resident at 64k context.",
+			"server_args": {}
+		},
+		{
+			"name": "muse-glimmer-30b-heretic",
+			"file": "darkc0de_Muse-Glimmer-30B-heretic-Q6_K_L.gguf",
+			"ram_required_gb": 25,
+			"startup_s": 15,
+			"roles": [
+				"chat",
+				"reasoning"
+			],
+			"description": "Muse-Glimmer 30B 'heretic' fine-tune (refusal tuning removed) at Q6_K_L. Tool calling verified; ~23.4 GB resident at 64k context.",
+			"server_args": {}
+		},
+		{
+			"name": "gorilla-openfunctions-v2",
+			"file": "gorilla-openfunctions-v2-q6_K.gguf",
+			"ram_required_gb": 14,
+			"startup_s": 5,
+			"roles": [
+				"code"
+			],
+			"description": "Gorilla OpenFunctions v2 (DeepSeek-Coder 7B based, 4k context per slot) at Q6_K. Answers chat, but does NOT make OpenAI-style tool calls through llama.cpp, so Iyye's tools will not work with it. ~12.8 GB resident.",
+			"server_args": {
+				"c": 16384
+			}
+		},
+		{
+			"name": "antangelmed",
+			"file": "AntAngelMed.Q6_K.gguf",
+			"ram_required_gb": 92,
+			"startup_s": 90,
+			"roles": [
+				"chat"
+			],
+			"description": "AntAngelMed: medical-domain MoE (bailingmoe2, 256 experts x 3.4B, 8 active) at Q6_K, 84.5 GB file, 32k native context. Its chat template has no tool support. NOT load-tested (too large to test alongside another model); RAM figure is an estimate.",
+			"server_args": {
+				"c": 32768
+			}
+		}
+	]
+}

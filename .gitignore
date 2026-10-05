@@ -1,0 +1,16 @@
+# Upstream clones: separate repositories with their own history (never committed here).
+/pi/
+/hindsight/
+/kev/
+/web/searxng/
+
+# Local environments, installed dependencies and databases.
+node_modules/
+.venv/
+/memory/pg/
+
+# Live state, secrets and model artifacts never live in the source tree (they are under ~/.iyye2).
+*.db
+*.db-wal
+*.db-shm
+.DS_Store

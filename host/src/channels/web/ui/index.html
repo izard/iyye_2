@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Iyye</title>
+	<link rel="stylesheet" href="/app.css">
+	<script src="/app.js" defer></script>
+</head>
+<body>
+	<header>
+		<h1>Iyye</h1>
+		<div id="status" class="status" aria-live="polite"></div>
+		<button id="attention-toggle" class="warn-button" hidden></button>
+		<button id="models-toggle" class="ghost" hidden>Models</button>
+	</header>
+
+	<section id="login" class="login" hidden>
+		<h2>Log in</h2>
+		<p>Open the login link the host printed, or paste the token from <code>~/.iyye2/owner_token</code>.</p>
+		<form id="login-form">
+			<input id="login-token" type="password" autocomplete="off" placeholder="Owner token" aria-label="Owner token">
+			<button type="submit">Log in</button>
+		</form>
+		<p id="login-error" class="error" role="alert"></p>
+	</section>
+
+	<main id="chat" hidden>
+		<div id="log" class="log" aria-live="polite"></div>
+		<form id="composer" class="composer">
+			<textarea id="input" rows="2" placeholder="Message Iyye — or /help for commands" aria-label="Message"></textarea>
+			<button type="submit">Send</button>
+		</form>
+	</main>
+
+	<aside id="attention" class="models" hidden>
+		<h2>Messages that need you</h2>
+		<p class="meta">These were not confirmed as delivered. A Telegram message here was never shown anywhere else.</p>
+		<div id="attention-list"></div>
+	</aside>
+
+	<aside id="models" class="models" hidden>
+		<h2>Models</h2>
+		<div id="models-list"></div>
+	</aside>
+</body>
+</html>
