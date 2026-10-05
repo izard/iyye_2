@@ -34,6 +34,24 @@ import type { Route } from "../outbox/outbox.ts";
 import type { Db } from "../state/db.ts";
 import { recordToolCall } from "../state/tool-calls.ts";
 
+/**
+ * An over-long text argument, shortened at a word boundary, with the note
+ * the tool puts first in its result (2026-10-05 incident: a schema
+ * `maxLength` made the model retry the same 400-character query 125 times,
+ * each rejected before the tool ran). Arguments are cut, never refused.
+ */
+export function shorten(text: string, max: number): { text: string; note: string } {
+	const t = text.trim().replace(/\s+/g, " ");
+	if (t.length <= max) return { text: t, note: "" };
+	const cut = t.slice(0, max);
+	const at = cut.lastIndexOf(" ");
+	const short = (at > max / 2 ? cut.slice(0, at) : cut).trim();
+	return {
+		text: short,
+		note: `(Your ${t.length}-character query was shortened to its first ${short.length} characters. Use a few words.)\n`,
+	};
+}
+
 /** `iyye`: Iyye's own background work (plan 0.007): `read` toolkits, and `reach` (plan 0.008, owner decision). */
 export type PrincipalKind = "owner" | "contact" | "iyye";
 

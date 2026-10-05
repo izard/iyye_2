@@ -244,6 +244,19 @@ A contact asked "how old is Kloster Reutberg?". `qwen38-27b-tak` made 5 tool cal
   - The fake router gained `[[empty-always]]`, for an empty reply that stays empty through the recovery.
 - **Tests:** `test/turn-limits.test.ts` (9) covers trimming, the registry key, `enable_thinking` and the cap on each request, recovery with tools closed, the full result in its own turn and a stub later with the transcript intact, and `closeTurn`. `pi.test.ts` and `registry.test.ts` were updated. The suite has 235 tests.
 
+### Follow-up: the 2026-10-05 runaway research turn (fixed)
+
+The owner asked on Telegram for recent research on video/image encoding for language models. With `qwen38-27b-tak` (thinking on, ~6.4 tokens/s) Iyye made 4 real tool calls, then **125 `web_search` calls rejected by argument validation** (queries over the schema's 300 characters), each retried with nearly the same query, for 1.5 hours, until a host restart ended the turn. Rejected calls never reached the broker, so its per-turn budget of 8 never applied. Consequences: the energy charge for that turn's device time was −0.48 at once and forced a nap; the next message first needed Pi to compact the bloated conversation, which ran with thinking on (11 minutes), so a one-line FYI took 32 minutes to answer.
+
+Fixes:
+- **A. Arguments are cut, never refused:** `web_search` and `memory_search` have no schema `maxLength`; an over-long query is shortened at a word boundary (`shorten`, 300 characters) and the result says so. `web_fetch` refuses a URL over 2000 characters in its result, not by validation.
+- **B. A turn-level loop guard** (`integration/pi/turn.ts`, `ToolLoopGuard`): every tool result counts, executed, denied or rejected by validation; after 12 in a turn, or the same failing call 3 times in a row, the turn is aborted and gets one recovery step (`RECOVERY_NOTE_TOOL_LOOP`) with tools closed and thinking off, so the person still gets an answer.
+- **C. Pi's summaries without thinking:** `enable_thinking` now follows the session's thinking level (`{ $var: "thinking.enabled" }`, level "medium" for a registry `thinking: on`, set per turn by `thinkingLevelFor`); an inline extension sets it to "off" on `session_before_compact` and restores it after `session_compact`/`session_compact_failed`. Compaction requests bypass `before_provider_request`, which is why the recovery's switch did not reach them.
+- **D. A per-turn energy cap:** device time costs at most `devicePerTurnMax` (0.15) per turn or step.
+- **E. (Owner)** chat back on `gemma-4-26B`; `qwen38-27b-tak` for deliberate deep questions.
+
+Tests: `turn-limits.test.ts` (compaction without thinking and the next turn thinking again; a loop of validation-rejected calls stopped after 3 and answered; `shorten`), `adenosine.test.ts` (the cap). The fake router gained `[[callloop:NAME|{json}]]`.
+
 ## 5. Risks
 
 - **Engines block SearXNG** (captchas, rate limits): quality varies, and Wikipedia is the always-available fallback.

@@ -11,10 +11,10 @@
 
 import { Type } from "typebox";
 import { formatRecalled, type MemoryGateway } from "../memory/gateway.ts";
-import type { IyyeTool } from "./broker.ts";
+import { type IyyeTool, shorten } from "./broker.ts";
 
 const PARAMS = Type.Object(
-	{ query: Type.String({ minLength: 1, maxLength: 300, description: "What to look for, in a few words" }) },
+	{ query: Type.String({ minLength: 1, description: "What to look for, in a few words" }) },
 	{ additionalProperties: false },
 );
 
@@ -29,11 +29,12 @@ export function memorySearchTool(gateway: MemoryGateway): IyyeTool<typeof PARAMS
 		run: async (params, ctx) => {
 			// Recall is scoped to a person; Iyye's own background work has no reader yet (plan 0.007 S4).
 			if (ctx.principal === "iyye") return "Memory search is not available to background work.";
-			const r = await gateway.recall({ scope: ctx.scope, principal: ctx.principal }, params.query, {
+			const { text: query, note } = shorten(params.query, 300);
+			const r = await gateway.recall({ scope: ctx.scope, principal: ctx.principal }, query, {
 				includeIyye: true,
 			});
 			return r.items.length
-				? formatRecalled(r)
+				? note + formatRecalled(r)
 				: `Nothing found in memory for that.${r.ltm ? "" : " (Long-term memory is unavailable right now; only today's conversations were searched.)"}`;
 		},
 	};

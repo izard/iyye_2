@@ -6,7 +6,7 @@ import { TelegramSender } from "../src/channels/telegram/sender.ts";
 import { WebChatAdapter } from "../src/channels/web/adapter.ts";
 import { WebSessions } from "../src/channels/web/auth.ts";
 import { WebServer } from "../src/channels/web/server.ts";
-import { createLocalModelRuntime } from "../src/integration/pi/runtime.ts";
+import { createLocalModelRuntime, thinkingLevelFor } from "../src/integration/pi/runtime.ts";
 import { PiConversations } from "../src/integration/pi/sessions.ts";
 import { Scheduler, type SchedulerDeps } from "../src/kernel/scheduler.ts";
 import { silentLogger } from "../src/log.ts";
@@ -70,6 +70,7 @@ export async function startStack(
 	const conversations = new PiConversations({
 		db,
 		runtime: await createLocalModelRuntime({ routerUrl: rig.router.url, registry: sb.registry }),
+		thinkingLevel: (m) => thinkingLevelFor(sb.registry, m),
 		stateDir: sb.stateDir,
 		identity: "You are Iyye.",
 		log: silentLogger,

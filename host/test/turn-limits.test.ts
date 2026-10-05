@@ -14,8 +14,13 @@ import { after, before, beforeEach, describe, test } from "node:test";
 import { Type } from "typebox";
 import { currentTurnStart, HOST_NOTE_PREFIX, trimEarlierToolResults } from "../src/integration/pi/context.ts";
 import { operatingNote } from "../src/integration/pi/prompt.ts";
-import { createLocalModelRuntime } from "../src/integration/pi/runtime.ts";
-import { PiConversations, RECOVERY_NOTE, RECOVERY_NOTE_EMPTY } from "../src/integration/pi/sessions.ts";
+import { createLocalModelRuntime, thinkingLevelFor } from "../src/integration/pi/runtime.ts";
+import {
+	PiConversations,
+	RECOVERY_NOTE,
+	RECOVERY_NOTE_EMPTY,
+	RECOVERY_NOTE_TOOL_LOOP,
+} from "../src/integration/pi/sessions.ts";
 import { silentLogger } from "../src/log.ts";
 import { RouterClient } from "../src/models/client.ts";
 import { renderPreset } from "../src/models/preset.ts";
@@ -23,7 +28,7 @@ import { loadRegistry, RegistryError } from "../src/models/registry.ts";
 import type { RouterProcess } from "../src/models/router.ts";
 import { openDb } from "../src/state/db.ts";
 import { toolCallsForScope } from "../src/state/tool-calls.ts";
-import { type IyyeTool, ToolBroker } from "../src/tools/broker.ts";
+import { type IyyeTool, shorten, ToolBroker } from "../src/tools/broker.ts";
 import { fakeRouterProcess, freePort, type Sandbox, sandbox, waitFor } from "./model-helpers.ts";
 
 const BIG = `Web content (quoted data): https://example.org/page\n${"Lorem ipsum dolor sit amet. ".repeat(200)}`;
@@ -98,7 +103,8 @@ describe("turn limits on the fake router", () => {
 		label: "Big",
 		description: "returns a long text",
 		summary: "a long text",
-		parameters: Type.Object({}),
+		// No arguments at all: extra ones are rejected by validation before the tool runs.
+		parameters: Type.Object({}, { additionalProperties: false }),
 		run: async () => BIG,
 	};
 
@@ -128,6 +134,7 @@ describe("turn limits on the fake router", () => {
 		const conv = new PiConversations({
 			db,
 			runtime: await createLocalModelRuntime({ routerUrl: router.url, registry: sb.registry }),
+			thinkingLevel: (m) => thinkingLevelFor(sb.registry, m),
 			stateDir: sb.stateDir,
 			identity: "You are Iyye.",
 			log: silentLogger,
@@ -195,6 +202,55 @@ describe("turn limits on the fake router", () => {
 		const r = await conv.turn({ scope: "t-cut", view: owner, model: "small-2", text: "long [[length]]" });
 		assert.ok(r.ok && r.text === `echo: ${RECOVERY_NOTE}`);
 		assert.deepEqual(requests().at(-1)!.chat_template_kwargs, { enable_thinking: false });
+		await conv.disposeAll();
+	});
+
+	test("compaction goes out with thinking off, and the next turn thinks again (2026-10-05)", async () => {
+		const { conv } = await conversations();
+		for (const n of [1, 2, 3]) await conv.turn({ scope: "t-comp", view: owner, model: "small-2", text: `part ${n}` });
+		const live = (
+			conv as unknown as {
+				live: Map<
+					string,
+					{ session: { compact(): Promise<unknown>; settingsManager: { applyOverrides(o: object): void } } }
+				>;
+			}
+		).live;
+		const session = live.get("t-comp")!.session;
+		// Keep almost nothing recent, so these few turns are enough to compact.
+		session.settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 } });
+		await session.compact();
+		const isSummary = (r: { messages: { role: string; content: unknown }[] }) =>
+			/summar/i.test(JSON.stringify(r.messages.find((m) => m.role === "system")?.content ?? ""));
+		const summaries = requests().filter(isSummary);
+		assert.ok(summaries.length >= 1, "a summarization request was sent");
+		for (const r of summaries) assert.equal(r.chat_template_kwargs?.enable_thinking, false, "summaries do not think");
+		await conv.turn({ scope: "t-comp", view: owner, model: "small-2", text: "thanks" });
+		// Pi may compact again after it (on its own, also without thinking); the turn's own request thinks.
+		const turn = requests()
+			.filter((r) => !isSummary(r))
+			.at(-1)!;
+		assert.match(JSON.stringify(turn.messages.at(-1)), /thanks/);
+		assert.equal(turn.chat_template_kwargs?.enable_thinking, true, "the next turn thinks again");
+		for (const r of requests().filter(isSummary)) assert.equal(r.chat_template_kwargs?.enable_thinking, false);
+		await conv.disposeAll();
+	});
+
+	test("a tool-call loop is stopped, even when every call is rejected before it runs, and the person still gets an answer", async () => {
+		const { db, conv } = await conversations();
+		// `big` takes no arguments: these are rejected by validation every time, like the 125 over-long queries.
+		const r = await conv.turn({
+			scope: "t-loop",
+			view: owner,
+			model: "small-2",
+			text: 'research it [[callloop:big|{"query":"far too long"}]]',
+		});
+		assert.ok(r.ok, JSON.stringify(r));
+		assert.equal(r.ok && r.text, `echo: ${RECOVERY_NOTE_TOOL_LOOP}`);
+		const rs = requests();
+		assert.equal(rs.length, 4, "three rejected calls, then the recovery request");
+		assert.deepEqual(rs.at(-1)!.chat_template_kwargs, { enable_thinking: false });
+		assert.deepEqual(toolCallsForScope(db, "t-loop"), [], "nothing ran");
 		await conv.disposeAll();
 	});
 
@@ -268,4 +324,16 @@ test("with the web toolkit, the prompt asks for facts to be checked, not answere
 		/check it with web_search; do not answer such questions from memory alone/,
 	);
 	assert.doesNotMatch(operatingNote([kit("core")]), /web_search/);
+});
+
+test("an over-long tool argument is shortened at a word boundary with a note, never rejected (2026-10-05)", () => {
+	const long = `${"vision language model video encoding research ".repeat(10)}`.trim();
+	const s = shorten(long, 300);
+	assert.ok(s.text.length <= 300 && !s.text.endsWith(" "));
+	assert.ok(long.startsWith(s.text));
+	assert.match(
+		s.note,
+		/^\(Your \d+-character query was shortened to its first \d+ characters\. Use a few words\.\)\n$/,
+	);
+	assert.deepEqual(shorten("  short  query ", 300), { text: "short query", note: "" });
 });

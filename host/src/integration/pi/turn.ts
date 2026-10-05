@@ -14,7 +14,30 @@ import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-
 
 export type TurnResult =
 	| { ok: true; text: string; model: string }
-	| { ok: false; reason: "empty" | "truncated" | "error" | "aborted" | "busy"; message: string };
+	| { ok: false; reason: "empty" | "truncated" | "tool_loop" | "error" | "aborted" | "busy"; message: string };
+
+/**
+ * A hard bound on tool calls in one turn, counted from the transcript's tool
+ * results (2026-10-05 incident: 125 calls rejected by argument validation
+ * never reached the broker's per-turn budget, and the turn looped for 1.5
+ * hours). Every result counts: executed, denied by the broker, or rejected
+ * before running.
+ */
+export interface ToolLoopGuard {
+	/** Tool results in one turn before it is stopped. */
+	maxResults: number;
+	/** The same failing call (tool and error) in a row before it is stopped. */
+	maxRepeatedErrors: number;
+}
+
+export const DEFAULT_TOOL_GUARD: ToolLoopGuard = { maxResults: 12, maxRepeatedErrors: 3 };
+
+interface ToolResultLike {
+	role: "toolResult";
+	toolName?: string;
+	isError?: boolean;
+	content?: { type: string; text?: string }[];
+}
 
 interface AssistantLike {
 	role: "assistant";
@@ -24,15 +47,42 @@ interface AssistantLike {
 	model?: string;
 }
 
-export async function runTurn(session: AgentSession, text: string, signal?: AbortSignal): Promise<TurnResult> {
+export async function runTurn(
+	session: AgentSession,
+	text: string,
+	signal?: AbortSignal,
+	guard: ToolLoopGuard = DEFAULT_TOOL_GUARD,
+): Promise<TurnResult> {
 	if (session.isStreaming) return { ok: false, reason: "busy", message: "a turn is already running on this session" };
 	if (signal?.aborted) return { ok: false, reason: "aborted", message: "aborted before start" };
 
 	let last: AssistantLike | null = null;
 	let settled = false;
+	let results = 0;
+	let repeated = 0;
+	let lastError = "";
+	let loop: string | null = null;
 	const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 		if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
 			last = event.message as unknown as AssistantLike;
+		} else if (event.type === "message_end" && (event.message as { role?: string }).role === "toolResult") {
+			const r = event.message as unknown as ToolResultLike;
+			results++;
+			const err = r.isError
+				? `${r.toolName}:${(r.content ?? [])
+						.map((c) => c.text ?? "")
+						.join("")
+						.slice(0, 200)}`
+				: "";
+			repeated = err && err === lastError ? repeated + 1 : err ? 1 : 0;
+			lastError = err;
+			if (!loop && (results >= guard.maxResults || repeated >= guard.maxRepeatedErrors)) {
+				loop =
+					repeated >= guard.maxRepeatedErrors
+						? `the same ${r.toolName} call failed ${repeated} times in a row`
+						: `${results} tool calls in one turn`;
+				void session.abort();
+			}
 		} else if (event.type === "agent_settled") {
 			settled = true;
 		}
@@ -48,6 +98,7 @@ export async function runTurn(session: AgentSession, text: string, signal?: Abor
 			return { ok: false, reason: "error", message: "Pi returned before the run settled" };
 		}
 	} catch (err) {
+		if (loop && !signal?.aborted) return { ok: false, reason: "tool_loop", message: loop };
 		return signal?.aborted
 			? { ok: false, reason: "aborted", message: "aborted" }
 			: { ok: false, reason: "error", message: (err as Error).message };
@@ -55,6 +106,7 @@ export async function runTurn(session: AgentSession, text: string, signal?: Abor
 		signal?.removeEventListener("abort", onAbort);
 		unsubscribe();
 	}
+	if (loop && !signal?.aborted) return { ok: false, reason: "tool_loop", message: loop };
 	return classify(last, signal);
 }
 

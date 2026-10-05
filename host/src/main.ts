@@ -30,7 +30,7 @@ import { ReplyReviewShadow } from "./decisions/reply-review.ts";
 import { decisionsReport, labelDecision, roleReport } from "./decisions/report.ts";
 import { DecisionService } from "./decisions/service.ts";
 import { ToolkitSelectionShadow, ToolkitSelector } from "./decisions/toolkit-selection.ts";
-import { createLocalModelRuntime } from "./integration/pi/runtime.ts";
+import { createLocalModelRuntime, thinkingLevelFor } from "./integration/pi/runtime.ts";
 import { PiConversations } from "./integration/pi/sessions.ts";
 import { Adenosine } from "./kernel/adenosine.ts";
 import { BackgroundWorker } from "./kernel/background.ts";
@@ -241,6 +241,7 @@ async function main(): Promise<number> {
 	const conversations = new PiConversations({
 		db,
 		runtime,
+		thinkingLevel: (m) => thinkingLevelFor(registry, m),
 		stateDir: config.stateDir,
 		identity,
 		log,
@@ -299,6 +300,7 @@ async function main(): Promise<number> {
 	const backgroundConversations = new PiConversations({
 		db,
 		runtime,
+		thinkingLevel: (m) => thinkingLevelFor(registry, m),
 		stateDir: join(config.stateDir, "background"),
 		identity,
 		log,
