@@ -12,8 +12,14 @@ import { admitOwnerWebMessage, admitTelegramUpdate } from "../src/kernel/admissi
 import { parseWindow, Rhythm, windowStartFor } from "../src/kernel/rhythm.ts";
 import { silentLogger } from "../src/log.ts";
 import type { GateResult } from "../src/memory/gate.ts";
-import { VERBATIM_STRATEGY } from "../src/memory/hindsight.ts";
-import { type NightOutcome, NightWork, RETAIN_MISSION } from "../src/memory/night.ts";
+import { REPLY_STRATEGY, VERBATIM_STRATEGY } from "../src/memory/hindsight.ts";
+import {
+	type NightOutcome,
+	NightWork,
+	OBSERVATIONS_MISSION,
+	REPLY_MISSION,
+	RETAIN_MISSION,
+} from "../src/memory/night.ts";
 import type { ModelManager } from "../src/models/manager.ts";
 import { createContactWithBinding } from "../src/state/contacts.ts";
 import { type Db, openDb } from "../src/state/db.ts";
@@ -125,13 +131,27 @@ describe("the night's memory work", () => {
 		const replied = ltm.docs.get(`iyye-owner/${e1}:replied`)!;
 		assert.equal(replied.content, "noted: My daughter Julia has violin on Tuesdays");
 		assert.deepEqual(replied.tags, ["scope:owner", "channel:web", "speaker:iyye"]);
-		assert.equal(replied.strategy, VERBATIM_STRATEGY, "stored verbatim, no model call");
+		// Not verbatim (2026-10-06): the important things Iyye told them, extracted under the reply mission,
+		// dated and attributed; the context names the date and what they had asked.
+		assert.equal(replied.strategy, REPLY_STRATEGY);
+		assert.match(
+			replied.context,
+			/^Iyye's own reply to the owner on \d{4}-\d\d-\d\d \(local web chat\)\. the owner had written: "My daughter Julia has violin on Tuesdays"\. These are Iyye's words: not evidence about the owner\.$/,
+		);
 		assert.equal(ltm.docs.get(`iyye-contact-alexid/${e3}:said`)!.content, "I moved to Berlin");
 		assert.match(ltm.docs.get(`iyye-contact-alexid/${e3}:said`)!.context, /the contact "Alex" wrote this/);
 		assert.equal(ltm.banks.get("iyye-owner")!.mission, RETAIN_MISSION);
-		assert.deepEqual(ltm.banks.get("iyye-owner")!.strategies, {
+		const owner = ltm.banks.get("iyye-owner")!;
+		assert.deepEqual(owner.strategies, {
 			[VERBATIM_STRATEGY]: { retain_extraction_mode: "chunks" },
+			[REPLY_STRATEGY]: { retain_mission: REPLY_MISSION },
 		});
+		// No observations from Iyye's words or its probes, in any bank: by tag, with a cap of 0.
+		assert.deepEqual(owner.consolidation, [
+			{ scopes: [{ tags: ["speaker:iyye"] }, { tags: ["speaker:probe"] }], max_observations_per_scope: 0 },
+		]);
+		assert.equal(owner.observations, true);
+		assert.equal(owner.observationsMission, OBSERVATIONS_MISSION);
 		assert.deepEqual(ltm.consolidations, ["iyye-owner", "iyye-contact-alexid"]);
 		assert.deepEqual(
 			gateLog.map((g) => `${g.label.split(":")[0]}:${g.thinking}`),

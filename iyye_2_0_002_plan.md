@@ -357,6 +357,16 @@ Acceptance (§15):
 - importing 1.x LanceDB facts;
 - shared banks between contacts.
 
+### Follow-up (2026-10-06): what long-term memory keeps
+
+A dump (`scripts/dump-ltm.ts`) showed about 84 of 130 memories were noise: Iyye's own replies stored verbatim (39), observations Hindsight built from them and attributed to the person (29: Iyye's "my abilities are limited to text" became "the user's abilities are limited to text"), machine findings (models loaded, Telegram reconnected) and observations of them (14), and day summaries split into trivia (10, "lowest adenosine was 0.51").
+
+As built (owner decision: drop the verbatim replies, keep the important facts in them with time and provenance):
+- **Iyye's replies are extracted, not stored verbatim:** strategy `iyye-reply` with its own `retain_mission` (`REPLY_MISSION`): only what later conversations may depend on (facts Iyye told them with their source, things Iyye confirmed it did or set up, answers), each written as "On <date> Iyye told <person> that …"; never anything about the person. The document's context names the person, the date and what they had asked; tags `speaker:iyye`; metadata event and action ids; timestamp the reply's.
+- **No observations from Iyye's words or its probes:** every bank gets a Hindsight consolidation strategy matched by tag (`speaker:iyye`, `speaker:probe`) with `max_observations_per_scope: 0`: decided by tags the host set, not by a model. People's banks get an observations mission as a backstop (`OBSERVATIONS_MISSION`: durable knowledge from the person's own words, never about Iyye or its system). The `iyye-self` bank builds no observations at all.
+- **Only durable entries of Iyye's own:** self-model changes, repository findings and investigation answers are transferred; machine findings (passing states) and day summaries stay in that day's short-term memory only.
+- **Cleanup:** short-term memory keeps every past conversation's text, so the cleanest repair is a rebuild under the new rules: with the new host running and Iyye awake, `node scripts/memory-clear.ts --restage` deletes the banks and queues every past conversation; the next night (or `/sleep`) transfers them again. (No surgical prune: observations cannot be removed selectively, and Hindsight requeues facts for consolidation only when all of a bank's observations are cleared.)
+
 ## 7. Configuration (planned)
 
 | Name | Default | Meaning |

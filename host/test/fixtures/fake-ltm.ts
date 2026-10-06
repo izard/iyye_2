@@ -33,7 +33,16 @@ export interface FakeDoc {
 
 export class FakeLtm {
 	readonly key = "ltm-key";
-	readonly banks = new Map<string, { mission: string | null; strategies: Record<string, unknown> | null }>();
+	readonly banks = new Map<
+		string,
+		{
+			mission: string | null;
+			strategies: Record<string, unknown> | null;
+			observations?: boolean;
+			consolidation?: unknown[] | null;
+			observationsMission?: string | null;
+		}
+	>();
 	readonly recallResults = new Map<string, { text: string; occurred_start?: string; tags?: string[] }[]>();
 	readonly recalls: { bank: string; query: string }[] = [];
 	readonly docs = new Map<string, FakeDoc>();
@@ -103,8 +112,10 @@ export class FakeLtm {
 		if (!bank) return json(404, {});
 		if (method === "PUT" && rest === "") {
 			this.banks.set(bank, {
+				...this.banks.get(bank),
 				mission: (data.retain_mission as string) ?? null,
 				strategies: this.banks.get(bank)?.strategies ?? null,
+				observations: data.enable_observations !== false,
 			});
 			return json(200, { bank_id: bank });
 		}
@@ -127,8 +138,14 @@ export class FakeLtm {
 		if (method === "PATCH" && rest === "config") {
 			const b = this.banks.get(bank);
 			if (!b) return json(404, {});
-			const updates = (data.updates ?? {}) as { retain_strategies?: Record<string, unknown> };
+			const updates = (data.updates ?? {}) as {
+				retain_strategies?: Record<string, unknown>;
+				consolidation_strategies?: unknown[];
+				observations_mission?: string;
+			};
 			b.strategies = updates.retain_strategies ?? b.strategies;
+			b.consolidation = updates.consolidation_strategies ?? b.consolidation ?? null;
+			b.observationsMission = updates.observations_mission ?? b.observationsMission ?? null;
 			return json(200, { bank_id: bank });
 		}
 		if (method === "POST" && rest === "memories/recall") {
@@ -151,7 +168,7 @@ export class FakeLtm {
 			const q = new URLSearchParams(url.split("?")[1] ?? "");
 			const all = [...this.docs.values()]
 				.filter((d) => d.bank === bank)
-				.filter((d) => !q.get("type") || q.get("type") === "world")
+				.filter(() => !q.get("type") || q.get("type") === "world")
 				.filter((d) => !q.get("q") || d.content.toLowerCase().includes(q.get("q")!.toLowerCase()))
 				.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 			const offset = Number(q.get("offset") ?? 0);
@@ -192,7 +209,12 @@ export class FakeLtm {
 					metadata: item.metadata as Record<string, string>,
 					strategy,
 					// The verbatim (chunks) strategy stores the text as one unit, with no extraction.
-					units: strategy ? 1 : this.unitsFor(String(item.content)),
+					units:
+						strategy &&
+						(this.banks.get(bank)!.strategies?.[strategy] as { retain_extraction_mode?: string })
+							?.retain_extraction_mode === "chunks"
+							? 1
+							: this.unitsFor(String(item.content)),
 				});
 			}
 			return json(200, { success: true, bank_id: bank, items_count: 1, is_async: false });

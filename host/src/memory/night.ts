@@ -27,12 +27,12 @@ import type { Db } from "../state/db.ts";
 import { getEvent } from "../state/events.ts";
 import { getKv, setKv } from "../state/kv.ts";
 import { isInvestigationEntry } from "../state/observations.ts";
-import { dropEpisode, leaveStm, pendingEpisodes, type StmEpisode, transferFailed } from "../state/stm.ts";
+import { dropEpisode, IYYE_SCOPE, leaveStm, pendingEpisodes, type StmEpisode, transferFailed } from "../state/stm.ts";
 import { isForgotten } from "../state/tombstones.ts";
 import { banksBeingForgotten, PENDING_BANKS_KEY, retryBankDeletions } from "./forget.ts";
 import type { GateResult } from "./gate.ts";
 import { bankFor } from "./gateway.ts";
-import { type HindsightClient, HindsightError, VERBATIM_STRATEGY } from "./hindsight.ts";
+import { type HindsightClient, HindsightError, REPLY_STRATEGY, VERBATIM_STRATEGY } from "./hindsight.ts";
 import {
 	observedDocId,
 	repliedDocId,
@@ -55,6 +55,25 @@ export const RETAIN_MISSION = [
 	"Ignore small talk, greetings, thanks, arithmetic and questions that state nothing new.",
 	"Write every fact in English.",
 ].join(" ");
+
+/**
+ * What is extracted from Iyye's own replies (2026-10-06, owner decision: no
+ * verbatim replies, but the important things they told someone, with their
+ * time and provenance). These facts are Iyye's statements, tagged
+ * `speaker:iyye`; consolidation never turns them into observations.
+ */
+export const REPLY_MISSION = [
+	"Each document is one reply Iyye, a personal assistant, gave to a person; its context names the person, the date and what they had asked.",
+	"Extract only what later conversations may depend on: facts Iyye told them, with the source when the reply names one (for example a web search or a measurement); things Iyye confirmed it did or set up (a reminder, a plan, a message sent); answers to their questions.",
+	'Write each fact as what Iyye told that person on that date, for example "On 2026-10-05 Iyye told the owner that Ivan Bunin won the Nobel Prize in Literature in 1933 (from a web search)".',
+	"Never record anything about the person from this document: it holds only Iyye's words.",
+	"Ignore greetings, thanks, apologies, offers, questions, small talk and statements about Iyye's own feelings. If nothing qualifies, extract nothing.",
+	"Write every fact in English.",
+].join(" ");
+
+/** Observations in a person's bank (a backstop: Iyye's words never reach consolidation, see NO_OBSERVATIONS_FROM). */
+export const OBSERVATIONS_MISSION =
+	"Observations are durable knowledge about this person and their world (people, places, plans, preferences, dates), drawn only from what they said themselves. Never make observations about Iyye, its computer, network, tools or abilities.";
 
 export interface NightGate {
 	run<T>(label: string, fn: (model: string) => Promise<T>, opts?: { thinking?: boolean }): Promise<GateResult<T>>;
@@ -188,6 +207,11 @@ export class NightWork {
 			return "completed_empty";
 		}
 		try {
+			if (!this.worthKeeping(e)) {
+				// Transient states and day summaries stay in short-term memory only (2026-10-06): not knowledge.
+				leaveStm(this.d.db, e.event_id, "completed_empty", this.iso());
+				return "completed_empty";
+			}
 			try {
 				await this.retainEpisode(bank, e);
 			} catch (err) {
@@ -220,9 +244,34 @@ export class NightWork {
 		}
 	}
 
+	/**
+	 * Iyye's own entries worth long-term memory (2026-10-06): the self model's
+	 * stable changes, repository findings and investigation answers. Machine
+	 * findings (models loaded, a service reconnected, disk figures) are
+	 * passing states, and the day summary is bookkeeping: both stay in that
+	 * day's short-term memory only. People's turns are always transferred.
+	 */
+	private worthKeeping(e: StmEpisode): boolean {
+		if (e.kind === "summary") return false;
+		if (e.kind !== "observation") return true;
+		if (e.event_id.startsWith("self:") || isInvestigationEntry(this.d.db, e.event_id)) return true;
+		const id = e.event_id.startsWith("obs:") ? e.event_id.slice(4) : e.event_id;
+		const row = this.d.db.prepare("SELECT domain FROM observations WHERE id = ?").get(id) as
+			| { domain: string }
+			| undefined;
+		return row !== undefined && row.domain !== "machine";
+	}
+
 	private async retainEpisode(bank: string, e: StmEpisode): Promise<void> {
 		if (!this.banksReady.has(bank)) {
-			await this.d.ltm.ensureBank(bank, { retainMission: RETAIN_MISSION });
+			// Iyye's own bank holds measurements and its own words: nothing there to make observations of.
+			const own = e.scope === IYYE_SCOPE;
+			await this.d.ltm.ensureBank(bank, {
+				retainMission: RETAIN_MISSION,
+				replyMission: REPLY_MISSION,
+				observations: !own,
+				...(own ? {} : { observationsMission: OBSERVATIONS_MISSION }),
+			});
 			this.banksReady.add(bank);
 		}
 		const who = this.speaker(e);
@@ -276,16 +325,19 @@ export class NightWork {
 			tags: [...base, SPEAKER_PERSON],
 			metadata: { event_id: e.event_id, speaker: who },
 		});
-		// Iyye's reply is stored verbatim, with no model call: searchable as what Iyye said, never rephrased into a fact.
+		// Iyye's reply: not verbatim, but the important things it told them, dated and attributed to Iyye
+		// (owner decision, 2026-10-06). Its own document and strategy; consolidation never uses these facts.
 		if (e.reply_text.trim()) {
+			const date = (e.answered_at ?? e.said_at).slice(0, 10);
+			const asked = e.user_text.replace(/\s+/g, " ").slice(0, 300);
 			await this.d.ltm.retain(bank, {
 				documentId: repliedDocId(e.event_id),
 				content: e.reply_text,
-				context: `Iyye's own reply to ${who}. Iyye's words, not evidence about ${who} or the world.`,
+				context: `Iyye's own reply to ${who} on ${date} (${e.channel === "web" ? "local web chat" : "Telegram"}). ${who} had written: ${JSON.stringify(asked)}. These are Iyye's words: not evidence about ${who}.`,
 				timestamp: e.answered_at,
 				tags: [...base, SPEAKER_IYYE],
 				metadata: { event_id: e.event_id, action_id: e.action_id ?? "", speaker: "Iyye" },
-				strategy: VERBATIM_STRATEGY,
+				strategy: REPLY_STRATEGY,
 			});
 		}
 	}

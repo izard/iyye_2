@@ -24,6 +24,21 @@ export interface LtmResult {
 
 /** The retain strategy that stores text verbatim, with no model call (Hindsight `chunks` mode). */
 export const VERBATIM_STRATEGY = "iyye-verbatim";
+/**
+ * The retain strategy for Iyye's own replies (2026-10-06, owner decision): not
+ * verbatim, but the important things Iyye told someone, extracted under their
+ * own mission, dated and attributed to Iyye.
+ */
+export const REPLY_STRATEGY = "iyye-reply";
+
+/**
+ * Consolidation never builds observations from Iyye's words or its probes'
+ * measurements, in any bank (2026-10-06: Iyye's reply "my abilities are
+ * limited to text" became the observation "the user's abilities are limited
+ * to text"). A Hindsight consolidation strategy matched by tag, with a cap of
+ * 0 observations: decided by tags the host set, not by a model.
+ */
+export const NO_OBSERVATIONS_FROM = ["speaker:iyye", "speaker:probe"];
 
 export interface HindsightOptions {
 	baseUrl: string;
@@ -103,21 +118,38 @@ export class HindsightClient {
 	}
 
 	/**
-	 * Create or update a bank with Iyye's settings, including the verbatim
-	 * strategy used for Iyye's own words. Idempotent (PUT, PATCH).
+	 * Create or update a bank with Iyye's settings (idempotent: PUT, PATCH):
+	 * the extraction mission for people's words, the verbatim strategy for
+	 * Iyye's own entries, the reply strategy with its own mission, no
+	 * observations from Iyye's words or its probes, and whether the bank builds
+	 * observations at all, under which mission.
 	 */
-	async ensureBank(bank: string, settings: { retainMission: string }): Promise<void> {
+	async ensureBank(
+		bank: string,
+		settings: { retainMission: string; replyMission: string; observations: boolean; observationsMission?: string },
+	): Promise<void> {
 		const path = `/v1/default/banks/${encodeURIComponent(bank)}`;
 		await this.call(
 			"PUT",
 			path,
-			{ retain_mission: settings.retainMission, enable_observations: true },
+			{ retain_mission: settings.retainMission, enable_observations: settings.observations },
 			this.o.writeTimeoutMs,
 		);
 		await this.call(
 			"PATCH",
 			`${path}/config`,
-			{ updates: { retain_strategies: { [VERBATIM_STRATEGY]: { retain_extraction_mode: "chunks" } } } },
+			{
+				updates: {
+					retain_strategies: {
+						[VERBATIM_STRATEGY]: { retain_extraction_mode: "chunks" },
+						[REPLY_STRATEGY]: { retain_mission: settings.replyMission },
+					},
+					consolidation_strategies: [
+						{ scopes: NO_OBSERVATIONS_FROM.map((t) => ({ tags: [t] })), max_observations_per_scope: 0 },
+					],
+					...(settings.observationsMission ? { observations_mission: settings.observationsMission } : {}),
+				},
+			},
 			this.o.writeTimeoutMs,
 		);
 	}

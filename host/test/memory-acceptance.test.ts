@@ -27,7 +27,7 @@ import { silentLogger } from "../src/log.ts";
 import { MemoryControl } from "../src/memory/control.ts";
 import type { GateResult } from "../src/memory/gate.ts";
 import { MemoryGateway } from "../src/memory/gateway.ts";
-import { VERBATIM_STRATEGY } from "../src/memory/hindsight.ts";
+import { REPLY_STRATEGY } from "../src/memory/hindsight.ts";
 import { NightWork } from "../src/memory/night.ts";
 import { memoryReport } from "../src/memory/report.ts";
 import { linkAccount, OWNER_CONTACT_ID } from "../src/state/contacts.ts";
@@ -206,8 +206,13 @@ describe("memory acceptance (HLD §15)", () => {
 		const replies = [...ltm.docs.values()].filter((d) => d.tags.includes("speaker:iyye"));
 		assert.equal(replies.length, 2);
 		assert.ok(
-			replies.every((d) => d.strategy === VERBATIM_STRATEGY),
-			"Iyye's echoes are not extracted: they cannot add a fact or raise its confidence",
+			replies.every((d) => d.strategy === REPLY_STRATEGY && d.tags.includes("speaker:iyye")),
+			"Iyye's replies are extracted only as what Iyye told them, tagged as Iyye's: never a fact about the person",
+		);
+		assert.deepEqual(
+			ltm.banks.get("iyye-owner")!.consolidation,
+			[{ scopes: [{ tags: ["speaker:iyye"] }, { tags: ["speaker:probe"] }], max_observations_per_scope: 0 }],
+			"and they never become observations, so an echo cannot raise a fact's weight",
 		);
 
 		const q = fromOwner(s.db, "When is my dentist appointment?");
@@ -381,8 +386,8 @@ describe("memory acceptance (HLD §15)", () => {
 		await night();
 		assert.deepEqual(
 			ltm.retains.slice(retainsBefore),
-			[`${ownerTurn.eventId}:said`, `${pending.eventId}:said`, "summary:10:summary"],
-			"only the owner's own words; Iyye's reply that may quote Alex was dropped",
+			[`${ownerTurn.eventId}:said`, `${pending.eventId}:said`],
+			"only the owner's own words; Iyye's reply that may quote Alex was dropped (and day summaries stay in short-term memory)",
 		);
 		assert.equal(ltm.docs.get(`iyye-owner/${ownerTurn.eventId}:said`)!.content, "What is Alex's passport number?");
 		assert.equal(s.conversations.sessionFile("owner"), null, "the owner's conversation starts afresh");
