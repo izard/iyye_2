@@ -105,10 +105,10 @@ describe("need signals", () => {
 		assert.deepEqual(sig, []);
 	});
 
-	test("raw need: independent pressures, in [0, 1], fading with age", () => {
-		const s = (weight: number, h: number): Signal => ({
+	test("raw need: one kind counts about once; different kinds add up as independent pressures; old signals fade", () => {
+		const s = (weight: number, h: number, kind = "k"): Signal => ({
 			motivation: "curiosity",
-			kind: "k",
+			kind,
 			cluster: "c",
 			evidence: ["x"],
 			weight,
@@ -117,9 +117,45 @@ describe("need signals", () => {
 		});
 		assert.equal(rawNeed([], NOW), 0);
 		assert.equal(rawNeed([s(0.6, 0)], NOW), 0.6);
-		assert.ok(Math.abs(rawNeed([s(0.6, 0), s(0.5, 0)], NOW) - 0.8) < 1e-9);
-		assert.ok(rawNeed([s(0.9, 0), s(0.9, 0), s(0.9, 0), s(0.9, 0)], NOW) <= 1);
+		// Two different reasons: 1 − 0.4·0.5.
+		assert.ok(Math.abs(rawNeed([s(0.6, 0, "a"), s(0.5, 0, "b")], NOW) - 0.8) < 1e-9);
+		// Five of one kind (the 2026-10-06 "relation unknown" gaps): about one reason, at most +0.1.
+		const five = rawNeed(
+			[0, 0, 0, 0, 0].map(() => s(0.3, 0, "self_missing")),
+			NOW,
+		);
+		assert.ok(Math.abs(five - 0.4) < 1e-9, String(five));
+		assert.ok(rawNeed([s(0.9, 0, "a"), s(0.9, 0, "b"), s(0.9, 0, "c")], NOW) <= 1);
 		assert.ok(strength(s(0.8, 36), NOW) < 0.8 * 0.4, "a day and a half old: well under half");
+	});
+
+	test("the M0 tuning: constant gaps stay under the threshold, a contradiction does not; an answered person is not waiting", () => {
+		const db = openDb(":memory:");
+		seed(db);
+		const gaps: Gap[] = [
+			{ facet: "place", field: "stated", kind: "missing", why: "no place" },
+			...["a", "b", "c", "d"].map((x) => ({
+				facet: "social" as const,
+				field: `relation:${x}`,
+				kind: "missing" as const,
+				why: x,
+			})),
+		];
+		const curiosity = (g: Gap[]) =>
+			rawNeed(
+				collectSignals({ db, now: NOW, ...sources(g) }).filter((x) => x.motivation === "curiosity"),
+				NOW,
+			);
+		assert.ok(curiosity(gaps) < 0.6, `constant gaps alone: ${curiosity(gaps)}`);
+		const contradicted: Gap = { facet: "place", field: "stated", kind: "contradicted", why: "Berlin vs Munich" };
+		assert.ok(curiosity([...gaps, contradicted]) >= 0.8, "a contradiction is a strong reason");
+		// Jacob's failed message, then a later one answered: he is not waiting any more.
+		const social = () => collectSignals({ db, now: NOW, ...sources() }).filter((x) => x.kind === "person_unanswered");
+		assert.equal(social().length, 1);
+		db.prepare(
+			"INSERT INTO events (id, dedup_key, channel, principal_contact_id, scope, received_at, payload_json, status) VALUES ('e2', 'e2', 'telegram', 'c1', 'contact:c1', ?, '{}', 'answered')",
+		).run(iso(2));
+		assert.equal(social().length, 0);
 	});
 });
 

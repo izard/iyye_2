@@ -157,7 +157,9 @@ export function collectSignals(s: SignalSources): Signal[] {
 			kind: `self_${g.kind}`,
 			cluster: `self:${g.facet}:${g.field}`,
 			evidence: [`self_facts:${g.facet}:${g.field}`],
-			weight: g.kind === "contradicted" ? 0.8 : g.kind === "missing" ? 0.6 : 0.4,
+			// M0 tuning (2026-10-06, 24 h of samples): a missing statement only the owner can give is a mild
+			// reason (M1 asks, a few a day); a contradiction is a strong one; a failing probe in between.
+			weight: g.kind === "contradicted" ? 0.8 : g.kind === "missing" ? (g.facet === "social" ? 0.3 : 0.4) : 0.4,
 			text: g.why,
 		});
 	for (const o of db
@@ -208,7 +210,10 @@ export function collectSignals(s: SignalSources): Signal[] {
 	// ---------------------------------------------------------------- social
 	for (const j of db
 		.prepare(
+			// Not waiting any more once a later message in that conversation was answered (M0 tuning, 2026-10-06:
+			// failures during a restart kept social need near 0.9 for two days after the owner was answered).
 			`SELECT j.id, j.scope, j.settled_at FROM jobs j WHERE j.status = 'failed' AND j.settled_at >= ? AND j.scope NOT LIKE 'iyye%'
+			 AND NOT EXISTS (SELECT 1 FROM events e WHERE e.scope = j.scope AND e.status = 'answered' AND e.received_at > j.created_at)
 			 ORDER BY j.settled_at`,
 		)
 		.all(ago(48)) as { id: string; scope: string; settled_at: string }[])
@@ -253,10 +258,20 @@ export function strength(sig: Signal, now: Date): number {
 }
 
 /**
- * Raw need of one motivation: the signals combined as independent pressures
- * (1 − Π(1 − strength)), so it stays in [0, 1], one strong signal is
- * enough, and many weak ones add up without exceeding 1.
+ * Raw need of one motivation, in [0, 1]. Signals of one kind count about
+ * once: the strongest, plus 10% for each further one, at most +0.1 above
+ * it (M0 tuning, 2026-10-06: five "relation unknown" gaps combined as
+ * independent pressures pegged curiosity at 0.97 for a whole day). Kinds
+ * then combine as independent pressures, 1 − Π(1 − kind), so one strong
+ * reason is enough and different reasons add up.
  */
 export function rawNeed(signals: readonly Signal[], now: Date): number {
-	return 1 - signals.reduce((p, sig) => p * (1 - strength(sig, now)), 1);
+	const byKind = new Map<string, number[]>();
+	for (const sig of signals) byKind.set(sig.kind, [...(byKind.get(sig.kind) ?? []), strength(sig, now)]);
+	let rest = 1;
+	for (const strengths of byKind.values()) {
+		const [top, ...more] = strengths.sort((a, b) => b - a);
+		rest *= 1 - Math.min(1, top! + Math.min(0.1, 0.1 * top! * more.length));
+	}
+	return 1 - rest;
 }
