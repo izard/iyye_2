@@ -1,6 +1,6 @@
 # Iyye 2.0.011 — Fact Ledger: Structured Facts with Probabilities (Plan)
 
-- Status (2026-10-06): **draft for the owner; nothing built.** Placed after plan 0.010 M1 and before Stage 3 (0.009): character learning and curiosity both read its beliefs.
+- Status (2026-10-06): **accepted (owner decisions in §7); nothing built.** Placed after plan 0.010 M1 and before Stage 3 (0.009): character learning and curiosity both read its beliefs.
 - Scope: during the day, extract structured facts (subject, predicate, object, details, timing, provenance, probability) from people's turns, Iyye's replies and Iyye's own findings; use them in the day's recall; at night, merge them into long-term memory with a Bayesian update against related stored facts, aware of time.
 - Design source: [`iyye_2_0_hld.md`](iyye_2_0_hld.md) §3.1 (SQLite is control state, not a second vector store), §5.2 (consequential uncertainty), §6.1 (day and night), §6.2–6.3 (scoped gateway), §8.3 (dreaming as review), §9.4 (typed decisions), §11.2 (damping, author credit), §15 #1, #2, #12, #15, #18.
 - Builds on: background jobs (0.007 S1), the night (0.002), the scoped memory gateway and recall rewrite (2026-10-06 follow-ups), reply extraction strategy, Kev roles (0.003), the self model's relations (0.010 M0b), `/forget` and tombstones.
@@ -54,7 +54,7 @@ The **fact key** is `normalize(subject) | normalize(predicate)`: two facts with 
 
 ### 3.3 Probability: rules first, calibration later
 
-- **Prior by source and modality** (owner-tunable table, later calibrated by Kev from outcomes):
+- **Prior by source and modality** (owner-tunable table, later calibrated by Kev from outcomes). The same for every contact: a child's statements about themselves start like an adult's (owner decision 3).
 
   | Source | Prior |
   | --- | --- |
@@ -83,18 +83,19 @@ For each STM fact, oldest first, under the memory gate:
 - **Recall** shows each fact with its belief, source and age: `[likely 0.85 · Julia said · 3 days ago] Julia plays the violin`. Beliefs below 0.3 are not offered in turns (kept, and visible in `/facts`).
 - **Curiosity** (0.010): an *important* belief (about a person the owner cares about, used in recalls, or blocking a plan) with `p` in [0.3, 0.7] becomes a curiosity signal; it is settled only by new independent evidence (a person's statement, a measurement), never by Iyye's own reasoning.
 - **Character** (0.009) reads beliefs about stated preferences ("the owner prefers short answers", p 0.9) as evidence for style.
-- **Owner view:** `/facts <query>` (beliefs with sources, history and validity), `/facts correct <id> <text>` and `/facts wrong <id>` (owner evidence: the strongest source, and a label for Kev).
+- **Owner view:** `/facts <query>` (beliefs with sources, history and validity), `/facts correct <id> <text>` (owner evidence, the strongest source, and a label for Kev) and `/facts wrong <id>`, which **deletes the fact outright** (owner decision 2): the belief, its history and its text in Hindsight go, and a suppression on that fact key and object keeps the same evidence from re-creating it at the next merge. New, independent evidence can still raise it again.
 
-### 3.6 Forgetting and privacy
+### 3.6 One world model, scoped disclosure (owner decision 1)
 
-- Every fact and belief carries its evidence ids: `/forget <person>` deletes their facts, removes their evidence from beliefs (recomputing `p` from what remains), and deletes beliefs left with none.
-- Scope as now: a contact's facts live in their bank and STM scope; the owner reads all; contacts read only their own; `iyye-self` facts are owner-only.
+- **Beliefs are common:** every source counts toward one Iyye-observable world model. Jacob saying "my father works at Nvidia" corroborates the owner's own statement, and a contact's statement about another person raises or lowers the same belief the owner's statements do (with the "about someone else" prior, §3.3).
+- **What each reader may see stays scoped, by evidence:** the owner sees every belief and all its evidence. In a contact's turn a belief is offered only when that contact is one of its sources, or its evidence is not tied to any person (a probe measurement, a cited web result), and only that contact's own evidence is quoted. A contact never learns what another person told Iyye, even when it shaped a belief they can see. `iyye-self` facts stay owner-only.
+- **Forgetting:** every fact and belief carries its evidence ids. `/forget <person>` deletes their facts, removes their evidence from every belief (recomputing `p` from what remains, so their influence on the common model goes too), and deletes beliefs left with none.
 
 ## 4. Milestones
 
 - **F0 — Spike:** on the M8 days' real turns (English and Russian), measure `gemma-4-E4B` extraction (precision and recall against a hand-labelled sample, grounding-check rejects, latency per turn) and the merge classification on pairs from the live banks; decide between the background model and the memory model for extraction.
 - **F1 — Day-time extraction into `stm_facts`,** the grounding check and filters, priors; recall offers today's facts. Hindsight's nightly path unchanged.
-- **F2 — Beliefs and the nightly merge** (`beliefs` table, log-odds update with independence, time-aware `changes`, deterministic classification for exact keys); structured facts stored verbatim in Hindsight; the old turn extraction kept in parallel for one week and compared (`/facts compare`).
+- **F2 — Beliefs and the nightly merge** (`beliefs` table, log-odds update with independence, time-aware `changes`, deterministic classification for exact keys; one common model, disclosure scoped by evidence); structured facts stored verbatim in Hindsight; the old turn extraction kept in parallel for one week and compared (`/facts compare`). Nights run noticeably longer that week (owner decision 4).
 - **F3 — Kev `fact_relation` role** (shadow, then acting by owner decision) for non-exact relations; `/facts correct|wrong` labels it.
 - **F4 — Use:** belief-aware recall formatting and threshold, curiosity signals for important uncertain beliefs (0.010 M2), `/facts`.
 - **F5 — Switch-over and evaluation:** retire Hindsight's own extraction for turns once F2's comparison holds; multi-day evaluation.
@@ -123,9 +124,9 @@ Exit gate (HLD §15):
 | `IYYE2_FACTS_MIN_P` | `0.3` | beliefs below this are not offered in turns |
 | `IYYE2_FACTS_MAX_STEP` | `2.0` | the largest log-odds change one night may make to a belief |
 
-## 7. Open questions for the owner
+## 7. Owner decisions (2026-10-06)
 
-1. Should contacts' facts about *other* people (Jacob about his father) be stored in the contact's bank only (as now), or also raise beliefs the owner sees?
-2. May the owner's correction (`/facts wrong`) delete a fact outright, or only drop its belief to near zero and keep the history?
-3. Is the prior table right for your family, for example should Jacob's statements about himself start lower than an adult's?
-4. During F2's week of running both paths, may the night take noticeably longer?
+1. **Facts any person states count toward one common, Iyye-observable world model** (§3.6); what a reader is shown stays scoped by evidence, so no contact learns what another person told Iyye.
+2. **`/facts wrong` deletes a fact outright**, with a suppression so the same evidence does not re-create it.
+3. **No separate priors per person:** a child's statements about themselves start like an adult's.
+4. **Longer nights during F2's comparison week are fine.**
