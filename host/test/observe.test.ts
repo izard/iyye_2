@@ -405,8 +405,10 @@ describe("findings and day summaries in memory", () => {
 		);
 		assert.match(doc.context, /Iyye's own investigation/);
 		const gw = new MemoryGateway({ db, ltm: ltm.client(), log: silentLogger, bankCacheMs: 0 });
-		const perTurn = await gw.recall({ scope: "owner", principal: "owner" }, "draft unfinished TODO");
-		assert.deepEqual(perTurn.items, [], "not in the per-turn evidence");
+		const perTurn = await gw.recall({ scope: "owner", principal: "owner" }, "draft unfinished TODO", {
+			includeIyye: false,
+		});
+		assert.deepEqual(perTurn.items, [], "never a measurement: left out with the people's evidence");
 		const search = await gw.recall({ scope: "owner", principal: "owner" }, "draft unfinished TODO", {
 			includeIyye: true,
 		});

@@ -367,6 +367,17 @@ As built (owner decision: drop the verbatim replies, keep the important facts in
 - **Only durable entries of Iyye's own:** self-model changes, repository findings and investigation answers are transferred; machine findings (passing states) and day summaries stay in that day's short-term memory only.
 - **Cleanup:** short-term memory keeps every past conversation's text, so the cleanest repair is a rebuild under the new rules: with the new host running and Iyye awake, `node scripts/memory-clear.ts --restage` deletes the banks and queues every past conversation; the next night (or `/sleep`) transfers them again. (No surgical prune: observations cannot be removed selectively, and Hindsight requeues facts for consolidation only when all of a bank's observations are cleared.)
 
+### Follow-up (2026-10-06): recall that finds what matters
+
+The owner noticed Telegram turns missing relevant long-term memory. Measured against the live banks: Jacob's bank held "Jacob is building Innsbruck airport (Roblox)", but "What does Jacob build in Roblox?" never got it, because the gateway merged banks in a fixed order (the owner's 5 weakest-or-not, 2 from `iyye-self`, 2 per contact in creation order, the owner's linked accounts first) and cut at 10. Separately, the reranker cannot know who "we" or "I" is: "Where do we live?" scored 0.01 against "The user resides in …", Jacob's "what was I building?" 0.0004 against his airport.
+
+As built (`memory/gateway.ts`):
+- **The query is rewritten for the reader** (`memoryQuery`): first-person words become "the user" (owner) or the contact's name, in English and Russian; a relation the owner stated (`/self relation Jacob my son`) adds the name when the question uses it. Measured: 0.01 → 0.99 and 0.0004 → 0.99.
+- **Banks merge by relevance** (Hindsight's cross-encoder reranker score, now read as `LtmResult.score`): the reader's own bank gives its best 5; the owner's linked accounts their best 2 or strong matches; the bank of a person the question names its best 3 or strong matches; any other bank (other contacts, `iyye-self`) only strong matches (≥ 0.3). One list by score, duplicates once, 10 at most.
+- **One failing bank no longer drops the others** (`allSettled`; logged).
+- **What Iyye told someone is included**, labelled "your own earlier words, not evidence" (owner decision of the same day: those facts are kept for continuity), never as the person's statement; `includeIyye: false` leaves them out.
+- Not done: recall under device load was not measured (each bank call has a 3 s limit; one slow bank now costs only its own items).
+
 ## 7. Configuration (planned)
 
 | Name | Default | Meaning |

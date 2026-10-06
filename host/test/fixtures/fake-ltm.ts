@@ -43,13 +43,19 @@ export class FakeLtm {
 			observationsMission?: string | null;
 		}
 	>();
-	readonly recallResults = new Map<string, { text: string; occurred_start?: string; tags?: string[] }[]>();
+	/** Scripted recall answers per bank; `score` is sent as Hindsight's reranker score. */
+	readonly recallResults = new Map<
+		string,
+		{ text: string; occurred_start?: string; tags?: string[]; score?: number }[]
+	>();
 	readonly recalls: { bank: string; query: string }[] = [];
 	readonly docs = new Map<string, FakeDoc>();
 	readonly retains: string[] = [];
 	readonly consolidations: string[] = [];
 	unitsFor: (content: string) => number = (c) => (/2\+2|thanks/i.test(c) ? 0 : 1);
 	failRetain = false;
+	/** This bank's recalls answer HTTP 500 (one bank failing among several). */
+	failRecallFor: string | null = null;
 	down = false;
 	port = 0;
 	private server: Server | null = null;
@@ -79,6 +85,7 @@ export class FakeLtm {
 		this.consolidations.length = 0;
 		this.unitsFor = (c) => (/2\+2|thanks/i.test(c) ? 0 : 1);
 		this.failRetain = false;
+		this.failRecallFor = null;
 		this.down = false;
 	}
 
@@ -150,6 +157,7 @@ export class FakeLtm {
 		}
 		if (method === "POST" && rest === "memories/recall") {
 			this.recalls.push({ bank, query: String(data.query) });
+			if (this.failRecallFor === bank) return json(500, { detail: "scripted recall failure" });
 			if (!this.banks.has(bank) && !this.recallResults.has(bank)) return json(404, { detail: "bank not found" });
 			// tags + "any": results carrying any of the tags, plus untagged ones (Hindsight's semantics).
 			const want = data.tags as string[] | undefined;
@@ -157,11 +165,22 @@ export class FakeLtm {
 			const q = words(String(data.query));
 			const stored = [...this.docs.values()]
 				.filter((d) => d.bank === bank && d.units > 0 && [...words(d.content)].some((w) => q.has(w)))
-				.map((d) => ({ text: d.content, occurred_start: d.timestamp, tags: d.tags }));
+				.map((d) => ({
+					text: d.content,
+					occurred_start: d.timestamp,
+					tags: d.tags,
+					score: undefined as number | undefined,
+				}));
 			const results = (this.recallResults.get(bank) ?? stored).filter(
 				(r) => !want || !r.tags?.length || r.tags.some((t) => want.includes(t)),
 			);
-			return json(200, { results: results.map((r, i) => ({ id: `f${i}`, ...r })) });
+			return json(200, {
+				results: results.map(({ score, ...r }, i) => ({
+					id: `f${i}`,
+					...r,
+					...(score === undefined ? {} : { scores: { reranker: score, final: score } }),
+				})),
+			});
 		}
 		if (method === "GET" && rest === "memories/list") {
 			// One unit per stored document, newest first, as Hindsight's table view lists them.

@@ -186,7 +186,7 @@ describe("memory acceptance (HLD §15)", () => {
 		assert.doesNotMatch(req, /\[today[^\]]*\] Owner said: I prefer green tea/, "short-term memory is today only");
 	});
 
-	test("#2 correction: both statements stay with their dates; Iyye's repetitions are stored verbatim and never offered as evidence", async () => {
+	test("#2 correction: both statements stay with their dates; Iyye's repetitions are never offered as the person's words or as evidence", async () => {
 		sb = sandbox();
 		s = await startStack(sb, {}, { memory: { ltm: ltm.client(), bankCacheMs: 0 } });
 		const first = fromOwner(s.db, "My dentist appointment is on Monday");
@@ -221,7 +221,10 @@ describe("memory acceptance (HLD §15)", () => {
 
 		assert.match(block, /stated by the person\] Correction: the dentist appointment moved to Thursday/);
 		assert.match(block, /stated by the person\] My dentist appointment is on Monday/);
-		assert.doesNotMatch(block, /echo: My dentist/, "Iyye's own words are not in the evidence");
+		// Iyye's own words may be offered as what it said, never as the person's statement or as evidence.
+		assert.doesNotMatch(block, /stated by the person\] echo:/, "Iyye's own words are never shown as the person's");
+		for (const line of block.split("\n").filter((l) => l.includes("echo:")))
+			assert.match(line, /your own earlier words, not evidence\]/);
 	});
 
 	test("#3 isolation: Julia reaches none of Alex's memory, by recall, memory_search or a forged name", async () => {
@@ -292,9 +295,10 @@ describe("memory acceptance (HLD §15)", () => {
 
 		// The default 60 s bank cache: it still lists the bank after the deletion.
 		const ownerGateway = new MemoryGateway({ db: s.db, ltm: ltm.client(), log: silentLogger });
-		assert.equal(
-			(await ownerGateway.recall({ scope: "owner", principal: "owner" }, "passport number")).items.length,
-			1,
+		assert.ok(
+			(await ownerGateway.recall({ scope: "owner", principal: "owner" }, "passport number")).items.some(
+				(i) => i.said === "person" && i.text.includes("X1234567"),
+			),
 		);
 		// The owner's conversation today quoted Alex: Iyye's reply must not reach the owner's bank tonight.
 		setKv(s.db, "decisions.reply_review.since", "2000-01-01T00:00:00.000Z", new Date().toISOString());

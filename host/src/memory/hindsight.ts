@@ -20,6 +20,12 @@ export interface LtmResult {
 	document_id: string | null;
 	/** The item's tags, set by the host at retain (e.g. `speaker:person`): provenance by construction. */
 	tags: string[];
+	/**
+	 * Relevance to the query, comparable across banks (Hindsight's cross-encoder
+	 * reranker score, 0–1; measured 2026-10-06: ~0.99 for a match, ~0.00001 for
+	 * an unrelated bank's best). Null when the server sent none.
+	 */
+	score: number | null;
 }
 
 /** The retain strategy that stores text verbatim, with no model call (Hindsight `chunks` mode). */
@@ -105,8 +111,14 @@ export class HindsightClient {
 				...(opts.excludeIyye ? { tags: [SPEAKER_PERSON, SPEAKER_PROBE], tags_match: "any" } : {}),
 			},
 			this.o.recallTimeoutMs,
-		)) as { results?: Partial<LtmResult>[] };
+		)) as { results?: (Partial<LtmResult> & { scores?: { reranker?: number; final?: number } })[] };
 		return (body.results ?? []).map((r) => ({
+			score:
+				typeof r.scores?.reranker === "number"
+					? r.scores.reranker
+					: typeof r.scores?.final === "number"
+						? r.scores.final
+						: null,
 			id: String(r.id ?? ""),
 			text: String(r.text ?? ""),
 			type: r.type ?? null,

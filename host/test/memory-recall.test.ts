@@ -13,7 +13,7 @@ import { after, afterEach, before, describe, test } from "node:test";
 import type { TelegramMessage } from "../src/channels/types.ts";
 import { admitOwnerWebMessage, admitTelegramUpdate } from "../src/kernel/admission.ts";
 import { silentLogger } from "../src/log.ts";
-import { formatRecalled, MemoryGateway } from "../src/memory/gateway.ts";
+import { formatRecalled, MemoryGateway, memoryQuery } from "../src/memory/gateway.ts";
 import type { Db } from "../src/state/db.ts";
 import { openDb } from "../src/state/db.ts";
 import { getEvent } from "../src/state/events.ts";
@@ -240,14 +240,15 @@ test("long-term results are labelled by their speaker tag; Iyye's words are neve
 		const db = openDb(":memory:");
 		const gateway = new MemoryGateway({ db, ltm: ltm.client(), log: silentLogger });
 		const owner = { scope: "owner", principal: "owner" as const };
-		// The per-turn block: the people's words and untagged legacy memories, never Iyye's own.
-		const turn = await gateway.recall(owner, "family Jacob");
+		// Without Iyye's words: the people's words and untagged legacy memories only.
+		const turn = await gateway.recall(owner, "family Jacob", { includeIyye: false });
 		assert.deepEqual(
 			turn.items.map((i) => i.said),
 			["person", "unknown"],
 		);
-		// memory_search sees everything, each labelled by its speaker tag.
-		const r = await gateway.recall(owner, "family Jacob", { includeIyye: true });
+		// The per-turn block and memory_search see everything (2026-10-06: what Iyye told someone is kept as dated
+		// facts), each labelled by its speaker tag: Iyye's words are never shown as the person's.
+		const r = await gateway.recall(owner, "family Jacob");
 		assert.deepEqual(
 			r.items.map((i) => [i.said, i.text.slice(0, 20)]),
 			[
@@ -304,4 +305,73 @@ test("leaving STM: a confirmed transfer leaves recall, and so does a dropped one
 	assert.deepEqual(searchStm(db, ["owner"], "Julia"), [], "a dropped entry is not short-term memory");
 	assert.deepEqual(searchStm(db, ["contact:x"], "Julia"), [], "other scopes never see it");
 	db.close();
+});
+
+test("the memory query: first person becomes the reader, and a stated relation adds the name (2026-10-06)", () => {
+	assert.equal(memoryQuery("Where do we live?", "the user"), "Where do the user live?");
+	assert.equal(memoryQuery("what was I building?", "Jacob"), "what was Jacob building?");
+	assert.equal(memoryQuery("Which is our internet provider?", "the user"), "Which is the user's internet provider?");
+	assert.equal(memoryQuery("Где мы живём?", "the user"), "Где the user живём?");
+	assert.equal(memoryQuery("Is it fine?", "the user"), "Is it fine?", "no first person, nothing changes");
+	assert.equal(memoryQuery("Irish music", "the user"), "Irish music", "only whole words");
+	assert.equal(
+		memoryQuery("How is my son doing in sports?", "the user", [{ name: "Jacob", relation: "my son" }]),
+		"How is the user's son doing in sports? (Jacob)",
+	);
+	assert.equal(
+		memoryQuery("How is my wife?", "the user", [{ name: "Jacob", relation: "my son" }]),
+		"How is the user's wife?",
+	);
+});
+
+test("banks merge by relevance: own banks give their best, a named person's bank its best few, others only strong matches; one failing bank drops nothing else", async () => {
+	const ltm = new FakeLtm();
+	await ltm.start();
+	try {
+		const db = openDb(":memory:");
+		db.prepare(
+			"INSERT INTO contacts (id, display_name, kind, created_at) VALUES ('jacob', 'Jacob', 'contact', 't'), ('nina', 'Nina', 'contact', 't')",
+		).run();
+		const person = (scope: string) => [`scope:${scope}`, "speaker:person"];
+		ltm.recallResults.set("iyye-owner", [
+			{ text: "The user lives near Munich", tags: person("owner"), score: 0.01 },
+			{ text: "The user works at Nvidia", tags: person("owner"), score: 0.002 },
+		]);
+		ltm.recallResults.set("iyye-contact-jacob", [
+			{ text: "Jacob builds Innsbruck airport in Roblox", tags: person("contact:jacob"), score: 0.0004 },
+			{ text: "Jacob wants a cabin crew simulator", tags: person("contact:jacob"), score: 0.0001 },
+		]);
+		ltm.recallResults.set("iyye-contact-nina", [
+			{ text: "Nina likes jazz", tags: person("contact:nina"), score: 0.00001 },
+			{ text: "Nina is building a treehouse", tags: person("contact:nina"), score: 0.9 },
+		]);
+		ltm.recallResults.set("iyye-self", [
+			{ text: "Iyye runs on a MacBook Pro", tags: ["scope:iyye", "speaker:probe"], score: 0.00002 },
+		]);
+		const gw = new MemoryGateway({ db, ltm: ltm.client(), log: silentLogger, bankCacheMs: 0 });
+		const owner = { scope: "owner", principal: "owner" as const };
+		const texts = async (q: string) => (await gw.recall(owner, q)).items.map((i) => i.text);
+
+		// Not about Jacob: only the owner's own items, and Nina's strong match; the self model's weak line never.
+		assert.deepEqual(await texts("what is being built?"), [
+			"Nina is building a treehouse",
+			"The user lives near Munich",
+			"The user works at Nvidia",
+		]);
+		// Naming Jacob brings his bank's best items, however the reranker scored them.
+		assert.ok((await texts("What does Jacob build?")).includes("Jacob builds Innsbruck airport in Roblox"));
+		// The query sent is rewritten for the reader.
+		await gw.recall(owner, "Where do we live?");
+		assert.ok(ltm.recalls.some((r) => r.bank === "iyye-owner" && r.query === "Where do the user live?"));
+
+		// A bank that fails does not take the others with it.
+		ltm.recallResults.delete("iyye-contact-nina");
+		ltm.failRecallFor = "iyye-contact-jacob";
+		const r = await gw.recall(owner, "What does Jacob build?");
+		assert.equal(r.ltm, true);
+		assert.ok(r.items.some((i) => i.text === "The user lives near Munich"));
+		db.close();
+	} finally {
+		await ltm.stop();
+	}
 });
