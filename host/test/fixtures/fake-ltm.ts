@@ -146,6 +146,33 @@ export class FakeLtm {
 			);
 			return json(200, { results: results.map((r, i) => ({ id: `f${i}`, ...r })) });
 		}
+		if (method === "GET" && rest === "memories/list") {
+			// One unit per stored document, newest first, as Hindsight's table view lists them.
+			const q = new URLSearchParams(url.split("?")[1] ?? "");
+			const all = [...this.docs.values()]
+				.filter((d) => d.bank === bank)
+				.filter((d) => !q.get("type") || q.get("type") === "world")
+				.filter((d) => !q.get("q") || d.content.toLowerCase().includes(q.get("q")!.toLowerCase()))
+				.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+			const offset = Number(q.get("offset") ?? 0);
+			const limit = Number(q.get("limit") ?? 100);
+			return json(200, {
+				items: all.slice(offset, offset + limit).map((d) => ({
+					id: d.id,
+					text: d.content,
+					context: d.context,
+					date: d.timestamp,
+					fact_type: "world",
+					entities: "",
+					state: "valid",
+					tags: d.tags,
+					metadata: d.metadata,
+				})),
+				total: all.length,
+				limit,
+				offset,
+			});
+		}
 		if (method === "POST" && rest === "memories") {
 			if (this.failRetain) return json(500, { detail: "Fact extraction failed: scripted" });
 			if (!this.banks.has(bank)) return json(404, { detail: "bank not found" });

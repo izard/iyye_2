@@ -42,6 +42,20 @@ export class HindsightError extends Error {
 	}
 }
 
+/** A stored memory as Hindsight lists it (only the fields Iyye reads). */
+export interface MemoryUnit {
+	id: string;
+	text: string;
+	context?: string | null;
+	date?: string | null;
+	fact_type?: string;
+	entities?: string | null;
+	state?: string;
+	tags?: string[];
+	metadata?: Record<string, unknown> | null;
+	occurred_start?: string | null;
+}
+
 export class HindsightClient {
 	private readonly o: Required<HindsightOptions>;
 
@@ -158,6 +172,27 @@ export class HindsightClient {
 	}
 
 	/** Delete a bank with everything in it: documents, facts, observations, entities, settings. */
+	/**
+	 * One page of a bank's stored memories, newest first (debugging,
+	 * `scripts/dump-ltm.ts`). `type` is world, experience or observation; `q`
+	 * a full-text filter. Makes no model call.
+	 */
+	async listMemories(
+		bank: string,
+		opts: { type?: string; q?: string; limit?: number; offset?: number } = {},
+	): Promise<{ items: MemoryUnit[]; total: number }> {
+		const params = new URLSearchParams({ limit: String(opts.limit ?? 100), offset: String(opts.offset ?? 0) });
+		if (opts.type) params.set("type", opts.type);
+		if (opts.q) params.set("q", opts.q);
+		const body = (await this.call(
+			"GET",
+			`/v1/default/banks/${encodeURIComponent(bank)}/memories/list?${params}`,
+			undefined,
+			this.o.recallTimeoutMs * 10,
+		)) as { items?: MemoryUnit[]; total?: number };
+		return { items: body.items ?? [], total: body.total ?? 0 };
+	}
+
 	async deleteBank(bank: string): Promise<void> {
 		await this.call("DELETE", `/v1/default/banks/${encodeURIComponent(bank)}`, undefined, this.o.writeTimeoutMs);
 	}
