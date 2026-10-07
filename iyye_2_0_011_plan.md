@@ -88,7 +88,13 @@ For each STM fact, oldest first, under the memory gate:
 ### 3.6 One world model, scoped disclosure (owner decision 1)
 
 - **Beliefs are common:** every source counts toward one Iyye-observable world model. Jacob saying "my father works at Nvidia" corroborates the owner's own statement, and a contact's statement about another person raises or lowers the same belief the owner's statements do (with the "about someone else" prior, §3.3).
-- **What each reader may see stays scoped, by evidence:** the owner sees every belief and all its evidence. In a contact's turn a belief is offered only when that contact is one of its sources, or its evidence is not tied to any person (a probe measurement, a cited web result), and only that contact's own evidence is quoted. A contact never learns what another person told Iyye, even when it shaped a belief they can see. `iyye-self` facts stay owner-only.
+- **What each reader may see (owner decision 1, revised 2026-10-07):** what Iyye has internalised is Iyye's knowledge, and it may share it, as facts with their provenance, never as anyone's words.
+  - **The owner** sees every belief and all its evidence.
+  - **A trusted contact** is offered a belief when it is not private (below), with its provenance ("Julia said, 3 days ago"). Quotes, conversations and stored turns of other people never cross; only the belief sentence and who it came from.
+  - **An untrusted contact** is offered only beliefs it is a source of, and beliefs whose evidence is tied to no person (a probe measurement, a cited web result).
+  - **Private facts never reach another contact**, trusted or not, but are used with the person who stated them and with the owner. The host marks a fact private by rule, never by a model's judgement: the speaker asked for it ("don't tell anyone", "between us", «никому не говори», «между нами»); a credential (password, PIN, account or card number, an ID document's number); health; money; an address. A belief is private when any of its evidence is. The owner overrides either way with `/facts private <id>` and `/facts share <id>`.
+  - `iyye-self` facts stay owner-only.
+  - Exit-gate tests in F4: a private fact never reaches another contact; an untrusted contact gets nothing another person said; after `/forget` nothing they said is offered to anyone.
 - **Forgetting:** every fact and belief carries its evidence ids. `/forget <person>` deletes their facts, removes their evidence from every belief (recomputing `p` from what remains, so their influence on the common model goes too), and deletes beliefs left with none.
 
 ## 4. Milestones
@@ -97,7 +103,7 @@ For each STM fact, oldest first, under the memory gate:
 - **F1 — Day-time extraction into `stm_facts`,** the grounding check and filters, priors; recall offers today's facts. Hindsight's nightly path unchanged.
 - **F2 — Beliefs and the nightly merge** (`beliefs` table, log-odds update with independence, time-aware `changes`, deterministic classification for exact keys; one common model, disclosure scoped by evidence); structured facts stored verbatim in Hindsight; the old turn extraction kept in parallel for one week and compared (`/facts compare`). Nights run noticeably longer that week (owner decision 4).
 - **F3 — Kev `fact_relation` role** (shadow, then acting by owner decision) for non-exact relations; `/facts correct|wrong` labels it.
-- **F4 — Use:** belief-aware recall formatting and threshold, curiosity signals for important uncertain beliefs (0.010 M2), `/facts`.
+- **F4 — Use:** belief-aware recall formatting and threshold; the disclosure rule of §3.6 (trusted contacts get shareable beliefs with provenance, private facts by rule, `/facts private|share`); curiosity signals for important uncertain beliefs (0.010 M2).
 - **F5 — Switch-over and evaluation:** retire Hindsight's own extraction for turns once F2's comparison holds; multi-day evaluation.
 
 *(F0–F3 as built, 2026-10-07)*
@@ -135,7 +141,7 @@ Exit gate (HLD §15):
 
 ## 7. Owner decisions (2026-10-06)
 
-1. **Facts any person states count toward one common, Iyye-observable world model** (§3.6); what a reader is shown stays scoped by evidence, so no contact learns what another person told Iyye.
+1. **Facts any person states count toward one common, Iyye-observable world model** (§3.6). *Revised 2026-10-07:* what Iyye has internalised it may share with **trusted contacts only**, as facts with their provenance (never anyone's words), except **private** facts (the speaker asked; credentials; health; money; addresses), which reach only their speaker and the owner. Untrusted contacts get only what they said themselves and facts tied to no person. (Before: no contact learned what another person told Iyye.)
 2. **`/facts wrong` deletes a fact outright**, with a suppression so the same evidence does not re-create it.
 3. **No separate priors per person:** a child's statements about themselves start like an adult's.
 4. **Longer nights during F2's comparison week are fine.**
