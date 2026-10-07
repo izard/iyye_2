@@ -12,6 +12,7 @@
  */
 
 import { CLAIM_QUESTION, commitmentsOfReply, REPLY_REVIEW } from "../decisions/reply-review.ts";
+import { factSentence } from "../facts/extract.ts";
 import type { Gap } from "../self/model.ts";
 import type { Db } from "../state/db.ts";
 import { getKv } from "../state/kv.ts";
@@ -195,6 +196,42 @@ export function collectSignals(s: SignalSources): Signal[] {
 			weight: 0.4,
 			observedAt: o.created_at,
 			text: o.question.slice(0, 100),
+		});
+
+	// Important beliefs Iyye is unsure of (plan 0.011 F4, §3.5): p in [0.3, 0.7], current, about the owner or
+	// a person who matters to them (trusted, or with a stated relation), or offered in a turn in the last week.
+	// Settled only by new independent evidence moving p out of the band; a belief resting on Iyye's own
+	// words alone is never a reason (HLD §11.2).
+	const week = new Date(Date.parse(now) - 7 * 86_400_000).toISOString();
+	for (const b of db
+		.prepare(
+			`SELECT b.id, b.subject, b.predicate, b.object, b.negated, b.details, b.p, b.updated_at FROM beliefs b
+			 WHERE b.state = 'current' AND b.p >= 0.3 AND b.p <= 0.7
+			 AND EXISTS (SELECT 1 FROM belief_evidence e WHERE e.belief_id = b.id AND e.source NOT IN ('iyye', 'probe') AND e.weight > 0)
+			 AND (b.subject_ref = 'owner' OR b.recalled_at >= ?
+				OR (b.subject_ref LIKE 'contact:%' AND (
+					EXISTS (SELECT 1 FROM contacts c WHERE 'contact:' || c.id = b.subject_ref AND c.trusted = 1)
+					OR EXISTS (SELECT 1 FROM self_facts f WHERE f.facet = 'social' AND 'contact:' || substr(f.field, 10) = b.subject_ref))))
+			 ORDER BY b.updated_at DESC LIMIT 20`,
+		)
+		.all(week) as {
+		id: string;
+		subject: string;
+		predicate: string;
+		object: string;
+		negated: number;
+		details: string | null;
+		p: number;
+		updated_at: string;
+	}[])
+		add({
+			motivation: "curiosity",
+			kind: "belief_uncertain",
+			cluster: `belief:${b.id}`,
+			evidence: [`belief:${b.id}`],
+			weight: 0.35,
+			observedAt: b.updated_at,
+			text: `unsure (p ${b.p.toFixed(2)}) whether ${factSentence({ ...b, negated: b.negated === 1 })}`,
 		});
 
 	// ---------------------------------------------------------------- agency

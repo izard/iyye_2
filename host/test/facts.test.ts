@@ -1133,7 +1133,7 @@ describe("F2: beliefs and the nightly merge", () => {
 				newId,
 			});
 			const reply = await cmd.command(["correct", b.beliefId!.slice(0, 8), "12"], "owner_web");
-			assert.match(reply, /noted: jacob age 12 \(p 0\.90\); the old value is closed/);
+			assert.match(reply, /noted: jacob's age is 12 \(p 0\.90\); the old value is closed/);
 			await waitFor(
 				() =>
 					Boolean(
@@ -1192,7 +1192,7 @@ describe("F2: beliefs and the nightly merge", () => {
 				opts("n3"),
 			);
 			assert.equal(later.relation, "new", "new, independent evidence may raise it again");
-			assert.match(await cmd.command(["jacob"], "owner_web"), /jacob age 12/);
+			assert.match(await cmd.command(["jacob"], "owner_web"), /jacob's age is 12/);
 		});
 	});
 });

@@ -58,6 +58,8 @@ export interface StmFact {
 	state: "day" | "merged" | "dropped";
 	merged_at: string | null;
 	belief_id: string | null;
+	/** 1 when the host's rules made it private (plan §3.6). */
+	private: number;
 }
 
 /** The people facts may name: persons, never accounts (an account linked to the owner is the owner). */
@@ -186,8 +188,8 @@ export function recordExtraction(
 		}
 		const insert = db.prepare(
 			`INSERT INTO stm_facts (id, doc_id, event_id, scope, modality, source, subject, subject_ref, predicate, object,
-				details, valid_from, time_frame, hedged, negated, quote, cited, fact_key, p, said_at, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				details, valid_from, time_frame, hedged, negated, quote, cited, fact_key, p, said_at, created_at, private)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		);
 		const fts = db.prepare("INSERT INTO stm_facts_fts (fact_id, scope, body) VALUES (?, ?, ?)");
 		for (const f of r.kept) {
@@ -214,6 +216,7 @@ export function recordExtraction(
 				f.p,
 				d.doc.at,
 				r.at,
+				f.private ? 1 : 0,
 			);
 			fts.run(id, d.episode.scope, `${factSentence(f)}\n${f.quote}`);
 		}

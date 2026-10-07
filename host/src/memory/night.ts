@@ -21,6 +21,7 @@
  *   The list survives a restart, so an interrupted night still consolidates.
  */
 
+import { docsFor, MAX_ATTEMPTS } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
 import { getContact } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
@@ -103,6 +104,13 @@ export interface NightDeps {
 	facts?: {
 		run(shouldStop: () => boolean): Promise<{ stopped: string | null; merged: number; stored: number }>;
 	} | null;
+	/**
+	 * Plan 0.011 F5: who extracts facts from people's turns. `hindsight` (the default, and the comparison
+	 * week's): Hindsight's own extraction, as before, alongside the fact ledger. `ledger`: the fact ledger
+	 * only; a turn leaves short-term memory once all its documents were extracted, and Hindsight stores the
+	 * structured facts (and consolidates them), never the turn itself. The owner switches after the comparison.
+	 */
+	turnExtraction?: "hindsight" | "ledger";
 	/** Wait before retrying when the device is still busy (winding down). */
 	busyRetryMs?: number;
 	consolidatePollMs?: number;
@@ -127,6 +135,7 @@ export class NightWork {
 			purgeTraces: null,
 			salience: null,
 			facts: null,
+			turnExtraction: "hindsight",
 			maxAttempts: 3,
 			busyRetryMs: 2000,
 			consolidatePollMs: 2000,
@@ -231,6 +240,8 @@ export class NightWork {
 				leaveStm(this.d.db, e.event_id, "completed_empty", this.iso());
 				return "completed_empty";
 			}
+			if (this.d.turnExtraction === "ledger" && (e.kind === "turn" || e.kind === "remember"))
+				return this.byLedger(e);
 			try {
 				await this.retainEpisode(bank, e);
 			} catch (err) {
@@ -359,6 +370,34 @@ export class NightWork {
 				strategy: REPLY_STRATEGY,
 			});
 		}
+	}
+
+	/**
+	 * F5, `ledger`: the fact ledger already stored this turn's facts (it runs first). The turn leaves short-term
+	 * memory only when every one of its documents was extracted (or gave up after its attempts); until then it
+	 * waits, and the backlog keeps it for a later night's extraction.
+	 */
+	private byLedger(e: StmEpisode): Transfer {
+		const docs = docsFor(this.d.db, e);
+		const open = docs.filter((d) => {
+			const r = this.d.db.prepare("SELECT status, attempts FROM fact_extractions WHERE doc_id = ?").get(d.docId) as
+				| { status: string; attempts: number }
+				| undefined;
+			return !r || (r.status === "failed" && r.attempts < MAX_ATTEMPTS);
+		});
+		if (open.length) return "retry";
+		const unstored = this.d.db
+			.prepare(
+				"SELECT count(*) AS n FROM stm_facts WHERE event_id = ? AND state IN ('day', 'merged') AND stored_at IS NULL",
+			)
+			.get(e.event_id) as { n: number };
+		if (unstored.n > 0) return "retry";
+		const kept = this.d.db
+			.prepare("SELECT count(*) AS n FROM stm_facts WHERE event_id = ? AND state = 'merged'")
+			.get(e.event_id) as { n: number };
+		const state = kept.n > 0 ? "completed" : "completed_empty";
+		leaveStm(this.d.db, e.event_id, state, this.iso());
+		return state;
 	}
 
 	private async consolidate(

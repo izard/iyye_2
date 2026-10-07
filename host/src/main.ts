@@ -166,6 +166,7 @@ async function main(): Promise<number> {
 		ltm,
 		ltmReady: () => memory.status.state === "up",
 		log,
+		minP: config.facts.minP,
 	});
 
 	// Iyye's own SearXNG (plan 0.004 T3): self-hosted search, no account, no key.
@@ -394,6 +395,8 @@ async function main(): Promise<number> {
 					log,
 					thinking: config.memory.thinking,
 					purgeTraces: (bank) => memory.purgeTraces(bank),
+					// Plan 0.011 F5: Hindsight's own turn extraction, or the fact ledger only (after the comparison).
+					turnExtraction: config.facts.turns,
 					// Shadow (plan 0.003 K3): journaled, never read by the night.
 					salience: {
 						ask: (e) => memorySalience.ask(e),

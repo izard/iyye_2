@@ -22,11 +22,11 @@
 
 import type { FactRelation } from "../decisions/fact-relation.ts";
 import type { Logger } from "../log.ts";
-import { banksBeingForgotten } from "../memory/forget.ts";
+import { banksBeingForgotten, PENDING_BANKS_KEY, parseBanks } from "../memory/forget.ts";
 import { bankFor } from "../memory/gateway.ts";
 import { type HindsightClient, HindsightError, VERBATIM_STRATEGY } from "../memory/hindsight.ts";
 import { OBSERVATIONS_MISSION, REPLY_MISSION, RETAIN_MISSION } from "../memory/night.ts";
-import { SPEAKER_IYYE, SPEAKER_PERSON, SPEAKER_PROBE } from "../memory/provenance.ts";
+import { SPEAKER_IYYE, SPEAKER_PERSON, SPEAKER_PROBE, STRUCTURED_TAG } from "../memory/provenance.ts";
 import { getContact, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
 import { getEvent } from "../state/events.ts";
@@ -38,7 +38,7 @@ import { factSentence } from "./extract.ts";
 import { type Complete, extractPendingAtNight } from "./extractor.ts";
 import type { StmFact } from "./store.ts";
 
-export const STRUCTURED_TAG = "structured-fact";
+export { STRUCTURED_TAG };
 const DOC_DELETIONS_KEY = "facts.documents_to_delete";
 
 export const factDocId = (stmFactId: string) => `fact:${stmFactId}`;
@@ -194,6 +194,10 @@ export class FactNight {
 			try {
 				await this.store(bank, f);
 				this.d.db.prepare("UPDATE stm_facts SET stored_at = ? WHERE id = ?").run(this.d.now().toISOString(), f.id);
+				// The bank is consolidated after the episodes, like a bank that received a turn.
+				const pending = parseBanks(getKv(this.d.db, PENDING_BANKS_KEY));
+				if (!pending.includes(bank))
+					setKv(this.d.db, PENDING_BANKS_KEY, JSON.stringify([...pending, bank]), this.d.now().toISOString());
 				out.stored++;
 			} catch (err) {
 				if (!(err instanceof HindsightError) || [502, 503, 504].includes(err.status))

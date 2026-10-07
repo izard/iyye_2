@@ -43,7 +43,7 @@ export interface Config {
 	 * facts in long-term memory), the largest log-odds change one night may make to a belief, and the belief
 	 * below which a fact is not offered in turns.
 	 */
-	facts: { extract: boolean; merge: boolean; maxStep: number; minP: number };
+	facts: { extract: boolean; merge: boolean; maxStep: number; minP: number; turns: "hindsight" | "ledger" };
 	/** Messages Iyye sends to people per day (plan 0.008): in all, per trusted contact, on Iyye's own. */
 	send: { dailyMax: number; contactDailyMax: number; iyyeDailyMax: number };
 	defaultModel: string;
@@ -150,6 +150,14 @@ function fraction(env: NodeJS.ProcessEnv, name: string, dflt: number): number {
 	return n;
 }
 
+/** Plan 0.011 F5: `ledger` retires Hindsight's own turn extraction; it needs the ledger's extraction and merge. */
+function factsTurns(env: NodeJS.ProcessEnv): "hindsight" | "ledger" {
+	const v = oneOf(env, "IYYE2_FACTS_TURNS", ["hindsight", "ledger"], "hindsight");
+	if (v === "ledger" && (env.IYYE2_FACTS_EXTRACT === "0" || env.IYYE2_FACTS_MERGE === "0"))
+		throw new ConfigError("IYYE2_FACTS_TURNS=ledger needs IYYE2_FACTS_EXTRACT and IYYE2_FACTS_MERGE on");
+	return v;
+}
+
 /** A positive finite number. */
 function positive(env: NodeJS.ProcessEnv, name: string, dflt: number): number {
 	const raw = env[name];
@@ -224,6 +232,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			merge: env.IYYE2_FACTS_MERGE !== "0",
 			maxStep: positive(env, "IYYE2_FACTS_MAX_STEP", 2),
 			minP: fraction(env, "IYYE2_FACTS_MIN_P", 0.3),
+			turns: factsTurns(env),
 		},
 		send: {
 			dailyMax: int(env, "IYYE2_SEND_DAILY_MAX", 20, 0, 1000),

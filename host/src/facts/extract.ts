@@ -106,6 +106,8 @@ export interface ExtractedFact {
 	cited: string | null;
 	key: string;
 	p: number;
+	/** Why it reaches only its speaker and the owner (plan §3.6), or null when it may be shared. */
+	private: string | null;
 }
 
 export interface KnownPerson {
@@ -503,6 +505,7 @@ export function processFacts(
 			quote: f.quote.trim(),
 			cited,
 			key,
+			private: privateReason(f, doc.text),
 			p: prior(modality, {
 				ownerSource: source === "owner",
 				aboutSelf: speakerRef !== null && subjectRef === speakerRef,
@@ -569,13 +572,81 @@ function turnRelation(f: RawFact, doc: ExtractionDoc, people: readonly KnownPers
 	return null;
 }
 
+/** The speaker asked to keep it to Iyye. */
+const ASKED_PRIVATE =
+	/\b(don'?t|do not|please don'?t) (tell|share|mention)\b|\bbetween (us|you and me)\b|\bkeep (it|this|that) (secret|private|to yourself)\b|\b(confidential|in confidence|secret)\b|никому не (говори|рассказывай|сообщай)|не (рассказывай|говори) (никому|об этом)|между нами|по секрету|это секрет/i;
+const CREDENTIAL =
+	/\b(password|passcode|passphrase|pin( code)?|login|username|account number|iban|bic|swift|card number|credit card|cvv|passport|id (card|number)|social security|tax (id|number)|license number|licence number|api key|token)\b|пароль|пин-?код|номер (карты|счёта|счета|паспорта)|паспорт|логин/i;
+const HEALTH =
+	/\b(health|ill|illness|sick|disease|diagnos\w*|symptom\w*|doctor|dentist|clinic|hospital|surgery|operation|therapy|therapist|medication|medicine|pills?|prescription|allerg\w*|pregnan\w*|injur\w*|depress\w*|anxiety|disorder|blood pressure|diabetes|cancer|covid)\b|здоров|болезн|болен|больна|болит|врач|доктор|стоматолог|больниц|лекарств|диагноз|аллерг|беремен|операци/i;
+const MONEY =
+	/\b(salary|income|wage|earns?|earning|debt|loan|mortgage|credit|savings|bank account|money|paid|price paid|costs? him|costs? her|net worth|bonus|tax(es)?|invest\w*|stocks?|shares in)\b|[€$£]\s?\d|\d\s?(€|eur|euro|usd|dollars?)\b|зарплат|доход|долг|кредит|ипотек|деньг|накоплен|сбережен|налог/i;
+const ADDRESS =
+	/\b(street|road|avenue|lane|boulevard|apartment|house number|postcode|postal code|zip( code)?)\b|\w*(straße|strasse|str\.)(\s|$)|\b\w+(weg|platz|allee|gasse|ring|damm)\s+\d+|\bflat \d|\b\d{5}\b|улиц|проспект|переулок|квартир|дом \d|индекс/i;
+
+/**
+ * Why a fact is private (owner decision 1, revised 2026-10-07): it then
+ * reaches only its speaker and the owner. Rules, never a model's judgement:
+ * the speaker asked for it anywhere in the message; a credential; health;
+ * money; an address (where someone lives counts as one).
+ */
+export function privateReason(
+	f: Pick<RawFact, "subject" | "predicate" | "object" | "details" | "quote">,
+	docText: string,
+): string | null {
+	if (ASKED_PRIVATE.test(docText)) return "the speaker asked to keep it private";
+	const claim = `${f.subject} ${f.predicate.replace(/_/g, " ")} ${f.object} ${f.details ?? ""} ${f.quote}`;
+	if (CREDENTIAL.test(claim)) return "a credential";
+	if (HEALTH.test(claim)) return "health";
+	if (MONEY.test(claim)) return "money";
+	if (normalizeTerm(f.predicate) === "lives_in" || ADDRESS.test(claim)) return "an address";
+	return null;
+}
+
 /** One structured sentence for storage and recall: "Julia plays the violin". */
 export function factSentence(
 	f: Pick<ExtractedFact, "subject" | "predicate" | "object" | "negated" | "details">,
 ): string {
-	const p = f.predicate.replace(/^other:\s*/, "").replace(/_/g, " ");
-	const body = `${f.subject} ${f.negated ? `does not ${p}` : p} ${f.object}`.replace(/\s+/g, " ").trim();
+	const key = normalizeTerm(f.predicate);
+	const phrase = PHRASES[key];
+	let body: string;
+	if (key === "age") body = `${possessive(f.subject)} age ${f.negated ? "is not" : "is"} ${f.object}`;
+	else if (phrase) body = `${f.subject} ${f.negated ? phrase[1] : phrase[0]} ${f.object}`;
+	else {
+		const p = f.predicate.replace(/^other:\s*/, "").replace(/_/g, " ");
+		body = `${f.subject} ${f.negated ? `does not ${p}` : p} ${f.object}`;
+	}
+	body = body.replace(/\s+/g, " ").trim();
 	return f.details ? `${body} (${f.details})` : body;
+}
+
+/** The closed predicates in plain English: [affirmed, negated]. */
+const PHRASES: Record<string, [string, string]> = {
+	is_named: ["is named", "is not named"],
+	lives_in: ["lives in", "does not live in"],
+	located_in: ["is in", "is not in"],
+	from: ["is from", "is not from"],
+	works_at: ["works at", "does not work at"],
+	works_as: ["works as", "does not work as"],
+	studies: ["studies", "does not study"],
+	relation_of: ["is the", "is not the"],
+	born_on: ["was born on", "was not born on"],
+	likes: ["likes", "does not like"],
+	dislikes: ["dislikes", "does not dislike"],
+	prefers: ["prefers", "does not prefer"],
+	owns: ["owns", "does not own"],
+	plays: ["plays", "does not play"],
+	practises: ["practises", "does not practise"],
+	speaks: ["speaks", "does not speak"],
+	has_appointment: ["has an appointment:", "has no appointment:"],
+	plans_to: ["plans to", "does not plan to"],
+	did: ["did", "did not do"],
+	has: ["has", "does not have"],
+	is: ["is", "is not"],
+};
+
+function possessive(name: string): string {
+	return /s$/i.test(name) ? `${name}'` : `${name}'s`;
 }
 
 function weekday(iso: string): string {

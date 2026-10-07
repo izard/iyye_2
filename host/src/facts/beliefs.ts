@@ -27,7 +27,7 @@
  */
 
 import type { Db } from "../state/db.ts";
-import { COMPARISON, logit, normalizeTerm, sigmoid } from "./extract.ts";
+import { COMPARISON, logit, normalizeTerm, privateReason, sigmoid } from "./extract.ts";
 import type { StmFact } from "./store.ts";
 
 /** Predicates with one value at a time: a new value replaces the old one. */
@@ -62,6 +62,9 @@ export interface Belief {
 	closed_by: string | null;
 	created_at: string;
 	updated_at: string;
+	/** The owner's override (plan §3.6): null follows the evidence. */
+	disclosure: "private" | "share" | null;
+	recalled_at: string | null;
 }
 
 export interface Evidence {
@@ -78,6 +81,7 @@ export interface Evidence {
 	relation: Relation;
 	night: string;
 	at: string;
+	private: number;
 }
 
 export interface MergeOptions {
@@ -168,6 +172,7 @@ function addEvidence(
 		sign: 1 | -1;
 		sourceP: number;
 		relation: Relation;
+		private?: number;
 	},
 	o: MergeOptions,
 ): void {
@@ -178,8 +183,8 @@ function addEvidence(
 		o,
 	);
 	db.prepare(
-		`INSERT INTO belief_evidence (id, belief_id, stm_fact_id, source, scope, event_id, modality, sign, source_p, weight, relation, night, at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO belief_evidence (id, belief_id, stm_fact_id, source, scope, event_id, modality, sign, source_p, weight, relation, night, at, private)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		o.newId(),
 		beliefId,
@@ -194,6 +199,7 @@ function addEvidence(
 		row.relation,
 		o.night,
 		o.now.toISOString(),
+		row.private ?? 0,
 	);
 	recompute(db, beliefId, o.now.toISOString());
 }
@@ -271,6 +277,7 @@ export function mergeFact(db: Db, f: StmFact, o: MergeOptions): MergeResult {
 		sign,
 		sourceP: f.p,
 		relation,
+		private: f.private ?? 0,
 	});
 	const touched: MergeResult["touched"] = [];
 	let beliefId: string;
@@ -368,6 +375,8 @@ export function correctBelief(
 			sign,
 			sourceP: 0.9,
 			relation,
+			// The same rules as extraction: an owner correction about health, money, an address… is private too.
+			private: privateReason({ ...old, object, details: null, quote: object }, "") ? 1 : 0,
 		});
 		const target = findBelief(db, old.fact_key, norm, 0);
 		if (target?.id === old.id) return { newId: old.id, old };

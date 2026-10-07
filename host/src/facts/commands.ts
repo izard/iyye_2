@@ -15,6 +15,8 @@
  * - `/facts wrong <id>` — delete the belief outright (owner decision 2), its
  *   stored text too, and suppress the value so the same evidence cannot bring
  *   it back.
+ * - `/facts private <id>`, `/facts share <id>` — override the host's privacy
+ *   rules for one belief (plan §3.6).
  */
 
 import type { FactRelation } from "../decisions/fact-relation.ts";
@@ -23,6 +25,7 @@ import type { HindsightClient } from "../memory/hindsight.ts";
 import { getContact, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
 import { type Belief, correctBelief, deleteBelief, evidenceOf, getBelief, searchBeliefs } from "./beliefs.ts";
+import { isPrivate } from "./disclosure.ts";
 import { factSentence, normalizeTerm } from "./extract.ts";
 import { deleteQueuedFactDocs, queueFactDocDeletions } from "./night.ts";
 import { factsTodayReport } from "./store.ts";
@@ -50,6 +53,7 @@ export class FactsCommand {
 		if (sub === "compare") return this.compare();
 		if (sub === "correct") return this.correct(rest[0] ?? "", rest.slice(1).join(" "), by);
 		if (sub === "wrong") return this.wrong(rest[0] ?? "", by);
+		if (sub === "private" || sub === "share") return this.disclose(rest[0] ?? "", sub);
 		return this.lookup(args.join(" "));
 	}
 
@@ -76,10 +80,10 @@ export class FactsCommand {
 		const ev = evidenceOf(this.d.db, b.id);
 		const validity = b.valid_to ? `${b.valid_from} – ${b.valid_to}` : `since ${b.valid_from}`;
 		return [
-			`${b.id.slice(0, 8)} [p ${b.p.toFixed(2)}, ${b.state}, ${validity}] ${factSentence({ ...b, negated: b.negated === 1 })}`,
+			`${b.id.slice(0, 8)} [p ${b.p.toFixed(2)}, ${b.state}, ${validity}, ${isPrivate(this.d.db, b) ? "private" : "shareable with trusted contacts"}${b.disclosure ? " (your choice)" : ""}] ${factSentence({ ...b, negated: b.negated === 1 })}`,
 			...ev.map(
 				(e) =>
-					`    ${e.sign > 0 ? "+" : "−"} ${this.who(e.source)} (${e.modality}, ${e.relation}, p ${e.source_p.toFixed(2)}, weight ${e.weight}) ${e.at.slice(0, 10)}`,
+					`    ${e.sign > 0 ? "+" : "−"} ${this.who(e.source)} (${e.modality}, ${e.relation}, p ${e.source_p.toFixed(2)}, weight ${e.weight}${e.private ? ", private" : ""}) ${e.at.slice(0, 10)}`,
 			),
 		].join("\n");
 	}
@@ -148,6 +152,18 @@ export class FactsCommand {
 			.catch(() => null);
 		const nb = getBelief(this.d.db, r.newId)!;
 		return `noted: ${factSentence({ ...nb, negated: nb.negated === 1 })} (p ${nb.p.toFixed(2)}); the old value is ${getBelief(this.d.db, b.id)?.state === "closed" ? "closed, kept as history" : "contradicted"}`;
+	}
+
+	/** `/facts private|share <id>`: the owner's override of the host's privacy rules (plan §3.6). */
+	private disclose(ref: string, how: "private" | "share"): string {
+		const b = this.resolve(ref);
+		if (typeof b === "string") return b;
+		this.d.db
+			.prepare("UPDATE beliefs SET disclosure = ?, updated_at = ? WHERE id = ?")
+			.run(how, this.d.now().toISOString(), b.id);
+		return how === "private"
+			? `private: ${factSentence({ ...b, negated: b.negated === 1 })} reaches only the people who said it, and you`
+			: `shareable: trusted contacts may be told ${factSentence({ ...b, negated: b.negated === 1 })}, with who said it`;
 	}
 
 	private async wrong(ref: string, by: string): Promise<string> {

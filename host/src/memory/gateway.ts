@@ -15,6 +15,7 @@
  * - Hindsight down or slow: the turn goes on with STM only. Nothing is invented.
  */
 
+import { type BeliefReader, offerBeliefs } from "../facts/disclosure.ts";
 import { factSentence } from "../facts/extract.ts";
 import { searchFacts } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
@@ -24,7 +25,7 @@ import { isInvestigationEntry } from "../state/observations.ts";
 import { IYYE_SCOPE, searchStm } from "../state/stm.ts";
 import { pendingBankDeletions } from "../state/tombstones.ts";
 import { type HindsightClient, HindsightError } from "./hindsight.ts";
-import { SPEAKER_IYYE, SPEAKER_PERSON, SPEAKER_PROBE } from "./provenance.ts";
+import { SPEAKER_IYYE, SPEAKER_PERSON, SPEAKER_PROBE, STRUCTURED_TAG } from "./provenance.ts";
 
 export interface MemoryReader {
 	scope: string;
@@ -32,7 +33,8 @@ export interface MemoryReader {
 }
 
 export interface RecallItem {
-	source: "today" | "memory";
+	/** today: STM; memory: Hindsight; belief: the fact ledger's beliefs, already labelled (plan 0.011 F4). */
+	source: "today" | "memory" | "belief";
 	/** Whose conversation it came from, when it is not the reader's own. */
 	from: string | null;
 	/** ISO time it was said (STM) or the fact's date (LTM), if known. */
@@ -61,6 +63,9 @@ export interface GatewayDeps {
 	log: Logger;
 	/** Per-turn LTM recall budget in tokens. */
 	recallTokens?: number;
+	/** Beliefs below this are not offered in turns (plan 0.011 F4, `IYYE2_FACTS_MIN_P`). */
+	minP?: number;
+	now?: () => Date;
 	/** At most this many items from STM and from LTM each. */
 	maxItems?: number;
 	/** How long the list of existing banks is trusted. */
@@ -77,6 +82,8 @@ const ITEM_CHARS = 400;
  * not know who "we" or "my son" is, so a true match can score low.
  */
 export const STRONG_RELEVANCE = 0.3;
+/** Beliefs offered per recall (plan 0.011 F4). */
+const BELIEF_ITEMS = 4;
 /** Today's structured facts offered per recall (plan 0.011 F1). */
 const FACT_ITEMS = 3;
 /** Items a bank about a person the question names contributes regardless of score. */
@@ -137,7 +144,15 @@ export class MemoryGateway {
 	private banks: { at: number; ids: Set<string> } | null = null;
 
 	constructor(deps: GatewayDeps) {
-		this.d = { recallTokens: 600, maxItems: 5, bankCacheMs: 60_000, ltmReady: () => true, ...deps };
+		this.d = {
+			recallTokens: 600,
+			maxItems: 5,
+			bankCacheMs: 60_000,
+			ltmReady: () => true,
+			minP: 0.3,
+			now: () => new Date(),
+			...deps,
+		};
 	}
 
 	/**
@@ -198,6 +213,22 @@ export class MemoryGateway {
 				),
 			});
 		}
+		// Beliefs (plan 0.011 F4): with how sure Iyye is and who said it, filtered for this reader (§3.6).
+		const believer = this.believer(reader);
+		const offered = new Set<string>();
+		const offer = (extraIds: string[], q: string) => {
+			for (const b of offerBeliefs(this.d.db, believer, q, {
+				minP: this.d.minP,
+				limit: BELIEF_ITEMS - offered.size,
+				now: this.d.now(),
+				extraIds: extraIds.filter((id) => !offered.has(id)),
+			})) {
+				if (offered.has(b.belief.id)) continue;
+				offered.add(b.belief.id);
+				items.push({ source: "belief", said: null, from: null, when: b.when, text: clip(b.text) });
+			}
+		};
+		if (query.trim()) offer([], this.queryFor(reader, query));
 		if (!this.d.ltm || !this.d.ltmReady()) return { items, ltm: false };
 		if (!query.trim()) return { items, ltm: true };
 		const asked = this.queryFor(reader, query);
@@ -261,7 +292,19 @@ export class MemoryGateway {
 				.sort((a, b) => b.score - a.score || Number(b.ownScope) - Number(a.ownScope));
 			const seen = new Set<string>();
 			const ltmItems: RecallItem[] = [];
+			// Stored structured facts are offered as their beliefs (with disclosure), never as raw text.
+			const viaFacts = ranked
+				.filter(({ f }) => f.document_id?.startsWith("fact:"))
+				.map(
+					({ f }) =>
+						this.d.db.prepare("SELECT belief_id FROM stm_facts WHERE id = ?").get(f.document_id!.slice(5)) as
+							| { belief_id: string | null }
+							| undefined,
+				)
+				.flatMap((x) => (x?.belief_id ? [x.belief_id] : []));
+			if (viaFacts.length && offered.size < BELIEF_ITEMS) offer(viaFacts, "");
 			for (const { r, f } of ranked) {
+				if (f.tags.includes(STRUCTURED_TAG)) continue;
 				const key = f.text.replace(/\s+/g, " ").trim().toLowerCase();
 				if (seen.has(key)) continue;
 				seen.add(key);
@@ -299,6 +342,19 @@ export class MemoryGateway {
 			this.banks = { at: now, ids: new Set(await this.d.ltm!.listBanks()) };
 		}
 		return this.banks.ids;
+	}
+
+	/** Who the reader is to the belief disclosure rule (plan 0.011 §3.6). */
+	private believer(reader: MemoryReader): BeliefReader {
+		if (reader.principal === "owner")
+			return { principal: "owner", personId: OWNER_CONTACT_ID, ownScopes: [reader.scope], trusted: true };
+		const id = reader.scope.startsWith("contact:") ? reader.scope.slice("contact:".length) : "";
+		return {
+			principal: "contact",
+			personId: id,
+			ownScopes: this.readableScopes(reader),
+			trusted: getContact(this.d.db, id)?.trusted === 1,
+		};
 	}
 
 	/** The question rewritten for the memory search: the reader instead of "I"/"we", stated relations as names. */
@@ -361,7 +417,7 @@ export class MemoryGateway {
 export function formatRecalled(r: Recalled): string {
 	const lines = r.items.map((i) => {
 		const tag = [
-			i.source === "today" ? "today" : "remembered",
+			i.source === "today" ? "today" : i.source === "belief" ? "belief" : "remembered",
 			i.when ? i.when.slice(0, 16).replace("T", " ") : null,
 			i.from ? `from ${i.from}` : null,
 			i.said === "person"
