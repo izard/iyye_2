@@ -52,7 +52,7 @@ import { wakeMessage, wakeProblems } from "./kernel/wake-check.ts";
 import { consoleLogger, type Logger } from "./log.ts";
 import { MemoryControl } from "./memory/control.ts";
 import { MemoryGate } from "./memory/gate.ts";
-import { formatRecalled, MemoryGateway } from "./memory/gateway.ts";
+import { MemoryGateway, ownerOwnRecall } from "./memory/gateway.ts";
 import { HindsightClient } from "./memory/hindsight.ts";
 import { NightWork } from "./memory/night.ts";
 import { MemoryPassthrough } from "./memory/passthrough.ts";
@@ -723,10 +723,8 @@ async function main(): Promise<number> {
 		sweepMs: config.sweepS * 1000,
 		curiosityPaused: () => actor.paused("curiosity"),
 		// Plan 0.010 M2: memory on an owner's recurring question, recalled by the host as the owner (the asker).
-		recall: async (topic) => {
-			const r = await gateway.recall({ scope: "owner", principal: "owner" }, topic);
-			return r.items.length ? formatRecalled(r) : null;
-		},
+		// Only the owner's own conversation: contacts' words must never reach a background prompt (gate #15).
+		recall: (topic) => ownerOwnRecall(gateway, topic),
 	});
 	const observer = new Observer({
 		db,

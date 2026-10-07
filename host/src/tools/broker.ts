@@ -57,8 +57,15 @@ export type PrincipalKind = "owner" | "contact" | "iyye";
 
 /** Background sessions of plan steps (`kernel/plans.ts`): read-only, whatever Iyye's own work may do. */
 export const PLAN_STEP_SCOPE = "iyye:plan:";
-/** Investigations' sessions (plan 0.007 S5, 0.010 M2): they read the web, so they never get `reach`. */
+/** Investigations' sessions (plan 0.007 S5, 0.010 M2): they never get `reach`. */
 export const INVESTIGATION_SCOPE = "iyye:inv:";
+/**
+ * The only background sessions that may read the web (plan 0.010 M2): investigations of the owner's recurring
+ * questions. Plan steps (a contact may have written the question) and repository investigations (only records
+ * are evidence) never browse.
+ */
+export const WEB_INVESTIGATION_SCOPE = `${INVESTIGATION_SCOPE}web:`;
+export const WEB_TOOLKIT = "web";
 
 /**
  * Who asked in this turn and where a reply to them goes (plan 0.006): set by
@@ -165,7 +172,13 @@ export class ToolBroker {
 	}
 
 	/** Who may use a toolkit. Never decided by the model or by a selection pass. */
-	static allowed(kit: Pick<Toolkit, "effect">, principal: PrincipalKind, trusted = false, scope = ""): boolean {
+	static allowed(
+		kit: Pick<Toolkit, "effect"> & { name?: string },
+		principal: PrincipalKind,
+		trusted = false,
+		scope = "",
+	): boolean {
+		if (kit.name === WEB_TOOLKIT && principal === "iyye") return scope.startsWith(WEB_INVESTIGATION_SCOPE);
 		if (kit.effect === "read") return true;
 		if (kit.effect === "self") return principal === "owner" || principal === "contact";
 		// A plan step runs a question a contact may have written, approved as a read-only look (0.006 C4): never `reach`.

@@ -414,6 +414,18 @@ export class MemoryGateway {
 	}
 }
 
+/**
+ * What memory holds on a topic from the owner's own conversation only (plan
+ * 0.010 M2): for evidence handed to background work, whose prompt and answer
+ * `/forget` cannot reach. Nothing another person said: no other scope's
+ * items, and no beliefs (their provenance may be someone else).
+ */
+export async function ownerOwnRecall(gateway: Pick<MemoryGateway, "recall">, topic: string): Promise<string | null> {
+	const r = await gateway.recall({ scope: "owner", principal: "owner" }, topic);
+	const own = r.items.filter((i) => i.from === null && i.source !== "belief");
+	return own.length ? formatRecalled({ ...r, items: own }) : null;
+}
+
 export function formatRecalled(r: Recalled): string {
 	const lines = r.items.map((i) => {
 		const tag = [

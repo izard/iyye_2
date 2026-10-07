@@ -15,6 +15,7 @@ import { FactsCommand } from "../src/facts/commands.ts";
 import type { StmFact } from "../src/facts/store.ts";
 import { silentLogger } from "../src/log.ts";
 import { forgetRecords, forgetTarget } from "../src/memory/forget.ts";
+import { MemoryGateway, ownerOwnRecall } from "../src/memory/gateway.ts";
 import { MotivationActor, type Opening } from "../src/motivation/actor.ts";
 import { admitsUnknown, eventDate, recurringQuestions, statesIntention } from "../src/motivation/detectors.ts";
 import { collectSignals, type Signal } from "../src/motivation/signals.ts";
@@ -26,7 +27,14 @@ import { getContact } from "../src/state/contacts.ts";
 import { type Db, openDb } from "../src/state/db.ts";
 import { getEvent } from "../src/state/events.ts";
 import { recordEpisode } from "../src/state/stm.ts";
-import { INVESTIGATION_SCOPE, PLAN_STEP_SCOPE, ToolBroker } from "../src/tools/broker.ts";
+import {
+	INVESTIGATION_SCOPE,
+	type IyyeTool,
+	PLAN_STEP_SCOPE,
+	ToolBroker,
+	type Toolkit,
+	WEB_INVESTIGATION_SCOPE,
+} from "../src/tools/broker.ts";
 import { overBudget } from "../src/tools/web.ts";
 
 const T0 = new Date("2026-10-07T10:00:00Z");
@@ -310,6 +318,32 @@ describe("M2 actions", () => {
 		assert.match(sent[1]!.content, /where am I\?/);
 	});
 
+	test("a chat reply to a belief question is not taken as its answer: the slot frees when the question lapses, not in a week", async () => {
+		const db = freshDb();
+		const now = { t: T0 };
+		const { actor, sent } = rig(db, now);
+		const id = belief(db, 0.6);
+		const b = signal({ motivation: "curiosity", kind: "belief_uncertain", cluster: `belief:${id}` });
+		await actor.act([opening(b)], new Set([b.cluster]));
+		assert.match(actor.noteFor("owner") ?? "", new RegExp(`/facts confirm ${id.slice(0, 8)}`));
+		turn(db, {
+			id: "o1",
+			who: "owner",
+			text: "yes, that's right",
+			reply: "Thanks!",
+			at: new Date(T0.getTime() + 60_000),
+		});
+		const place = signal({ motivation: "curiosity", kind: "self_missing", cluster: "self:place:stated" });
+		now.t = new Date(T0.getTime() + 25 * 3_600_000);
+		await actor.act([opening(place)], new Set([b.cluster, place.cluster]));
+		assert.equal(
+			(db.prepare("SELECT status FROM self_questions WHERE field LIKE 'belief:%'").get() as { status: string })
+				.status,
+			"expired",
+		);
+		assert.equal(sent.length, 2, "the next question went out the next day");
+	});
+
 	test("#15: /forget reaches the questions, notices and kept samples that quote the person", async () => {
 		const db = freshDb();
 		const now = { t: T0 };
@@ -362,6 +396,62 @@ describe("M2 web investigations", () => {
 		assert.equal(ToolBroker.allowed(reach, "iyye", false, `${PLAN_STEP_SCOPE}x:1`), false);
 		assert.equal(ToolBroker.allowed(reach, "iyye", false, "iyye:bg:x"), true);
 		assert.equal(ToolBroker.allowed({ effect: "read" }, "iyye", false, `${INVESTIGATION_SCOPE}x:1`), true);
+	});
+
+	test("only web investigations browse: plan steps, repository investigations and other background work never get the web", () => {
+		const tool = (name: string) =>
+			({
+				name,
+				label: name,
+				description: name,
+				summary: name,
+				parameters: {},
+				run: async () => "",
+			}) as unknown as IyyeTool;
+		const kits: Toolkit[] = [
+			{ name: "machine", description: "m", effect: "read", tools: [tool("system_status")] },
+			{ name: "project", description: "p", effect: "read", tools: [tool("git_log")] },
+			{ name: "messaging", description: "s", effect: "reach", tools: [tool("telegram_send")] },
+			{ name: "web", description: "w", effect: "read", tools: [tool("web_search")] },
+		];
+		const broker = new ToolBroker({ db: freshDb(), log: silentLogger, toolkits: kits });
+		const names = (scope: string) => broker.forSession({ scope, principal: "iyye" }).names;
+		assert.deepEqual(names(`${PLAN_STEP_SCOPE}p:0`), ["system_status", "git_log"]);
+		assert.deepEqual(names(`${INVESTIGATION_SCOPE}o:1`), ["system_status", "git_log"]);
+		assert.deepEqual(names("iyye:bg:x"), ["system_status", "git_log", "telegram_send"]);
+		assert.deepEqual(names(`${WEB_INVESTIGATION_SCOPE}o:1`), ["system_status", "git_log", "web_search"]);
+		assert.ok(
+			broker.forSession({ scope: "owner", principal: "owner" }).names.includes("web_search"),
+			"people keep the web",
+		);
+	});
+
+	test("#15: the memory handed to a web investigation is the owner's own conversation only, never a contact's words", async () => {
+		const db = freshDb();
+		turn(db, {
+			id: "j1",
+			who: "jacob",
+			text: "My secret Rust plan is to build a game",
+			reply: "Nice.",
+			at: new Date(T0.getTime() - DAY),
+		});
+		turn(db, {
+			id: "o1",
+			who: "owner",
+			text: "Which Rust book is good?",
+			reply: "I don't know.",
+			at: new Date(T0.getTime() - DAY),
+		});
+		db.prepare("UPDATE stm_episodes SET state = 'day'").run();
+		const gw = new MemoryGateway({ db, ltm: null, log: silentLogger });
+		const all = await gw.recall({ scope: "owner", principal: "owner" }, "Rust plan book");
+		assert.ok(
+			all.items.some((i) => /secret Rust plan/.test(i.text)),
+			"the owner's reader would see it",
+		);
+		const own = await ownerOwnRecall(gw, "Rust plan book");
+		assert.ok(own && /Which Rust book/.test(own));
+		assert.doesNotMatch(own!, /secret/);
 	});
 
 	test("Iyye's own web calls share one daily budget across its sessions", () => {

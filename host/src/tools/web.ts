@@ -18,11 +18,11 @@
 
 import { Type } from "typebox";
 import type { Db } from "../state/db.ts";
-import { type IyyeTool, shorten, type ToolContext } from "./broker.ts";
+import { type IyyeTool, shorten, type ToolContext, WEB_TOOLKIT } from "./broker.ts";
 import { decodeEntities, htmlToText } from "./html-text.ts";
 import { type FetchedPage, FetchRefused, type GuardedHttp } from "./http.ts";
 
-export const WEB_TOOLKIT = "web";
+export { WEB_TOOLKIT };
 
 export interface WebBudget {
 	/** Successful web calls allowed per local day: the owner's scope, and each contact's. */

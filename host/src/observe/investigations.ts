@@ -30,7 +30,7 @@ import type { Logger } from "../log.ts";
 import type { BackgroundJob } from "../state/background.ts";
 import type { Db } from "../state/db.ts";
 import { INVESTIGATION_DOMAIN } from "../state/observations.ts";
-import { INVESTIGATION_SCOPE } from "../tools/broker.ts";
+import { INVESTIGATION_SCOPE, WEB_INVESTIGATION_SCOPE } from "../tools/broker.ts";
 import { checkCitations, checkWebCitations } from "./citations.ts";
 
 export interface Opportunity {
@@ -285,7 +285,8 @@ export class Investigations {
 			this.d.log.warn("investigations: initiative shadow failed", { error: (err as Error).message });
 		}
 		const attempt = o.attempts + 1;
-		const session = `${INVESTIGATION_SCOPE}${o.id}:${attempt}`;
+		// Only the owner's recurring questions browse the web (WEB_INVESTIGATION_SCOPE); repository ones never do.
+		const session = `${o.domain === "conversation" ? WEB_INVESTIGATION_SCOPE : INVESTIGATION_SCOPE}${o.id}:${attempt}`;
 		if (o.domain === "conversation" && this.d.recall && !this.memory.has(o.id)) {
 			const remembered = await this.d.recall(o.question).catch(() => null);
 			this.memory.set(o.id, remembered);
