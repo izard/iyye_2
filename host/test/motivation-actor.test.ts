@@ -43,8 +43,9 @@ function rig(opts: { facts?: string[]; retry?: boolean } = {}) {
 		db,
 		log: silentLogger,
 		mode: () => mode.m,
+		// Like the outbox: a key is sent once.
 		notifyOwner: async (r) => {
-			sent.push(r);
+			if (!sent.some((x) => x.key === r.key)) sent.push(r);
 		},
 		self: self as never,
 		ownerFactsAbout: opts.facts ? async () => opts.facts! : null,
@@ -171,7 +172,10 @@ describe("the actor", () => {
 		r.clock.now = after(5 * MIN);
 		await r.actor.act([], new Set(["service:Telegram@a"]));
 		assert.equal(r.sent.length, 1);
-		assert.equal(r.sent[0]!.key, `motivation:${"1".padStart(8, "0")}-aaaa-bbbb-cccc-dddddddddddd`);
+		assert.equal(
+			r.sent[0]!.key,
+			`motivation:${"1".padStart(8, "0")}-aaaa-bbbb-cccc-dddddddddddd:${T0.toISOString()}`,
+		);
 		// Cleared, then a new outage within the cooldown: no second notice (a flapping service notifies once).
 		await r.actor.act([], new Set());
 		assert.equal(rows(r.db)[0]!.status, "settled");
@@ -207,6 +211,77 @@ describe("the actor", () => {
 			rows(r.db).map((x) => x.cluster),
 			["plan:f9236bfb"],
 		);
+	});
+
+	test("a plan due within a day weighs enough to open; a reopened plan notice goes out again", async () => {
+		const r = rig();
+		r.db
+			.prepare(
+				`INSERT INTO plans (id, intent, proposer_contact_id, scope, route_json, proposed_via, steps_json, state, created_at, updated_at)
+			 VALUES ('f9236bfb', 'greet Jacob', 'owner', 'owner', '{}', 'telegram', ?, 'proposed', ?, ?)`,
+			)
+			.run(
+				JSON.stringify([{ kind: "remind", text: "hi", due_at: after(2 * H).toISOString(), status: "pending" }]),
+				after(-2 * H).toISOString(),
+				after(-2 * H).toISOString(),
+			);
+		const agency = () =>
+			collectSignals({
+				db: r.db,
+				now: r.clock.now,
+				selfGaps: () => [],
+				healing: () => [],
+				sleep: () => null,
+			}).filter((x) => x.motivation === "agency");
+		const [p] = agency();
+		assert.equal(p!.weight, 0.8, "proposed two hours ago, due in two: urgent, not a 0.3 wait");
+		assert.match(p!.text, /its first step is due 2026-10-07 12:00 UTC/);
+		const current = new Set([p!.cluster]);
+		await r.actor.act([opening(p!)], current);
+		assert.equal(r.sent.length, 1);
+		// Cleared (say, approved and then suspended again), and after the cooldown it opens again: a new notice.
+		await r.actor.act([], new Set());
+		r.clock.now = after(7 * H);
+		await r.actor.act([opening(p!)], current);
+		assert.equal(r.sent.length, 2, "the same row reopened, a new key");
+	});
+
+	test("an opening motivation queues every question it could ask, not just its strongest signal", async () => {
+		const r = rig();
+		for (const x of ["a", "b"])
+			r.db
+				.prepare("INSERT INTO contacts (id, display_name, kind, created_at) VALUES (?, ?, 'contact', 't')")
+				.run(x, x);
+		const gaps = [
+			{
+				facet: "place" as const,
+				field: "stated",
+				kind: "contradicted" as const,
+				why: "Berlin vs Munich",
+				episode: "n1",
+			},
+			{ facet: "social" as const, field: "relation:a", kind: "missing" as const, why: "a" },
+			{ facet: "social" as const, field: "relation:b", kind: "missing" as const, why: "b" },
+		];
+		const tracker = new MotivationTracker({
+			db: r.db,
+			log: silentLogger,
+			actor: r.actor,
+			mode: () => "awake",
+			sources: { selfGaps: () => gaps, healing: () => [], sleep: () => null },
+			now: () => r.clock.now,
+			alpha: 1,
+			threshold: 0.55,
+			sustain: 1,
+		});
+		await tracker.sweep();
+		assert.deepEqual(
+			rows(r.db)
+				.map((x) => x.cluster)
+				.sort(),
+			["self:place:stated@n1", "self:social:relation:a", "self:social:relation:b"],
+		);
+		assert.equal(r.sent.length, 1, "asked one at a time");
 	});
 
 	test("maintenance reloads a model self-healing gave up on, once a day, never past the owner's unload", async () => {

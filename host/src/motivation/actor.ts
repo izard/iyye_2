@@ -269,7 +269,8 @@ export class MotivationActor {
 			this.update(row.id, { status: "settled", answer: "over the daily cap" });
 			return;
 		}
-		await this.d.notifyOwner({ key: `motivation:${row.id}`, content: row.question });
+		// The opening time is in the key: the outbox sends a key once, and a reopened row is a new notice.
+		await this.d.notifyOwner({ key: `motivation:${row.id}:${row.created_at}`, content: row.question });
 		this.update(row.id, { status: "running" });
 		this.d.log.info("motivation: notified", { id: row.id, motivation: row.motivation, kind: row.signal_kind });
 	}

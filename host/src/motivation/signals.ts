@@ -199,19 +199,26 @@ export function collectSignals(s: SignalSources): Signal[] {
 
 	// ---------------------------------------------------------------- agency
 	for (const p of db
-		.prepare("SELECT id, intent, state, updated_at FROM plans WHERE state IN ('suspended', 'active', 'proposed')")
-		.all() as { id: string; intent: string; state: string; updated_at: string }[]) {
+		.prepare(
+			"SELECT id, intent, state, steps_json, updated_at FROM plans WHERE state IN ('suspended', 'active', 'proposed')",
+		)
+		.all() as { id: string; intent: string; state: string; steps_json: string; updated_at: string }[]) {
+		// A proposed plan whose first dated step falls due within a day (or has passed) cannot wait for the owner
+		// to look (2026-10-07: plan f9236bfb's reminder was due that morning, unseen).
+		const due = p.state === "proposed" ? firstDue(p.steps_json) : null;
+		const urgent = due !== null && due < new Date(s.now.getTime() + 24 * H).toISOString();
 		const stalled = p.state === "active" && p.updated_at < ago(24);
-		const waiting = p.state === "proposed" && p.updated_at < ago(24);
+		const waiting = p.state === "proposed" && (urgent || p.updated_at < ago(24));
 		if (p.state !== "suspended" && !stalled && !waiting) continue;
 		add({
 			motivation: "agency",
 			kind: p.state === "suspended" ? "plan_suspended" : stalled ? "plan_stalled" : "plan_awaiting_approval",
 			cluster: `plan:${p.id}`,
 			evidence: [`plan:${p.id}`],
-			weight: p.state === "suspended" ? 0.6 : stalled ? 0.4 : 0.3,
-			observedAt: p.updated_at,
-			text: `plan ${JSON.stringify(p.intent.slice(0, 60))} is ${stalled ? "active with no progress for a day" : p.state}`,
+			weight: p.state === "suspended" ? 0.6 : stalled ? 0.4 : urgent ? 0.8 : 0.3,
+			// An urgent plan's pressure is current, not as old as the proposal.
+			observedAt: urgent ? s.now.toISOString() : p.updated_at,
+			text: `plan ${JSON.stringify(p.intent.slice(0, 60))} is ${stalled ? "active with no progress for a day" : p.state}${urgent ? `; its first step is due ${due!.slice(0, 16).replace("T", " ")} UTC` : ""}`,
 		});
 	}
 	for (const c of db
@@ -296,4 +303,17 @@ export function rawNeed(signals: readonly Signal[], now: Date): number {
 		rest *= 1 - Math.min(1, top! + Math.min(0.1, 0.1 * top! * more.length));
 	}
 	return 1 - rest;
+}
+
+/** The earliest `due_at` among a plan's pending steps, or null. */
+function firstDue(stepsJson: string): string | null {
+	try {
+		const due = (JSON.parse(stepsJson) as { due_at?: string; status?: string }[])
+			.filter((x) => typeof x.due_at === "string" && x.status !== "done")
+			.map((x) => x.due_at!)
+			.sort();
+		return due[0] ?? null;
+	} catch {
+		return null;
+	}
 }

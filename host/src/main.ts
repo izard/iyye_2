@@ -541,6 +541,7 @@ async function main(): Promise<number> {
 		quietMs: config.backgroundQuietS * 1000,
 	});
 	// Every minute, each service's state, since when and its last error (the self-preservation evidence).
+	let serviceTimer: NodeJS.Timeout | null = null;
 	const watchServices = () =>
 		recordServices(
 			db,
@@ -754,6 +755,7 @@ async function main(): Promise<number> {
 			shuttingDown = true;
 			log.info(`${signal}: stopping`);
 			clearInterval(keepAlive);
+			if (serviceTimer) clearInterval(serviceTimer);
 			try {
 				await web.stop();
 				await poller?.stop();
@@ -825,12 +827,13 @@ async function main(): Promise<number> {
 	commitmentClock.start();
 	plans.start();
 	selfModel.start();
-	watchServices();
-	const serviceTimer = setInterval(watchServices, 60_000);
-	serviceTimer.unref();
 	motivation.start();
 	adenosine.start();
 	searxng.start();
+	// After every service has started (one still "stopped" here would be recorded as an outage).
+	watchServices();
+	serviceTimer = setInterval(watchServices, 60_000);
+	serviceTimer.unref();
 	await models.start();
 	log.info("iyye host ready", { router: models.state, web: `http://127.0.0.1:${config.webPort}/` });
 

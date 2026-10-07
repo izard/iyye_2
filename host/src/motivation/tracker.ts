@@ -17,7 +17,7 @@
 
 import type { Logger } from "../log.ts";
 import type { Db } from "../state/db.ts";
-import type { Opening } from "./actor.ts";
+import { actionFor, type Opening } from "./actor.ts";
 import {
 	collectSignals,
 	MOTIVATIONS,
@@ -129,7 +129,13 @@ export class MotivationTracker {
 						JSON.stringify(top.slice(0, 10).map((s) => brief(s, now))),
 						sustained >= this.d.sustain && top[0] ? top[0].cluster : null,
 					);
-				if (sustained >= this.d.sustain && top[0]) openings.push({ motivation: m, signal: top[0] });
+				if (sustained >= this.d.sustain && top[0]) {
+					openings.push({ motivation: m, signal: top[0] });
+					// Questions are bounded by the actor (a few a day, one at a time): every field it could ask about is
+					// queued, so an unanswered contradiction does not hold the only slot for a week.
+					for (const sig of top.slice(1))
+						if (actionFor(m, sig.kind) === "ask") openings.push({ motivation: m, signal: sig });
+				}
 			}
 			this.d.db
 				.prepare("DELETE FROM motivation_samples WHERE at < ?")
