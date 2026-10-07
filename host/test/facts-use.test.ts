@@ -339,7 +339,7 @@ describe("F4: curiosity from important uncertain beliefs", () => {
 		assert.equal(sig().length, 0);
 	});
 
-	test("recorded, not counted: an uncertain belief adds no need and opens nothing (no question credited to the wrong cause)", async () => {
+	test("an uncertain belief counts (0.010 M2 gave it an action): it is asked about, under its own cluster", async () => {
 		const db = freshDb();
 		fact(db, {
 			id: "g1",
@@ -371,15 +371,10 @@ describe("F4: curiosity from important uncertain beliefs", () => {
 			},
 		});
 		await tracker.sweep();
-		const sample = db
-			.prepare("SELECT raw, signals_json FROM motivation_samples WHERE motivation = 'curiosity'")
-			.get() as {
-			raw: number;
-			signals_json: string;
+		const belief = db.prepare("SELECT id FROM beliefs WHERE fact_key = 'contact:julia|plans_to'").get() as {
+			id: string;
 		};
-		assert.ok(sample.raw < 0.55, String(sample.raw));
-		assert.match(sample.signals_json, /belief_uncertain/, "still recorded with the sample");
-		assert.deepEqual(opened, []);
+		assert.ok(opened.includes(`belief:${belief.id}`), JSON.stringify(opened));
 	});
 });
 

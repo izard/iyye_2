@@ -398,6 +398,35 @@ export function correctBelief(
 }
 
 /**
+ * `/facts confirm <id>`: the owner says the belief is right, the strongest
+ * evidence (the same weight as a correction that repeats the value). A
+ * repeat confirmation adds nothing: the owner is one source.
+ */
+export function confirmBelief(db: Db, beliefId: string, o: MergeOptions): Belief | string {
+	const b = getBelief(db, beliefId);
+	if (!b) return "no such belief";
+	db.transaction(() =>
+		addEvidence(
+			db,
+			b.id,
+			{
+				stmFactId: null,
+				source: "owner",
+				scope: "owner",
+				eventId: null,
+				modality: "stated",
+				sign: 1,
+				sourceP: 0.9,
+				relation: "correction",
+				private: privateReason({ ...b, quote: b.object }, "") ? 1 : 0,
+			},
+			o,
+		),
+	)();
+	return getBelief(db, b.id)!;
+}
+
+/**
  * `/facts wrong <id>` (owner decision 2): delete the belief outright with its
  * history, and suppress its value so the evidence said so far cannot re-create
  * it. Returns the structured facts behind it (their stored text goes too).
@@ -431,7 +460,7 @@ export function deleteBelief(
  * recomputed from what remains), beliefs about them go, and so does any belief
  * left with no evidence. Call inside the forget transaction.
  */
-export function forgetBeliefs(db: Db, scopes: readonly string[], personIds: readonly string[], at: string): void {
+export function forgetBeliefs(db: Db, scopes: readonly string[], personIds: readonly string[], at: string): string[] {
 	const marks = scopes.map(() => "?").join(", ");
 	const ids = personIds.map(() => "?").join(", ");
 	const refs = personIds.map((id) => `contact:${id}`);
@@ -444,8 +473,15 @@ export function forgetBeliefs(db: Db, scopes: readonly string[], personIds: read
 		...scopes,
 		...personIds,
 	);
+	const about = (
+		db.prepare(`SELECT id FROM beliefs WHERE subject_ref IN (${refs.map(() => "?").join(", ")})`).all(...refs) as {
+			id: string;
+		}[]
+	).map((r) => r.id);
 	db.prepare(`DELETE FROM beliefs WHERE subject_ref IN (${refs.map(() => "?").join(", ")})`).run(...refs);
 	for (const id of touched) recompute(db, id, at);
+	// Every belief their words shaped or that was about them: what quotes it elsewhere must go too.
+	return [...new Set([...touched, ...about])];
 }
 
 /** `/facts <words>`: beliefs whose subject, predicate or value mention the words, with their evidence (owner only). */

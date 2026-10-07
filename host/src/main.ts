@@ -52,7 +52,7 @@ import { wakeMessage, wakeProblems } from "./kernel/wake-check.ts";
 import { consoleLogger, type Logger } from "./log.ts";
 import { MemoryControl } from "./memory/control.ts";
 import { MemoryGate } from "./memory/gate.ts";
-import { MemoryGateway } from "./memory/gateway.ts";
+import { formatRecalled, MemoryGateway } from "./memory/gateway.ts";
 import { HindsightClient } from "./memory/hindsight.ts";
 import { NightWork } from "./memory/night.ts";
 import { MemoryPassthrough } from "./memory/passthrough.ts";
@@ -202,6 +202,24 @@ async function main(): Promise<number> {
 		contactMaxPerDay: config.send.contactDailyMax,
 		iyyeMaxPerDay: config.send.iyyeDailyMax,
 	});
+	// One instance, in the people's broker and the background one (plan 0.010 M2): budgets by principal.
+	const webToolkit: Toolkit | null = config.web.enabled
+		? {
+				name: WEB_TOOLKIT,
+				description: "the public web",
+				effect: "read",
+				tools: [
+					webSearchTool({
+						db,
+						http: webHttp,
+						budget: config.web.dailyCalls,
+						searxng,
+						wikipediaLangs: config.web.wikipediaLangs,
+					}),
+					webFetchTool({ db, http: webHttp, budget: config.web.dailyCalls }),
+				],
+			}
+		: null;
 	const tools = new ToolBroker({
 		db,
 		log,
@@ -213,25 +231,7 @@ async function main(): Promise<number> {
 				tools: [currentTimeTool(), memorySearchTool(gateway)],
 			},
 			machineToolkit,
-			...(config.web.enabled
-				? [
-						{
-							name: WEB_TOOLKIT,
-							description: "the public web",
-							effect: "read" as const,
-							tools: [
-								webSearchTool({
-									db,
-									http: webHttp,
-									budget: config.web.dailyCalls,
-									searxng,
-									wikipediaLangs: config.web.wikipediaLangs,
-								}),
-								webFetchTool({ db, http: webHttp, budget: config.web.dailyCalls }),
-							],
-						},
-					]
-				: []),
+			...(webToolkit ? [webToolkit] : []),
 			// Last, so adding it left the earlier declarations (and the prompt cache) unchanged (plan 0.006 C1).
 			remindersToolkit({
 				db,
@@ -326,6 +326,9 @@ async function main(): Promise<number> {
 				}),
 				// Iyye may write to people on its own (plan 0.008 change): labelled, capped, the owner told.
 				messaging,
+				// Last (plan 0.010 M2): the web for curiosity's investigations, on Iyye's own daily budget.
+				// Investigation sessions never get `messaging` (ToolBroker.allowed): a page must not make Iyye write.
+				...(webToolkit ? [webToolkit] : []),
 			],
 		}),
 	});
@@ -719,6 +722,11 @@ async function main(): Promise<number> {
 		log,
 		sweepMs: config.sweepS * 1000,
 		curiosityPaused: () => actor.paused("curiosity"),
+		// Plan 0.010 M2: memory on an owner's recurring question, recalled by the host as the owner (the asker).
+		recall: async (topic) => {
+			const r = await gateway.recall({ scope: "owner", principal: "owner" }, topic);
+			return r.items.length ? formatRecalled(r) : null;
+		},
 	});
 	const observer = new Observer({
 		db,

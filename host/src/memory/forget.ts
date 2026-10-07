@@ -28,6 +28,7 @@ import { forgetBeliefs } from "../facts/beliefs.ts";
 import { queueFactDocDeletions } from "../facts/night.ts";
 import { forgetFacts } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
+import { forgetMotivationRecords } from "../motivation/actor.ts";
 import { forgetSelfFacts } from "../self/model.ts";
 import { accountsOf, type Contact, OWNER_CONTACT_ID, resolvePerson, scopeFor } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
@@ -234,7 +235,14 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			elsewhere.map((f) => ({ scope: f.scope, stmFactId: f.id })),
 			at,
 		);
-		forgetBeliefs(db, t.scopes, [t.person.id], at);
+		const beliefs = forgetBeliefs(db, t.scopes, [t.person.id], at);
+		// The motivations' records that may quote them (plan 0.010): questions and notices about those beliefs,
+		// notices about their plans, and the signal texts kept with the motivation samples.
+		forgetMotivationRecords(
+			db,
+			[...beliefs.map((id) => `belief:${id}`), ...plans.map((p) => `plan:${p.id}`)],
+			FORGOTTEN,
+		);
 		forgetFacts(db, t.scopes, [t.person.id], { ownerReplies: ownerTurns.map((r) => r.event_id) });
 		// Day summaries not yet stored may name the person ("2 from Julia"): they go too (HLD §15 #15).
 		const names = [t.person.display_name, ...accountsOf(db, t.person.id).map((a) => a.display_name)]

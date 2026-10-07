@@ -36,3 +36,15 @@ export function checkCitations(answer: string, grounded: string): CitationCheck 
 		invented: cited.filter((t) => !flat.includes(t.replace(/GB|MB|%$/, "")) && !flat.includes(t)),
 	};
 }
+
+/**
+ * Whether a web investigation's answer is grounded (plan 0.010 M2): it must
+ * cite at least one page by URL, and every URL it cites must be one the web
+ * tools returned in this investigation. The question's own text never
+ * grounds it (the person's words are what is being checked).
+ */
+export function checkWebCitations(answer: string, toolResults: string): CitationCheck {
+	const norm = (u: string) => u.replace(/[.,;:!?)\]}>"'`*]+$/, "").replace(/\/$/, "");
+	const cited = [...new Set((answer.match(/https?:\/\/[^\s<>()[\]"'`]+/g) ?? []).map(norm))];
+	return { cited, invented: cited.filter((u) => !toolResults.includes(u)) };
+}

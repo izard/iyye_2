@@ -53,10 +53,15 @@ interface State {
 }
 
 /**
- * Signal kinds recorded but not yet counted (plan 0.011 F4): an uncertain belief has no action until asking
- * about beliefs exists (0.010 M2/M3).
+ * Signal kinds recorded but not yet counted: an intention with no plan and a past dated event have no action
+ * until 0.010 M3 (Iyye-proposed plans, social follow-ups); a claim with no record comes from a shadow role.
  */
-export const JOURNAL_ONLY = new Set(["belief_uncertain"]);
+export const JOURNAL_ONLY = new Set([
+	"intention_unplanned",
+	"event_followup",
+	// Read from Kev's reply review (a shadow role): a shadow answer must never change what Iyye needs or does.
+	"claim_without_record",
+]);
 
 export class MotivationTracker {
 	private readonly d: Required<TrackerDeps>;

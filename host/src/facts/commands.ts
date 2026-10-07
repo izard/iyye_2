@@ -15,6 +15,8 @@
  * - `/facts wrong <id>` — delete the belief outright (owner decision 2), its
  *   stored text too, and suppress the value so the same evidence cannot bring
  *   it back.
+ * - `/facts confirm <id>` — the owner says the belief is right (an answer to
+ *   one of Iyye's questions about an uncertain belief, plan 0.010 M2).
  * - `/facts private <id>`, `/facts share <id>` — override the host's privacy
  *   rules for one belief (plan §3.6).
  */
@@ -24,7 +26,15 @@ import type { Logger } from "../log.ts";
 import type { HindsightClient } from "../memory/hindsight.ts";
 import { getContact, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
-import { type Belief, correctBelief, deleteBelief, evidenceOf, getBelief, searchBeliefs } from "./beliefs.ts";
+import {
+	type Belief,
+	confirmBelief,
+	correctBelief,
+	deleteBelief,
+	evidenceOf,
+	getBelief,
+	searchBeliefs,
+} from "./beliefs.ts";
 import { isPrivate } from "./disclosure.ts";
 import { factSentence, normalizeTerm } from "./extract.ts";
 import { deleteQueuedFactDocs, queueFactDocDeletions } from "./night.ts";
@@ -52,6 +62,7 @@ export class FactsCommand {
 		if (!sub) return this.overview();
 		if (sub === "compare") return this.compare();
 		if (sub === "correct") return this.correct(rest[0] ?? "", rest.slice(1).join(" "), by);
+		if (sub === "confirm") return this.confirm(rest[0] ?? "");
 		if (sub === "wrong") return this.wrong(rest[0] ?? "", by);
 		if (sub === "private" || sub === "share") return this.disclose(rest[0] ?? "", sub);
 		return this.lookup(args.join(" "));
@@ -164,6 +175,20 @@ export class FactsCommand {
 		return how === "private"
 			? `private: ${factSentence({ ...b, negated: b.negated === 1 })} reaches only the people who said it, and you`
 			: `shareable: trusted contacts may be told ${factSentence({ ...b, negated: b.negated === 1 })}, with who said it`;
+	}
+
+	private confirm(ref: string): string {
+		const b = this.resolve(ref);
+		if (typeof b === "string") return b;
+		const now = this.d.now();
+		const r = confirmBelief(this.d.db, b.id, {
+			night: `confirmation:${now.toISOString()}`,
+			maxStep: Number.POSITIVE_INFINITY,
+			now,
+			newId: this.d.newId,
+		});
+		if (typeof r === "string") return r;
+		return `confirmed: ${factSentence({ ...r, negated: r.negated === 1 })} (p ${r.p.toFixed(2)})`;
 	}
 
 	private async wrong(ref: string, by: string): Promise<string> {

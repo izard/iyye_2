@@ -54,10 +54,15 @@ const STOPWORDS = new Set(
 	).split(" "),
 );
 
+/** The content words of a text as stems (stopwords out), the way recall matches them. */
+export function contentStems(text: string): string[] {
+	const words = (text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter((w) => !STOPWORDS.has(w));
+	return [...new Set(words.map((w) => w.slice(0, Math.max(3, w.length - 2))))].slice(0, 24);
+}
+
 /** The lexical query for beliefs: content words only (stems as prefixes, OR-ed); null when there are none. */
 export function beliefQuery(text: string): string | null {
-	const words = (text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter((w) => !STOPWORDS.has(w));
-	const stems = [...new Set(words.map((w) => w.slice(0, Math.max(3, w.length - 2))))].slice(0, 24);
+	const stems = contentStems(text);
 	return stems.length ? stems.map((s) => `"${s}"*`).join(" OR ") : null;
 }
 

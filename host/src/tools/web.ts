@@ -28,6 +28,8 @@ export interface WebBudget {
 	/** Successful web calls allowed per local day: the owner's scope, and each contact's. */
 	owner: number;
 	contact: number;
+	/** Iyye's own background work (plan 0.010 M2): every `iyye:` session shares this one daily budget. */
+	iyye?: number;
 }
 
 export interface WebDeps {
@@ -210,14 +212,17 @@ export function overBudget(d: { db: Db; budget: WebBudget; now?: () => Date }, c
 	const now = (d.now ?? (() => new Date()))();
 	const midnight = new Date(now);
 	midnight.setHours(0, 0, 0, 0);
+	// Background sessions each have their own scope (`iyye:inv:<id>:<n>`): counted per scope they would be
+	// unbounded, so all of Iyye's own work shares one bucket.
+	const own = ctx.principal === "iyye";
 	const used = (
 		d.db
 			.prepare(
-				"SELECT count(*) AS n FROM tool_calls WHERE scope = ? AND toolkit = ? AND outcome = 'ok' AND started_at >= ?",
+				`SELECT count(*) AS n FROM tool_calls WHERE ${own ? "scope LIKE 'iyye:%'" : "scope = ?"} AND toolkit = ? AND outcome = 'ok' AND started_at >= ?`,
 			)
-			.get(ctx.scope, WEB_TOOLKIT, midnight.toISOString()) as { n: number }
+			.get(...(own ? [] : [ctx.scope]), WEB_TOOLKIT, midnight.toISOString()) as { n: number }
 	).n;
-	const limit = ctx.principal === "owner" ? d.budget.owner : d.budget.contact;
+	const limit = own ? (d.budget.iyye ?? 20) : ctx.principal === "owner" ? d.budget.owner : d.budget.contact;
 	return used >= limit
 		? `The web budget for this conversation is used up for today (${limit} calls). Answer without the web, and say so.`
 		: null;

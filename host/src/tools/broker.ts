@@ -57,6 +57,8 @@ export type PrincipalKind = "owner" | "contact" | "iyye";
 
 /** Background sessions of plan steps (`kernel/plans.ts`): read-only, whatever Iyye's own work may do. */
 export const PLAN_STEP_SCOPE = "iyye:plan:";
+/** Investigations' sessions (plan 0.007 S5, 0.010 M2): they read the web, so they never get `reach`. */
+export const INVESTIGATION_SCOPE = "iyye:inv:";
 
 /**
  * Who asked in this turn and where a reply to them goes (plan 0.006): set by
@@ -168,7 +170,10 @@ export class ToolBroker {
 		if (kit.effect === "self") return principal === "owner" || principal === "contact";
 		// A plan step runs a question a contact may have written, approved as a read-only look (0.006 C4): never `reach`.
 		if (kit.effect === "reach")
-			return principal === "iyye" ? !scope.startsWith(PLAN_STEP_SCOPE) : principal === "owner" || trusted;
+			// …nor an investigation: it reads web pages, and a page must never be able to make Iyye write to someone.
+			return principal === "iyye"
+				? !scope.startsWith(PLAN_STEP_SCOPE) && !scope.startsWith(INVESTIGATION_SCOPE)
+				: principal === "owner" || trusted;
 		return principal === "owner";
 	}
 

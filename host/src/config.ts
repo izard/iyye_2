@@ -72,7 +72,7 @@ export interface Config {
 	web: {
 		enabled: boolean;
 		/** Successful web calls per local day: the owner's scope, each contact's. */
-		dailyCalls: { owner: number; contact: number };
+		dailyCalls: { owner: number; contact: number; iyye: number };
 		/** `iyye_2/web`: `searxng/` (the pinned source tree) and `.venv/`. */
 		searxngDir: string;
 		searxngPort: number;
@@ -115,11 +115,13 @@ function list(spec: string, item: RegExp, name: string): string[] {
 	return items;
 }
 
-function dailyCalls(spec: string): { owner: number; contact: number } {
-	const m = /^\s*(\d+)\s*,\s*(\d+)\s*$/.exec(spec);
+function dailyCalls(spec: string): { owner: number; contact: number; iyye: number } {
+	const m = /^\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*(\d+)\s*)?$/.exec(spec);
 	if (!m)
-		throw new ConfigError(`IYYE2_WEB_DAILY_CALLS must look like 200,50 (owner,contact), got ${JSON.stringify(spec)}`);
-	return { owner: Number(m[1]), contact: Number(m[2]) };
+		throw new ConfigError(
+			`IYYE2_WEB_DAILY_CALLS must look like 200,50 or 200,50,20 (owner,contact[,Iyye's own work]), got ${JSON.stringify(spec)}`,
+		);
+	return { owner: Number(m[1]), contact: Number(m[2]), iyye: Number(m[3] ?? 20) };
 }
 
 function window(spec: string): RestWindow {

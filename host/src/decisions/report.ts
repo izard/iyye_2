@@ -226,7 +226,8 @@ function salienceLines(rows: Row[]): string[] {
 function reviewLines(db: Db, rows: Row[], pending: number): string[] {
 	const verdicts = (r: Row) => JSON.parse(r.verdicts_json ?? "{}") as Record<string, string>;
 	const promise = (r: Row) => verdicts(r)[PROMISE_QUESTION.id];
-	// Schemas are never pooled (plan 0.003 K2): the figures are schema 2's; earlier reviews are counted apart.
+	// Schemas are never pooled (plan 0.003 K2) unless the question and the state are the same word for word:
+	// schema 3 (plan 0.010 M2) only added questions, so these two figures count schemas 2 and 3; schema 1 apart.
 	const v2 = rows.filter((r) => r.schema_version >= 2);
 	const v1 = rows.length - v2.length;
 	const out = [

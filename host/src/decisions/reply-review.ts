@@ -31,7 +31,9 @@ import { IdleLoop } from "./idle.ts";
 export const REPLY_REVIEW: Role = {
 	name: "reply_review",
 	// 2 (plan 0.006 C2): adds `claims_arranged`, and the commitments ledger labels every answer.
-	schemaVersion: 2,
+	// 3 (plan 0.010 M2): adds `admits_unknown`, `owner_intention` and `dated_event`, the Kev versions of the M2
+	// detectors (`motivation/detectors.ts`), shadow: nothing reads them; only `/decisions label` labels them.
+	schemaVersion: 3,
 	abstain: { low: 0.35, high: 0.65 },
 	fallback: "none: the identity prompt tells the model not to promise future actions; nothing checks the reply",
 };
@@ -52,6 +54,27 @@ export const CLAIM_QUESTION: NoulQuestion = {
 	id: "claims_arranged",
 	instructions:
 		'The state is a person\'s message and an assistant\'s reply. Does the reply say that the assistant has already set up a reminder or some other future action (for example "I\'ve set a reminder", "I will remind you at 9"), rather than asking for details, offering to do it, or only answering?',
+};
+
+/** Plan 0.010 M2, shadow: the reply says Iyye did not know or could not find the answer. */
+export const UNKNOWN_QUESTION: NoulQuestion = {
+	id: "admits_unknown",
+	instructions:
+		"The state is a person's message and an assistant's reply. Does the reply say the assistant does not know the answer, or could not find or verify it?",
+};
+
+/** Plan 0.010 M2, shadow: the person states an intention to do something concrete (used for the owner only). */
+export const INTENTION_QUESTION: NoulQuestion = {
+	id: "owner_intention",
+	instructions:
+		"The state is a person's message and an assistant's reply. Does the person's message state that they intend or want to do something concrete themselves (not a question, not a request to the assistant)?",
+};
+
+/** Plan 0.010 M2, shadow: the person mentions an event of theirs on a particular date. */
+export const DATED_EVENT_QUESTION: NoulQuestion = {
+	id: "dated_event",
+	instructions:
+		"The state is a person's message and an assistant's reply. Does the person's message mention an event in their own life on a particular day or date (an exam, a trip, an appointment), other than a reminder they ask for?",
 };
 
 /** The commitments the turn that produced this reply created (the ledger fact, plan 0.006 C2), plans included (C4). */
@@ -195,7 +218,13 @@ export class ReplyReviewShadow {
 					subjectRef: next.id,
 					// What was asked and what was delivered: nothing that happened afterwards.
 					state: { message: event ? messageText(event) : "", reply: next.content },
-					questions: [PROMISE_QUESTION, CLAIM_QUESTION],
+					questions: [
+						PROMISE_QUESTION,
+						CLAIM_QUESTION,
+						UNKNOWN_QUESTION,
+						INTENTION_QUESTION,
+						DATED_EVENT_QUESTION,
+					],
 				});
 				if (decision.status === "ok") {
 					// The ledger's fact, a weak label: did that turn create a commitment? The owner's label wins.

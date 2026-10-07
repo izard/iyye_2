@@ -7,8 +7,9 @@
  * read). Iyye's own replies, summaries and step answers are never read here:
  * self-authored text is never evidence of need (the 1.x lesson).
  *
- * M0 computes what the records already hold; the detectors that need a
- * model (unanswered questions, intentions, dated events) come in M2.
+ * M0 computes what the records already hold; M2 adds deterministic detectors
+ * (`detectors.ts`) for recurring questions, intentions and dated events, with
+ * Kev's versions of them in shadow (reply review, schema 3).
  */
 
 import { CLAIM_QUESTION, commitmentsOfReply, REPLY_REVIEW } from "../decisions/reply-review.ts";
@@ -16,6 +17,7 @@ import { factSentence } from "../facts/extract.ts";
 import type { Gap } from "../self/model.ts";
 import type { Db } from "../state/db.ts";
 import { getKv } from "../state/kv.ts";
+import { pastEvents, recurringQuestions, unplannedIntentions } from "./detectors.ts";
 import { OK_SERVICE_STATES, serviceStatuses } from "./services.ts";
 
 export const MOTIVATIONS = ["self_preservation", "curiosity", "agency", "social"] as const;
@@ -234,7 +236,30 @@ export function collectSignals(s: SignalSources): Signal[] {
 			text: `unsure (p ${b.p.toFixed(2)}) whether ${factSentence({ ...b, negated: b.negated === 1 })}`,
 		});
 
+	// The owner's recurring unanswered question (M2): the owner's two messages are the evidence.
+	for (const q of recurringQuestions(db, s.now))
+		add({
+			motivation: "curiosity",
+			kind: "question_recurring",
+			cluster: q.cluster,
+			evidence: q.evidence,
+			weight: 0.6,
+			observedAt: q.at,
+			text: `the owner asked again, and Iyye did not know: ${q.topic.slice(0, 120)}`,
+		});
+
 	// ---------------------------------------------------------------- agency
+	// An intention the owner stated with no plan (M2; recorded only until M3 proposes plans).
+	for (const i of unplannedIntentions(db, s.now))
+		add({
+			motivation: "agency",
+			kind: "intention_unplanned",
+			cluster: i.cluster,
+			evidence: i.evidence,
+			weight: 0.4,
+			observedAt: i.at,
+			text: `the owner said: ${i.text.slice(0, 120)}`,
+		});
 	for (const p of db
 		.prepare(
 			"SELECT id, intent, state, steps_json, updated_at FROM plans WHERE state IN ('suspended', 'active', 'proposed')",
@@ -274,6 +299,17 @@ export function collectSignals(s: SignalSources): Signal[] {
 		});
 
 	// ---------------------------------------------------------------- social
+	// A dated event someone mentioned, now past (M2; recorded only until M3 writes follow-ups).
+	for (const e of pastEvents(db, s.now))
+		add({
+			motivation: "social",
+			kind: "event_followup",
+			cluster: e.cluster,
+			evidence: e.evidence,
+			weight: 0.4,
+			observedAt: e.at,
+			text: e.text,
+		});
 	for (const j of db
 		.prepare(
 			// Not waiting any more once a later message in that conversation was answered (M0 tuning, 2026-10-06:

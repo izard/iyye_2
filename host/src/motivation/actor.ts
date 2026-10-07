@@ -29,6 +29,8 @@
  *   motivation can be paused (`/pause <motivation>`).
  */
 
+import { getBelief } from "../facts/beliefs.ts";
+import { type BeliefReader, beliefLine, visibleEvidence } from "../facts/disclosure.ts";
 import type { Logger } from "../log.ts";
 import { relationIn, type SelfModel } from "../self/model.ts";
 import { getContact } from "../state/contacts.ts";
@@ -37,8 +39,10 @@ import { getKv, setKv } from "../state/kv.ts";
 import { MOTIVATIONS, type Motivation, type Signal } from "./signals.ts";
 
 const PAUSED_KEY = "motivation.paused";
+/** Questions go to the owner, who sees every belief with all its evidence. */
+const OWNER_READER: BeliefReader = { principal: "owner", personId: "owner", ownScopes: ["owner"], trusted: true };
 
-export type ActionKind = "ask" | "notify" | "maintain";
+export type ActionKind = "ask" | "notify" | "maintain" | "investigate";
 
 export interface ActorDeps {
 	db: Db;
@@ -53,6 +57,8 @@ export interface ActorDeps {
 	now?: () => Date;
 	newId?: () => string;
 	quietMs?: number;
+	/** Conversation investigations opened per day (M2). */
+	investigationsPerDay?: number;
 	noticeCooldownMs?: number;
 	noticesPerDay?: number;
 	questionsPerDay?: number;
@@ -85,7 +91,7 @@ export interface SelfQuestion {
 	question: string;
 	opportunity_id: string | null;
 	asked_at: string;
-	status: "asked" | "answered" | "accepted" | "dismissed" | "expired";
+	status: "asked" | "answered" | "accepted" | "dismissed" | "expired" | "resolved";
 	answer_text: string | null;
 	answer_event_id: string | null;
 	answered_at: string | null;
@@ -95,8 +101,11 @@ export interface SelfQuestion {
 /** The action a motivation's strongest signal calls for, or null (investigations and social act elsewhere). */
 export function actionFor(motivation: Motivation, kind: string): ActionKind | null {
 	if (motivation === "social") return null;
-	if (motivation === "curiosity")
-		return kind === "self_missing" || kind === "self_contradicted" ? "ask" : kind === "self_stale" ? "notify" : null;
+	if (motivation === "curiosity") {
+		if (kind === "self_missing" || kind === "self_contradicted" || kind === "belief_uncertain") return "ask";
+		if (kind === "question_recurring") return "investigate"; // the investigations loop runs it (M2)
+		return kind === "self_stale" ? "notify" : null;
+	}
 	if (motivation === "self_preservation") return kind === "model_gave_up" ? "maintain" : "notify";
 	return "notify";
 }
@@ -111,6 +120,7 @@ export class MotivationActor {
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
 			quietMs: 180_000,
+			investigationsPerDay: 2,
 			noticeCooldownMs: 6 * 3_600_000,
 			noticesPerDay: 3,
 			questionsPerDay: 3,
@@ -194,6 +204,10 @@ export class MotivationActor {
 			if (recent) return;
 		}
 		const at = now.toISOString();
+		if (action === "investigate") {
+			this.openInvestigation(o, now);
+			return;
+		}
 		// Clusters are unique: a settled acting row of a cluster without an episode (a plan, a self-model field)
 		// opens again once its wait is over (a notice's cooldown, a question's week).
 		const old = this.d.db
@@ -244,15 +258,54 @@ export class MotivationActor {
 			);
 	}
 
+	/**
+	 * The owner's recurring question becomes an investigation (M2): the S5 loop runs it with the web toolkit
+	 * and its own citation check. At most `investigationsPerDay`, so a chatty day cannot become a crawl.
+	 */
+	private openInvestigation(o: Opening, now: Date): void {
+		const today = startOfDay(now);
+		const n = (
+			this.d.db
+				.prepare("SELECT count(*) AS n FROM opportunities WHERE domain = 'conversation' AND created_at >= ?")
+				.get(today) as { n: number }
+		).n;
+		if (n >= this.d.investigationsPerDay) return;
+		const at = now.toISOString();
+		const topic = o.signal.text.replace(/^.*?did not know: /, "");
+		this.d.db
+			.prepare(
+				`INSERT OR IGNORE INTO opportunities (id, cluster, domain, evidence_json, evidence_text, question, status, created_at, updated_at,
+					motivation, signal_kind, action_kind)
+				 VALUES (?, ?, 'conversation', ?, ?, ?, 'open', ?, ?, 'curiosity', ?, 'investigate')`,
+			)
+			.run(
+				this.d.newId(),
+				o.signal.cluster,
+				JSON.stringify(o.signal.evidence),
+				o.signal.text,
+				topic,
+				at,
+				at,
+				o.signal.kind,
+			);
+	}
+
 	/** The condition cleared: the cluster is no longer among the signals. */
 	private settleCleared(current: ReadonlySet<string>, now: Date): void {
 		for (const row of this.d.db
 			.prepare(
-				"SELECT * FROM opportunities WHERE (status IN ('open', 'running') AND action_kind IN ('notify', 'maintain')) OR (status = 'open' AND action_kind = 'ask')",
+				"SELECT * FROM opportunities WHERE status IN ('open', 'running') AND action_kind IN ('notify', 'maintain', 'ask')",
 			)
 			.all() as ActingRow[]) {
 			if (current.has(row.cluster)) continue;
 			this.update(row.id, { status: "settled", answer: `cleared at ${now.toISOString()}` });
+			// A question whose condition cleared another way (/self set, a belief no longer in doubt) frees the
+			// one-at-a-time slot at once, instead of waiting out its day.
+			this.d.db
+				.prepare(
+					"UPDATE self_questions SET status = 'resolved', settled_at = ? WHERE opportunity_id = ? AND status IN ('asked', 'answered')",
+				)
+				.run(now.toISOString(), row.id);
 		}
 	}
 
@@ -334,6 +387,13 @@ export class MotivationActor {
 
 	private questionText(field: string, id: string): string {
 		const ref = id.slice(0, 8);
+		if (field.startsWith("belief:")) {
+			const b = getBelief(this.d.db, field.slice("belief:".length));
+			const ev = b ? visibleEvidence(this.d.db, b, OWNER_READER) : null;
+			const line = b && ev ? beliefLine(this.d.db, b, ev, OWNER_READER, this.d.now()) : "(a belief that is gone)";
+			const bref = field.slice("belief:".length, "belief:".length + 8);
+			return `I am not sure about this: ${line}. Is it right? Answer with /facts confirm ${bref}, /facts correct ${bref} <the right value>, or /facts wrong ${bref}.`;
+		}
 		const confirm = `confirm here in the web chat with /self accept ${ref}`;
 		if (field === "place:stated")
 			return `A question about myself: where am I? Tell me where you live, or where this computer is (a city or an area is enough), and ${confirm}.`;
@@ -389,7 +449,11 @@ export class MotivationActor {
 	accept(ref: string, text: string, by: string): string {
 		const q = this.findQuestion(ref);
 		if (typeof q === "string") return q;
-		if (q.status === "accepted" || q.status === "dismissed" || q.status === "expired")
+		if (q.field.startsWith("belief:")) {
+			const bref = q.field.slice("belief:".length, "belief:".length + 8);
+			return `that question is about a belief: answer with /facts confirm ${bref}, /facts correct ${bref} <the right value>, or /facts wrong ${bref}`;
+		}
+		if (q.status === "accepted" || q.status === "dismissed" || q.status === "expired" || q.status === "resolved")
 			return `that question is ${q.status}`;
 		const now = this.d.now();
 		const answer = (text || q.answer_text || "").trim().slice(0, 300);
@@ -480,6 +544,7 @@ export class MotivationActor {
 /** The self-model field a question is about, from the opportunity's cluster. */
 function fieldOf(row: ActingRow): string | null {
 	const c = row.cluster.split("@")[0]!;
+	if (c.startsWith("belief:")) return c;
 	if (row.signal_kind === "self_contradicted" && c.startsWith("self:place:")) return "place:estimate";
 	if (c === "self:place:stated") return "place:stated";
 	if (c.startsWith("self:social:relation:")) return c.slice("self:".length);
@@ -513,4 +578,48 @@ function startOfDay(d: Date): string {
 export function motivationNamed(word: string): Motivation | null {
 	const m = word.replace("-", "_");
 	return (MOTIVATIONS as readonly string[]).includes(m) ? (m as Motivation) : null;
+}
+
+/**
+ * `/forget` (gate #15): the motivations' records that may quote a forgotten
+ * person's words. Opportunities of these clusters go, with their questions;
+ * the notices and questions sent about them are redacted where they were
+ * sent (the actions and the web chat feed); and the signals of these clusters
+ * are removed from the kept motivation samples. Call inside the forget
+ * transaction.
+ */
+export function forgetMotivationRecords(db: Db, clusters: readonly string[], redacted: string): void {
+	if (clusters.length === 0) return;
+	const wanted = new Set(clusters);
+	const marks = clusters.map(() => "?").join(", ");
+	const rows = db.prepare(`SELECT id FROM opportunities WHERE cluster IN (${marks})`).all(...clusters) as {
+		id: string;
+	}[];
+	for (const { id } of rows) {
+		const questions = db.prepare("SELECT id FROM self_questions WHERE opportunity_id = ?").all(id) as {
+			id: string;
+		}[];
+		const keys = [`notice:motivation:${id}:%`, ...questions.map((q) => `notice:question:${q.id}`)];
+		for (const key of keys) {
+			db.prepare(
+				"UPDATE web_feed SET text = ? WHERE action_id IN (SELECT id FROM actions WHERE idempotency_key LIKE ?)",
+			).run(redacted, key);
+			db.prepare("UPDATE actions SET content = ? WHERE content IS NOT NULL AND idempotency_key LIKE ?").run(
+				redacted,
+				key,
+			);
+		}
+		db.prepare("DELETE FROM self_questions WHERE opportunity_id = ?").run(id);
+		db.prepare("DELETE FROM opportunities WHERE id = ?").run(id);
+	}
+	for (const s of db
+		.prepare(
+			"SELECT id, signals_json FROM motivation_samples WHERE signals_json LIKE '%belief:%' OR signals_json LIKE '%plan:%'",
+		)
+		.all() as { id: string; signals_json: string }[]) {
+		const signals = JSON.parse(s.signals_json) as { cluster: string }[];
+		const kept = signals.filter((x) => !wanted.has(x.cluster));
+		if (kept.length !== signals.length)
+			db.prepare("UPDATE motivation_samples SET signals_json = ? WHERE id = ?").run(JSON.stringify(kept), s.id);
+	}
 }

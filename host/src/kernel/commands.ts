@@ -121,7 +121,7 @@ const HELP = [
 	"/sent — messages Iyye sent to people for you, with their delivery",
 	"/self — what Iyye knows about itself (hardware, power, sleep, versions, place, people) and its gaps; /self set place|expected-hardware <text>, /self relation <contact> <text>",
 	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened (shadow)",
-	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts correct <id> <text>, /facts wrong <id>",
+	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts confirm <id>, /facts correct <id> <text>, /facts wrong <id>; /facts private|share <id>",
 	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps",
 	"/pause initiative, /resume initiative — stop or allow background work",
 	"/pause <motivation>, /resume <motivation> — self-preservation, curiosity, agency or social: stop or allow what it opens and does",
