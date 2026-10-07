@@ -151,10 +151,15 @@ export class NightWork {
 		});
 		for (const bank of left) this.banksReady.delete(bank);
 		if (this.d.facts) {
-			const f = await this.d.facts.run(shouldStop);
-			this.d.log.info("memory: facts merged", { merged: f.merged, stored: f.stored, stopped: f.stopped });
-			if (f.stopped === "stopped") return { kind: "stopped", ...n };
-			if (f.stopped) return { kind: "blocked", reason: f.stopped, ...n };
+			try {
+				const f = await this.d.facts.run(shouldStop);
+				this.d.log.info("memory: facts merged", { merged: f.merged, stored: f.stored, stopped: f.stopped });
+				if (f.stopped === "stopped") return { kind: "stopped", ...n };
+				if (f.stopped) return { kind: "blocked", reason: f.stopped, ...n };
+			} catch (err) {
+				// A fault in the fact ledger never costs the night: the episodes' own transfer still runs.
+				this.d.log.warn("memory: the fact ledger failed; the night goes on", { error: (err as Error).message });
+			}
 		}
 		for (;;) {
 			const forgetting = banksBeingForgotten(this.d.db);

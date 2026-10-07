@@ -13,7 +13,8 @@
  * - **Independence:** a source that already supports a belief adds a row of
  *   weight 0 (a person repeating themselves); Iyye's own words never add to
  *   or lower a belief another source holds (weight 0), and create one only
- *   with their prior (plan §3.3). Exit gates #2, #12.
+ *   when they cite a source (a web result, a measurement), with that prior;
+ *   uncited, they stay stored text and create no belief. Exit gates #2, #12.
  * - **The nightly cap:** one night's updates to an existing belief move its
  *   log-odds by at most `maxStep`; the evidence that creates a belief applies
  *   its prior in full.
@@ -285,6 +286,11 @@ export function mergeFact(db: Db, f: StmFact, o: MergeOptions): MergeResult {
 				.all(f.fact_key, f.negated) as Belief[]
 		).find((b) => containsWords(b.object_norm, norm) || containsWords(norm, b.object_norm)) ??
 		null;
+	if (!same && f.modality === "told_by_iyye" && !f.cited) {
+		// Iyye's own uncited words create no belief (HLD §11.2): they stay stored text, labelled as Iyye's.
+		db.prepare("UPDATE stm_facts SET state = 'merged', merged_at = ?, belief_id = NULL WHERE id = ?").run(at, f.id);
+		return { beliefId: null, relation: "new", touched: [] };
+	}
 	if (same) {
 		beliefId = same.id;
 		relation = "corroborates";

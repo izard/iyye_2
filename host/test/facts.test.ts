@@ -533,6 +533,45 @@ describe("F2: beliefs and the nightly merge", () => {
 		assert.ok(getBelief(db, r1.beliefId!)!.p > p1);
 	});
 
+	test("#12: Iyye's own uncited words create no belief; a cited relay does, with its prior", () => {
+		const db = freshDb();
+		const uncited = mergeFact(
+			db,
+			fact(db, {
+				id: "f1",
+				source: "iyye",
+				scope: "owner",
+				modality: "told_by_iyye",
+				object: "12 years old",
+				fact_key: "contact:jacob|age",
+				p: 0.4,
+			}),
+			opts(),
+		);
+		assert.equal(uncited.beliefId, null);
+		assert.equal((db.prepare("SELECT count(*) AS n FROM beliefs").get() as { n: number }).n, 0);
+		assert.equal(
+			(db.prepare("SELECT state FROM stm_facts WHERE id = 'f1'").get() as { state: string }).state,
+			"merged",
+			"still stored as Iyye's words",
+		);
+		const cited = mergeFact(
+			db,
+			fact(db, {
+				id: "f2",
+				source: "iyye",
+				scope: "owner",
+				modality: "told_by_iyye",
+				cited: "web search",
+				object: "1933",
+				fact_key: "bunin|other:won nobel prize in",
+				p: 0.6,
+			}),
+			opts(),
+		);
+		assert.ok(Math.abs(getBelief(db, cited.beliefId!)!.p - 0.6) < 1e-9);
+	});
+
 	test("#2 correction: a later value of a single-valued key closes the old belief and keeps its history; the same day contradicts", () => {
 		const db = freshDb();
 		const key = "owner|lives_in";
@@ -881,6 +920,125 @@ describe("F2: beliefs and the nightly merge", () => {
 				"day",
 				"nothing transferred",
 			);
+		});
+
+		test("a fact that breaks the merge is left out; a ledger that throws never stops the episodes' transfer", async () => {
+			const db = freshDb();
+			db.exec(
+				"CREATE TRIGGER boom BEFORE INSERT ON beliefs WHEN NEW.object = 'boom' BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+			);
+			fact(db, { id: "f1", source: "owner", scope: "owner", object: "boom", fact_key: "owner|likes" });
+			fact(db, {
+				id: "f2",
+				source: "owner",
+				scope: "owner",
+				object: "jazz",
+				fact_key: "owner|likes",
+				said_at: new Date(T0.getTime() + 1).toISOString(),
+			});
+			const n = new FactNight({
+				db,
+				ltm: ltm.client(),
+				gate,
+				complete: scripted({}),
+				log: silentLogger,
+				extract: false,
+				merge: true,
+				maxStep: 2,
+				now: () => T0,
+				newId,
+			});
+			const out = await n.run(() => false);
+			assert.equal(out.merged, 1);
+			assert.deepEqual(
+				(db.prepare("SELECT id, state FROM stm_facts ORDER BY id").all() as { id: string; state: string }[]).map(
+					(r) => [r.id, r.state],
+				),
+				[
+					["f1", "dropped"],
+					["f2", "merged"],
+				],
+			);
+			turn(db, { id: "e1", who: "owner", text: "My dentist is Dr. Weber." });
+			const night = new NightWork({
+				db,
+				ltm: ltm.client(),
+				gate: { ...gate, problem: null } as never,
+				log: silentLogger,
+				facts: {
+					run: async () => {
+						throw new Error("a bug in the ledger");
+					},
+				},
+			});
+			assert.equal((await night.run(() => false)).kind, "done");
+			assert.equal(
+				(db.prepare("SELECT state FROM stm_episodes WHERE event_id = 'e1'").get() as { state: string }).state,
+				"completed",
+			);
+		});
+
+		test("#15: a /forget that lands during the night: the person's facts are neither merged nor stored, their bank not re-created", async () => {
+			const db = freshDb();
+			turn(db, { id: "e1", who: "jacob", text: "I fence foil.", at: T0 });
+			turn(db, { id: "e2", who: "owner", text: "Julia plays the violin.", at: new Date(T0.getTime() + 1000) });
+			fact(db, {
+				id: "fj",
+				event_id: "e1",
+				source: "jacob",
+				scope: "contact:jacob",
+				object: "foil fencing",
+				fact_key: "contact:jacob|practises",
+				said_at: T0.toISOString(),
+			});
+			fact(db, {
+				id: "fo",
+				event_id: "e2",
+				source: "owner",
+				scope: "owner",
+				object: "the violin",
+				fact_key: "julia|plays",
+				said_at: new Date(T0.getTime() + 1000).toISOString(),
+			});
+			let forgotten = false;
+			// The owner forgets Jacob while the night looks up the first fact's neighbours (before its merge).
+			const client = ltm.client();
+			const hooked = {
+				ensureBank: client.ensureBank.bind(client),
+				retain: client.retain.bind(client),
+				deleteDocument: client.deleteDocument.bind(client),
+				recall: async (...a: Parameters<typeof client.recall>) => {
+					if (!forgotten) {
+						forgotten = true;
+						const t = forgetTarget(db, getContact(db, "jacob")!);
+						assert.ok(typeof t !== "string");
+						forgetRecords(db, t, "owner_web", new Date(T0.getTime() + 5000).toISOString());
+					}
+					return client.recall(...a).catch(() => []);
+				},
+			};
+			const relation = { ask: async () => null };
+			const out = await new FactNight({
+				db,
+				ltm: hooked,
+				gate,
+				complete: scripted({}),
+				log: silentLogger,
+				extract: false,
+				merge: true,
+				maxStep: 2,
+				now: () => T0,
+				newId,
+				relation,
+			}).run(() => false);
+			assert.ok(forgotten);
+			assert.equal(out.merged, 1);
+			assert.equal(
+				(db.prepare("SELECT count(*) AS n FROM belief_evidence WHERE source = 'jacob'").get() as { n: number }).n,
+				0,
+			);
+			assert.ok(!ltm.banks.has("iyye-contact-jacob"), "their bank is not re-created");
+			assert.ok(![...ltm.docs.values()].some((d) => d.bank === "iyye-contact-jacob"));
 		});
 
 		test("F3 shadow: the relation role is asked about the nearest stored belief of another key, and never changes the merge", async () => {

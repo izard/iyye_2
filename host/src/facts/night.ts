@@ -29,8 +29,10 @@ import { OBSERVATIONS_MISSION, REPLY_MISSION, RETAIN_MISSION } from "../memory/n
 import { SPEAKER_IYYE, SPEAKER_PERSON, SPEAKER_PROBE } from "../memory/provenance.ts";
 import { getContact, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
+import { getEvent } from "../state/events.ts";
 import { getKv, setKv } from "../state/kv.ts";
 import { IYYE_SCOPE } from "../state/stm.ts";
+import { isForgotten } from "../state/tombstones.ts";
 import { type Belief, getBelief, mergeFact } from "./beliefs.ts";
 import { factSentence } from "./extract.ts";
 import { type Complete, extractPendingAtNight } from "./extractor.ts";
@@ -160,22 +162,35 @@ export class FactNight {
 		const facts = this.d.db
 			.prepare("SELECT * FROM stm_facts WHERE state = 'day' ORDER BY said_at, created_at")
 			.all() as StmFact[];
-		for (const f of facts) {
+		for (const listed of facts) {
 			if (shouldStop()) return { ...out, stopped: "stopped" };
-			if (this.d.relation) await this.askRelation(f);
-			this.d.db.transaction(() =>
-				mergeFact(this.d.db, f, { night, maxStep: this.d.maxStep, now: this.d.now(), newId: this.d.newId }),
-			)();
-			out.merged++;
+			try {
+				if (this.d.relation && this.current(listed.id, "day")) await this.askRelation(listed);
+				// Read again right before the merge (as the night does): a /forget may have landed meanwhile.
+				const f = this.current(listed.id, "day");
+				if (!f) continue;
+				this.d.db.transaction(() =>
+					mergeFact(this.d.db, f, { night, maxStep: this.d.maxStep, now: this.d.now(), newId: this.d.newId }),
+				)();
+				out.merged++;
+			} catch (err) {
+				// One bad fact never stops the night: it is left out, and the episodes' own transfer still runs.
+				this.d.db.prepare("UPDATE stm_facts SET state = 'dropped' WHERE id = ? AND state = 'day'").run(listed.id);
+				this.d.log.warn("facts: merging a fact failed; it is left out", {
+					id: listed.id,
+					error: (err as Error).message,
+				});
+			}
 		}
 		const toStore = this.d.db
-			.prepare("SELECT * FROM stm_facts WHERE state = 'merged' AND stored_at IS NULL ORDER BY said_at")
-			.all() as StmFact[];
-		const forgetting = banksBeingForgotten(this.d.db);
-		for (const f of toStore) {
+			.prepare("SELECT id FROM stm_facts WHERE state = 'merged' AND stored_at IS NULL ORDER BY said_at")
+			.all() as { id: string }[];
+		for (const { id } of toStore) {
 			if (shouldStop()) return { ...out, stopped: "stopped" };
-			const bank = bankFor(f.scope);
-			if (!bank || forgetting.has(bank)) continue;
+			const f = this.current(id, "merged");
+			const bank = f ? bankFor(f.scope) : null;
+			// The forgetting set is read each time: storing would re-create a bank being deleted.
+			if (!f || f.stored_at || !bank || banksBeingForgotten(this.d.db).has(bank)) continue;
 			try {
 				await this.store(bank, f);
 				this.d.db.prepare("UPDATE stm_facts SET stored_at = ? WHERE id = ?").run(this.d.now().toISOString(), f.id);
@@ -187,6 +202,19 @@ export class FactNight {
 			}
 		}
 		return out;
+	}
+
+	/** The fact as it is now, if it is still in the expected state and its scope was not forgotten since it was said. */
+	private current(id: string, state: "day" | "merged"): (StmFact & { stored_at: string | null }) | null {
+		const f = this.d.db.prepare("SELECT * FROM stm_facts WHERE id = ? AND state = ?").get(id, state) as
+			| (StmFact & { stored_at: string | null })
+			| undefined;
+		if (!f) return null;
+		if (f.scope !== IYYE_SCOPE) {
+			const receivedAt = getEvent(this.d.db, f.event_id)?.received_at ?? f.said_at;
+			if (isForgotten(this.d.db, f.scope, receivedAt)) return null;
+		}
+		return f;
 	}
 
 	/** F3 shadow: the fact's nearest stored beliefs of another key, from earlier nights' structured facts. */

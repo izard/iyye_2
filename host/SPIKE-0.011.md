@@ -22,6 +22,7 @@
 | v3 | gemma-4-26B | closed, prompt v2 + host fixes | 0.92 | 0.69 | 97 | 3 | 5 of 10 | 5.6 s / 32 s |
 | v4 | gemma-4-E4B | the final code (after the real-night fixes, §5) | 0.77 | 0.79 | 65 | 1 | 9 of 10 | 5.0 s / 44 s (the live host busy) |
 
+- **These are in-sample numbers.** The prompt and the host rules were tuned on the same 49 items, and the labels are Claude's. Expect lower numbers on new turns: the comparison week (F2) and the owner's `/facts correct|wrong` are the held-out check.
 - **Precision after review (v3, E4B):** of the 14 kept facts that matched no label, 9 are true but unlabelled: the owner is named Alex, works at Nvidia; the MacBook has 128 GB; macOS, Pi and llama.cpp versions from findings; what Iyye told about Bunin and the good-night message. 5 are junk, all from questions or requests ("the owner has family", "the owner has telegram accounts", a greeting request as a fact). That makes reviewed precision ≈ 0.92.
 - **Grounding drops:** few, and the right ones. "An unknown value" ×2 (from a question: "Jacob | age | unknown") and one name the source did not contain. In v1, two of Iyye's replies were dropped wrongly: the reply had `**350.8 GB**` and the model quoted it without the Markdown. Fixed (quotes match without Markdown emphasis).
 - **Russian:** with the exonym rule (a name no transliteration finds is accepted only when the Cyrillic quote names something), 5 of the 6 synthetic Russian facts are kept and correct. «Хёэнкирхен» → "Höhenkirchen" is kept, and one hedge is missed.
