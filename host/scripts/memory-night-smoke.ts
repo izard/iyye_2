@@ -8,13 +8,19 @@
  * LTM the way a day turn does. Free scratch ports and a scratch state dir;
  * never touches ~/.iyye2 or a running host.
  *
- *   node scripts/memory-night-smoke.ts <scratch-dir> --models-from <HF_HOME> [model] [--no-thinking]
+ *   node scripts/memory-night-smoke.ts <scratch-dir> --models-from <HF_HOME> [model] [--no-thinking] [--facts]
+ *
+ * `--facts` (plan 0.011) also runs the fact ledger's night first: extraction
+ * on the real model, the merge into beliefs, the structured facts stored
+ * verbatim, then a tag-filtered recall and a document deletion on the real API.
  */
 
 import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { loadConfig, PROJECT_ROOT } from "../src/config.ts";
+import { routerComplete } from "../src/facts/extractor.ts";
+import { FactNight, STRUCTURED_TAG } from "../src/facts/night.ts";
 import { DeviceSlot } from "../src/kernel/device.ts";
 import { consoleLogger } from "../src/log.ts";
 import { MemoryGate } from "../src/memory/gate.ts";
@@ -39,6 +45,7 @@ if (!scratch || flag !== "--models-from" || !modelsFrom) {
 }
 const model = modelArg && !modelArg.startsWith("--") ? modelArg : "gemma-4-E4B";
 const thinking = !process.argv.includes("--no-thinking");
+const withFacts = process.argv.includes("--facts");
 const stateDir = join(scratch, "state");
 mkdirSync(join(stateDir, "memory"), { recursive: true });
 if (!existsSync(join(stateDir, "memory", "hf")))
@@ -167,7 +174,19 @@ try {
 		},
 	};
 	const t1 = Date.now();
-	const outcome = await new NightWork({ db, ltm, gate: timed, log, thinking }).run(() => false);
+	const facts = withFacts
+		? new FactNight({
+				db,
+				ltm,
+				gate: timed,
+				complete: routerComplete(router.url),
+				log,
+				extract: true,
+				merge: true,
+				maxStep: 2,
+			})
+		: null;
+	const outcome = await new NightWork({ db, ltm, gate: timed, log, thinking, facts }).run(() => false);
 	console.log(`night: ${JSON.stringify(outcome)} in ${secs(t1)}`);
 	console.log(
 		`episodes: ${(db.prepare("SELECT user_text, state FROM stm_episodes ORDER BY said_at").all() as { user_text: string; state: string }[]).map((e) => `${e.state} ← ${e.user_text.slice(0, 40)}`).join("\n          ")}`,
@@ -201,6 +220,38 @@ try {
 				.map((i) => `[${i.said}] ${i.text.slice(0, 80)}`)
 				.join(" | ")}`,
 		);
+	}
+	if (withFacts) {
+		const beliefs = db
+			.prepare("SELECT id, fact_key, object, p, state, valid_to FROM beliefs ORDER BY fact_key")
+			.all() as {
+			id: string;
+			fact_key: string;
+			object: string;
+			p: number;
+			state: string;
+			valid_to: string | null;
+		}[];
+		console.log(`beliefs (${beliefs.length}):`);
+		for (const b of beliefs)
+			console.log(
+				`  ${b.p.toFixed(2)} ${b.state}${b.valid_to ? ` until ${b.valid_to}` : ""}  ${b.fact_key} = ${b.object}`,
+			);
+		const tagged = await ltm.recall("iyye-owner", "Julia violin", 400, { tags: [STRUCTURED_TAG] });
+		// Consolidation builds observations from structured facts and they inherit the tag (seen 2026-10-07):
+		// the stored facts themselves are the `fact:` documents.
+		const stored = tagged.filter((t) => t.document_id?.startsWith("fact:"));
+		console.log(
+			`tag-filtered recall: ${tagged.length} item(s), ${stored.length} stored fact(s): ${stored.map((t) => t.text.slice(0, 80)).join(" | ")}`,
+		);
+		if (!stored.length) violations++;
+		const one = stored[0]?.document_id;
+		if (one) {
+			await ltm.deleteDocument("iyye-owner", one);
+			const after = await ltm.recall("iyye-owner", "Julia violin", 400, { tags: [STRUCTURED_TAG] });
+			if (after.some((t) => t.document_id === one)) violations++;
+			console.log(`deleted ${one}: ${after.some((t) => t.document_id === one) ? "STILL THERE" : "gone"}`);
+		}
 	}
 	console.log(
 		violations === 0

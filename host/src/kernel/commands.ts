@@ -68,6 +68,8 @@ export interface CommandContext {
 		dismiss(ref: string): string;
 	} | null;
 	motivationReport?: (() => string) | null;
+	/** /facts [<query> | compare | correct <id> <text> | wrong <id>] (plan 0.011). */
+	facts?: { command(args: string[], by: string): string | Promise<string> } | null;
 	/** /opportunities: findings that raised a question and their investigations (plan 0.007 S5). */
 	opportunities?: (() => string) | null;
 	/** /domains, /domain enable|disable <name> (plan 0.007 S4). */
@@ -119,6 +121,7 @@ const HELP = [
 	"/sent — messages Iyye sent to people for you, with their delivery",
 	"/self — what Iyye knows about itself (hardware, power, sleep, versions, place, people) and its gaps; /self set place|expected-hardware <text>, /self relation <contact> <text>",
 	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened (shadow)",
+	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts correct <id> <text>, /facts wrong <id>",
 	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps",
 	"/pause initiative, /resume initiative — stop or allow background work",
 	"/pause <motivation>, /resume <motivation> — self-preservation, curiosity, agency or social: stop or allow what it opens and does",
@@ -162,6 +165,7 @@ const COMMANDS = new Set([
 	"/sent",
 	"/self",
 	"/motivation",
+	"/facts",
 	"/plan",
 	"/domain",
 	"/pause",
@@ -265,6 +269,11 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			return {
 				handled: true,
 				reply: ctx.motivationReport ? ctx.motivationReport() : "motivations are not available here",
+			};
+		case "/facts":
+			return {
+				handled: true,
+				reply: ctx.facts ? await ctx.facts.command(args, ctx.issuer) : "facts are not available here",
 			};
 		case "/sent":
 			return { handled: true, reply: ctx.sentReport ? ctx.sentReport() : "sending is not available here" };

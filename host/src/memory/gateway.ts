@@ -15,6 +15,8 @@
  * - Hindsight down or slow: the turn goes on with STM only. Nothing is invented.
  */
 
+import { factSentence } from "../facts/extract.ts";
+import { searchFacts } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
 import { accountsOf, getContact, linkOf, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
@@ -75,6 +77,8 @@ const ITEM_CHARS = 400;
  * not know who "we" or "my son" is, so a true match can score low.
  */
 export const STRONG_RELEVANCE = 0.3;
+/** Today's structured facts offered per recall (plan 0.011 F1). */
+const FACT_ITEMS = 3;
 /** Items a bank about a person the question names contributes regardless of score. */
 const NAMED_ITEMS = 3;
 
@@ -182,6 +186,18 @@ export class MemoryGateway {
 							? `Your day summary: ${clip(e.user_text)}`
 							: `${reader.principal === "owner" && (e.scope === reader.scope || this.ownAccount(e.scope)) ? "Owner" : "They"} said: ${clip(e.user_text)} / You replied: ${clip(e.reply_text)}`,
 		}));
+		// Today's structured facts (plan 0.011 F1), scoped exactly like the episodes they came from.
+		for (const f of searchFacts(this.d.db, scopes, query, FACT_ITEMS)) {
+			items.push({
+				source: "today",
+				said: f.modality === "told_by_iyye" ? "iyye" : f.modality === "measured" ? "probe" : "person",
+				from: f.scope === reader.scope ? null : this.label(f.scope),
+				when: f.said_at,
+				text: clip(
+					`Fact: ${factSentence({ ...f, negated: f.negated === 1 })}${f.hedged ? " (said with doubt)" : ""}`,
+				),
+			});
+		}
 		if (!this.d.ltm || !this.d.ltmReady()) return { items, ltm: false };
 		if (!query.trim()) return { items, ltm: true };
 		const asked = this.queryFor(reader, query);

@@ -23,6 +23,7 @@ import { ensureOwnerToken, WebSessions } from "./channels/web/auth.ts";
 import { WebServer } from "./channels/web/server.ts";
 import { ConfigError, loadConfig, PROJECT_ROOT } from "./config.ts";
 import { DecisionClient } from "./decisions/client.ts";
+import { FactRelation } from "./decisions/fact-relation.ts";
 import { InitiativeShadow } from "./decisions/initiative.ts";
 import { MemorySalience } from "./decisions/memory-salience.ts";
 import { ObservationImportance } from "./decisions/observation-importance.ts";
@@ -30,6 +31,9 @@ import { ReplyReviewShadow } from "./decisions/reply-review.ts";
 import { decisionsReport, labelDecision, roleReport } from "./decisions/report.ts";
 import { DecisionService } from "./decisions/service.ts";
 import { ToolkitSelectionShadow, ToolkitSelector } from "./decisions/toolkit-selection.ts";
+import { FactsCommand } from "./facts/commands.ts";
+import { FactExtractor, routerComplete } from "./facts/extractor.ts";
+import { FactNight } from "./facts/night.ts";
 import { createLocalModelRuntime, thinkingLevelFor } from "./integration/pi/runtime.ts";
 import { PiConversations } from "./integration/pi/sessions.ts";
 import { Adenosine } from "./kernel/adenosine.ts";
@@ -341,6 +345,17 @@ async function main(): Promise<number> {
 			plans.onStepSettled(job);
 		},
 	});
+	// Plan 0.011 F1: facts extracted during the day, one document at a time, on background work's rules.
+	const factExtractor = new FactExtractor({
+		db,
+		log,
+		device,
+		models,
+		background,
+		complete: routerComplete(router.url),
+		energy: adenosine,
+		enabled: config.facts.extract,
+	});
 	const admission = {
 		db,
 		now: () => new Date(),
@@ -365,6 +380,8 @@ async function main(): Promise<number> {
 		chatPending: () => scheduler.hasRunnableJobs(),
 		log,
 	});
+	// The fact ledger (plan 0.011): one completion per document, on the router, thinking off.
+	const factComplete = routerComplete(router.url);
 	// Day and night (plan 0.002 L4/L5): STM moves into LTM only while asleep.
 	const rhythm = new Rhythm({
 		db,
@@ -382,6 +399,22 @@ async function main(): Promise<number> {
 						ask: (e) => memorySalience.ask(e),
 						outcome: (id, t) => memorySalience.outcome(id, t),
 					},
+					// Plan 0.011 F2: leftover extraction, the merge into beliefs, the structured facts' storage.
+					facts:
+						config.facts.extract || config.facts.merge
+							? new FactNight({
+									db,
+									ltm,
+									gate: memoryGate,
+									complete: factComplete,
+									log,
+									extract: config.facts.extract,
+									merge: config.facts.merge,
+									maxStep: config.facts.maxStep,
+									// F3, shadow: journaled, never read by the merge. `factRelation` is created below.
+									relation: { ask: (pair, scope, ref) => factRelation.ask(pair, scope, ref) },
+								})
+							: null,
 				})
 			: null,
 		turnRunning: () => device.holder !== null && !device.holder.startsWith("memory:"),
@@ -578,6 +611,13 @@ async function main(): Promise<number> {
 		sentReport: () => sentReport(db),
 		self: selfModel,
 		motivationReport: () => motivation.report(),
+		facts: new FactsCommand({
+			db,
+			log,
+			ltm,
+			extractorStatus: () => factExtractor.status(),
+			relation: { labelCorrection: (old, text, same, at) => factRelation.labelCorrection(old, text, same, at) },
+		}),
 		motivations: {
 			pause: (m: string, by: string) => {
 				const x = motivationNamed(m);
@@ -716,6 +756,8 @@ async function main(): Promise<number> {
 	});
 	// Plan 0.003 K3, both shadow: memory salience inside the night loop; reply review after delivery, when idle.
 	const memorySalience = new MemorySalience({ db, client: decisionClient, device, log });
+	// Plan 0.011 F3, shadow: how a new fact relates to a stored belief of another key.
+	const factRelation = new FactRelation({ db, client: decisionClient, device, log });
 	const replyReview = new ReplyReviewShadow({
 		db,
 		client: decisionClient,
@@ -765,6 +807,7 @@ async function main(): Promise<number> {
 				await memory.stop();
 				await selectionShadow.stop();
 				await replyReview.stop();
+				await factExtractor.stop();
 				await background.stop();
 				adenosine.stop();
 				await observer.stop();
@@ -822,6 +865,7 @@ async function main(): Promise<number> {
 	selectionShadow.start();
 	replyReview.start();
 	background.start();
+	factExtractor.start();
 	observer.start();
 	investigations.start();
 	commitmentClock.start();

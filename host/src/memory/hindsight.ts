@@ -96,7 +96,7 @@ export class HindsightClient {
 		bank: string,
 		query: string,
 		maxTokens: number,
-		opts: { excludeIyye?: boolean } = {},
+		opts: { excludeIyye?: boolean; tags?: string[] } = {},
 	): Promise<LtmResult[]> {
 		const body = (await this.call(
 			"POST",
@@ -109,6 +109,8 @@ export class HindsightClient {
 				// "any" keeps untagged legacy memories; they are labelled "source not recorded".
 				// A person's statements and Iyye's own measurements are evidence; Iyye's words are not.
 				...(opts.excludeIyye ? { tags: [SPEAKER_PERSON, SPEAKER_PROBE], tags_match: "any" } : {}),
+				// Only items carrying all of these tags (plan 0.011: the structured facts of earlier nights).
+				...(opts.tags ? { tags: opts.tags, tags_match: "all_strict" } : {}),
 			},
 			this.o.recallTimeoutMs,
 		)) as { results?: (Partial<LtmResult> & { scores?: { reranker?: number; final?: number } })[] };
@@ -235,6 +237,16 @@ export class HindsightClient {
 			this.o.recallTimeoutMs * 10,
 		)) as { items?: MemoryUnit[]; total?: number };
 		return { items: body.items ?? [], total: body.total ?? 0 };
+	}
+
+	/** Delete one document with every memory extracted from it (plan 0.011: a structured fact `/facts wrong` removed). */
+	async deleteDocument(bank: string, documentId: string): Promise<void> {
+		await this.call(
+			"DELETE",
+			`/v1/default/banks/${encodeURIComponent(bank)}/documents/${encodeURIComponent(documentId)}`,
+			undefined,
+			this.o.writeTimeoutMs,
+		);
 	}
 
 	async deleteBank(bank: string): Promise<void> {

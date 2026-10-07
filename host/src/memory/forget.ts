@@ -24,6 +24,9 @@
  */
 
 import { forgetReplyReviews } from "../decisions/reply-review.ts";
+import { forgetBeliefs } from "../facts/beliefs.ts";
+import { queueFactDocDeletions } from "../facts/night.ts";
+import { forgetFacts } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
 import { forgetSelfFacts } from "../self/model.ts";
 import { accountsOf, type Contact, OWNER_CONTACT_ID, resolvePerson, scopeFor } from "../state/contacts.ts";
@@ -218,6 +221,21 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			db.prepare("UPDATE stm_episodes SET reply_text = '' WHERE event_id = ?").run(r.event_id);
 			db.prepare("UPDATE stm_fts SET body = ? WHERE event_id = ?").run(r.user_text, r.event_id);
 		}
+		// The fact ledger (plan 0.011 §3.6): their evidence leaves every belief, beliefs about them go, and so do
+		// their structured facts, every fact about them and the facts of those replies. Facts about them stored
+		// in other banks (the owner's) are queued for deletion there; their own banks go whole.
+		const elsewhere = db
+			.prepare(
+				`SELECT scope, id FROM stm_facts WHERE subject_ref = ? AND stored_at IS NOT NULL AND scope NOT IN (${marks})`,
+			)
+			.all(`contact:${t.person.id}`, ...t.scopes) as { scope: string; id: string }[];
+		queueFactDocDeletions(
+			db,
+			elsewhere.map((f) => ({ scope: f.scope, stmFactId: f.id })),
+			at,
+		);
+		forgetBeliefs(db, t.scopes, [t.person.id], at);
+		forgetFacts(db, t.scopes, [t.person.id], { ownerReplies: ownerTurns.map((r) => r.event_id) });
 		// Day summaries not yet stored may name the person ("2 from Julia"): they go too (HLD §15 #15).
 		const names = [t.person.display_name, ...accountsOf(db, t.person.id).map((a) => a.display_name)]
 			.map((n) => n.trim().toLowerCase())

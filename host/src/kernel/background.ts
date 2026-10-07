@@ -277,8 +277,8 @@ export class BackgroundWorker {
 		return true;
 	}
 
-	/** Why a step may not start now, or null. */
-	private blockedReason(): string | null {
+	/** Why a step may not start now, or null. Other background work (fact extraction, plan 0.011) obeys it too. */
+	blockedReason(): string | null {
 		const why = this.yieldReason() ?? this.lowEnergy();
 		if (why) return why;
 		const now = this.d.now().getTime();
@@ -290,8 +290,8 @@ export class BackgroundWorker {
 		return null;
 	}
 
-	/** Why a running step must give way now, or null. */
-	private yieldReason(): string | null {
+	/** Why a running step must give way now, or null (fact extraction gives way on the same rules). */
+	yieldReason(): string | null {
 		if (this.initiativePaused()) return "initiative is paused (/resume initiative)";
 		const mode = this.d.rhythm?.mode() ?? "awake";
 		if (mode !== "awake") return mode === "asleep" ? "Iyye is asleep" : "Iyye is going to sleep";

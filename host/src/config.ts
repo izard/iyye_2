@@ -38,6 +38,12 @@ export interface Config {
 	commitments: { tickMs: number; lateH: number; maxLateD: number; contactMax: number; contactPlansMax: number };
 	/** Plan 0.010 M0/M0b: the extended self model and the motivations (shadow). */
 	self: { geolocation: boolean; motivationSweepS: number; motivationThreshold: number; motivationSustain: number };
+	/**
+	 * The fact ledger (plan 0.011): extraction during the day, the nightly merge into beliefs (and structured
+	 * facts in long-term memory), the largest log-odds change one night may make to a belief, and the belief
+	 * below which a fact is not offered in turns.
+	 */
+	facts: { extract: boolean; merge: boolean; maxStep: number; minP: number };
 	/** Messages Iyye sends to people per day (plan 0.008): in all, per trusted contact, on Iyye's own. */
 	send: { dailyMax: number; contactDailyMax: number; iyyeDailyMax: number };
 	defaultModel: string;
@@ -144,6 +150,16 @@ function fraction(env: NodeJS.ProcessEnv, name: string, dflt: number): number {
 	return n;
 }
 
+/** A positive finite number. */
+function positive(env: NodeJS.ProcessEnv, name: string, dflt: number): number {
+	const raw = env[name];
+	if (raw === undefined || raw === "") return dflt;
+	const n = Number(raw);
+	if (!Number.isFinite(n) || n <= 0)
+		throw new ConfigError(`${name} must be a positive number, got ${JSON.stringify(raw)}`);
+	return n;
+}
+
 function int(env: NodeJS.ProcessEnv, name: string, dflt: number, min: number, max: number): number {
 	const raw = env[name];
 	if (raw === undefined || raw === "") return dflt;
@@ -202,6 +218,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			motivationSweepS: int(env, "IYYE2_MOTIVATION_SWEEP_S", 600, 10, 86_400),
 			motivationThreshold: Number(env.IYYE2_MOTIVATION_THRESHOLD ?? 0.55),
 			motivationSustain: int(env, "IYYE2_MOTIVATION_SUSTAIN", 3, 1, 1000),
+		},
+		facts: {
+			extract: env.IYYE2_FACTS_EXTRACT !== "0",
+			merge: env.IYYE2_FACTS_MERGE !== "0",
+			maxStep: positive(env, "IYYE2_FACTS_MAX_STEP", 2),
+			minP: fraction(env, "IYYE2_FACTS_MIN_P", 0.3),
 		},
 		send: {
 			dailyMax: int(env, "IYYE2_SEND_DAILY_MAX", 20, 0, 1000),

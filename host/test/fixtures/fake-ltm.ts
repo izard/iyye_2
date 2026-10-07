@@ -52,6 +52,7 @@ export class FakeLtm {
 	readonly docs = new Map<string, FakeDoc>();
 	readonly retains: string[] = [];
 	readonly consolidations: string[] = [];
+	readonly deletedDocs: string[] = [];
 	unitsFor: (content: string) => number = (c) => (/2\+2|thanks/i.test(c) ? 0 : 1);
 	failRetain = false;
 	/** This bank's recalls answer HTTP 500 (one bank failing among several). */
@@ -169,10 +170,17 @@ export class FakeLtm {
 					text: d.content,
 					occurred_start: d.timestamp,
 					tags: d.tags,
+					document_id: d.id as string | undefined,
 					score: undefined as number | undefined,
 				}));
-			const results = (this.recallResults.get(bank) ?? stored).filter(
-				(r) => !want || !r.tags?.length || r.tags.some((t) => want.includes(t)),
+			// "all_strict": only results carrying every tag; "any": any of them, plus untagged ones.
+			const strict = data.tags_match === "all_strict";
+			const results = (this.recallResults.get(bank) ?? stored).filter((r) =>
+				!want
+					? true
+					: strict
+						? want.every((t) => r.tags?.includes(t))
+						: !r.tags?.length || r.tags.some((t) => want.includes(t)),
 			);
 			return json(200, {
 				results: results.map(({ score, ...r }, i) => ({
@@ -239,6 +247,11 @@ export class FakeLtm {
 			return json(200, { success: true, bank_id: bank, items_count: 1, is_async: false });
 		}
 		const doc = /^documents\/(.+)$/.exec(rest);
+		if (method === "DELETE" && doc) {
+			if (!this.docs.delete(`${bank}/${doc[1]}`)) return json(404, { detail: "document not found" });
+			this.deletedDocs.push(`${bank}/${doc[1]}`);
+			return json(200, { success: true });
+		}
 		if (method === "GET" && doc) {
 			const d = this.docs.get(`${bank}/${doc[1]}`);
 			return d ? json(200, { id: d.id, memory_unit_count: d.units }) : json(404, {});

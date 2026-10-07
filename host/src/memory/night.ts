@@ -96,6 +96,13 @@ export interface NightDeps {
 	} | null;
 	/** Hindsight's stored model traces of a bank, purged after a forgotten bank is deleted. */
 	purgeTraces?: ((bank: string) => Promise<unknown>) | null;
+	/**
+	 * The fact ledger's night (plan 0.011 F2): leftover extraction, the merge into beliefs and the structured
+	 * facts' storage, run before the episodes' own transfer (kept in parallel during the comparison week).
+	 */
+	facts?: {
+		run(shouldStop: () => boolean): Promise<{ stopped: string | null; merged: number; stored: number }>;
+	} | null;
 	/** Wait before retrying when the device is still busy (winding down). */
 	busyRetryMs?: number;
 	consolidatePollMs?: number;
@@ -119,6 +126,7 @@ export class NightWork {
 			thinking: true,
 			purgeTraces: null,
 			salience: null,
+			facts: null,
 			maxAttempts: 3,
 			busyRetryMs: 2000,
 			consolidatePollMs: 2000,
@@ -142,6 +150,12 @@ export class NightWork {
 			purgeTraces: this.d.purgeTraces,
 		});
 		for (const bank of left) this.banksReady.delete(bank);
+		if (this.d.facts) {
+			const f = await this.d.facts.run(shouldStop);
+			this.d.log.info("memory: facts merged", { merged: f.merged, stored: f.stored, stopped: f.stopped });
+			if (f.stopped === "stopped") return { kind: "stopped", ...n };
+			if (f.stopped) return { kind: "blocked", reason: f.stopped, ...n };
+		}
 		for (;;) {
 			const forgetting = banksBeingForgotten(this.d.db);
 			const episode = pendingEpisodes(this.d.db, 200).find(
