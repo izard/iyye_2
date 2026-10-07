@@ -96,6 +96,60 @@ export interface Gap {
 	field: string;
 	kind: "missing" | "stale" | "contradicted";
 	why: string;
+	/** For a contradiction seen on a network: that network (a new network is a new episode). */
+	episode?: string;
+}
+
+/** Relation words recognised in the owner's own statements (plan 0.010 M1). */
+const RELATIONS = [
+	"son",
+	"daughter",
+	"wife",
+	"husband",
+	"partner",
+	"father",
+	"dad",
+	"mother",
+	"mom",
+	"brother",
+	"sister",
+	"friend",
+	"colleague",
+	"boss",
+	"grandmother",
+	"grandfather",
+	"grandson",
+	"granddaughter",
+	"uncle",
+	"aunt",
+	"cousin",
+	"nephew",
+	"niece",
+];
+
+/**
+ * A relation the owner stated about a person, from the owner's own facts
+ * (2026-10-07: the owner's bank said "his wife, Julia, and son Jacob" while
+ * the self model still asked who Jacob is): the relation word nearest before
+ * the name, within a few words, in one sentence. Null when none.
+ */
+export function relationIn(name: string, facts: readonly string[]): string | null {
+	const n = name.trim().split(/\s+/)[0]!.toLowerCase();
+	for (const fact of facts) {
+		for (const sentence of fact.split(/[.;!?]/)) {
+			const t = sentence.toLowerCase();
+			const at = t.search(new RegExp(`(^|[^\\p{L}])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\p{L}]|$)`, "u"));
+			if (at < 0) continue;
+			const before = t.slice(Math.max(0, at - 40), at);
+			let best: { word: string; pos: number } | null = null;
+			for (const w of RELATIONS) {
+				const m = [...before.matchAll(new RegExp(`(^|[^\\p{L}])${w}([^\\p{L}]|$)`, "gu"))].at(-1);
+				if (m && (!best || m.index! > best.pos)) best = { word: w, pos: m.index! };
+			}
+			if (best) return best.word;
+		}
+	}
+	return null;
 }
 
 export class SelfModel {
@@ -271,6 +325,12 @@ export class SelfModel {
 			this.setFacet("social", { [`relation:${person.id}`]: text }, "owner", by, now);
 			return `noted: ${person.display_name} — ${text}`;
 		}
+		if (sub === "estimate" && rest[0] === "misleading") {
+			const network = this.value<string>("network", "networkId");
+			if (!network) return "the network is not known yet; try again in a few minutes";
+			this.setFacet("place", { estimate_misleading: network }, "owner", by, now);
+			return "noted: on this network the location estimate is misleading; it no longer contradicts what you said (a new network is checked afresh)";
+		}
 		if (sub === "clear" && rest[0]) {
 			let field: [Facet, string] | null = null;
 			if (rest[0] === "place") field = ["place", "stated"];
@@ -335,20 +395,25 @@ export class SelfModel {
 		if (!stated)
 			gaps.push({ facet: "place", field: "stated", kind: "missing", why: "the owner never said where Iyye is" });
 		const city = this.value<string>("place", "estimate_city");
-		if (stated && city && !stated.toLowerCase().includes(city.toLowerCase()))
+		// The owner said this network's location is misleading (M1): its estimate contradicts nothing.
+		const network = this.value<string>("network", "networkId") ?? "unknown";
+		const trusted = this.value<string>("place", "estimate_misleading") !== network;
+		if (trusted && stated && city && !stated.toLowerCase().includes(city.toLowerCase()))
 			gaps.push({
 				facet: "place",
 				field: "stated",
 				kind: "contradicted",
 				why: `the network places Iyye in ${city}, the owner said ${JSON.stringify(stated)}`,
+				episode: network,
 			});
 		const tz = this.value<string>("place", "estimate_timezone");
-		if (tz && tz !== this.d.timezone)
+		if (trusted && tz && tz !== this.d.timezone)
 			gaps.push({
 				facet: "place",
 				field: "estimate_timezone",
 				kind: "contradicted",
 				why: `the network says ${tz}, the computer uses ${this.d.timezone}`,
+				episode: network,
 			});
 		for (const p of this.people(30).filter((p) => !p.relation))
 			gaps.push({
@@ -372,9 +437,14 @@ export class SelfModel {
 				 GROUP BY principal_contact_id ORDER BY last DESC LIMIT 20`,
 			)
 			.all(OWNER_CONTACT_ID, since) as { id: string; last: string; n: number }[];
+		// An account is its person (2026-10-07: the owner's linked Telegram accounts, whose older events name the
+		// account, were "people whose relation is unknown"); a person with several accounts appears once.
+		const seen = new Set<string>();
 		return rows.flatMap((r) => {
-			const c = getContact(this.d.db, r.id);
-			if (!c || c.kind === "owner") return [];
+			const account = getContact(this.d.db, r.id);
+			const c = account && resolvePerson(this.d.db, account);
+			if (!c || c.kind === "owner" || seen.has(c.id)) return [];
+			seen.add(c.id);
 			return [
 				{
 					id: c.id,

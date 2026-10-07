@@ -52,6 +52,7 @@ import { MemoryGateway } from "./memory/gateway.ts";
 import { HindsightClient } from "./memory/hindsight.ts";
 import { NightWork } from "./memory/night.ts";
 import { MemoryPassthrough } from "./memory/passthrough.ts";
+import { SPEAKER_PERSON } from "./memory/provenance.ts";
 import { memoryReport } from "./memory/report.ts";
 import { MemoryService } from "./memory/service.ts";
 import { RouterClient } from "./models/client.ts";
@@ -59,6 +60,8 @@ import { ModelManager } from "./models/manager.ts";
 import { systemMemoryProbe } from "./models/memory.ts";
 import { loadRegistry, RegistryError } from "./models/registry.ts";
 import { pidAlive, RouterProcess } from "./models/router.ts";
+import { MotivationActor, motivationNamed } from "./motivation/actor.ts";
+import { recordServices } from "./motivation/services.ts";
 import { MotivationTracker } from "./motivation/tracker.ts";
 import { gitDomain, machineDomain } from "./observe/domains.ts";
 import { Investigations } from "./observe/investigations.ts";
@@ -255,6 +258,8 @@ async function main(): Promise<number> {
 				recentReminderNote(db, scope, new Date()),
 				recentSentNote(db, scope, new Date()),
 				selfNoteFor(scope, selfModel, db),
+				// The self-model question Iyye asked, so the owner's reply makes sense (plan 0.010 M1).
+				actor.noteFor(scope),
 			]
 				.filter(Boolean)
 				.join("\n\n") || null,
@@ -518,9 +523,40 @@ async function main(): Promise<number> {
 		}),
 	});
 	// Plan 0.010 M0: the four motivations' needs, in shadow (journaled, nothing acts on them).
+	// Plan 0.010 M1: the motivations act (notices, the owner's self-model questions, model maintenance).
+	const actor = new MotivationActor({
+		db,
+		log,
+		mode: () => rhythm.mode(),
+		notifyOwner: (req) => outbox.notifyOwner(req),
+		self: selfModel,
+		// The owner's own statements: their bank, the people's words only (never Iyye's, never a contact's).
+		ownerFactsAbout: ltm
+			? async (name) =>
+					(await ltm.recall("iyye-owner", name, 600, { excludeIyye: true }))
+						.filter((f) => f.tags.includes(SPEAKER_PERSON))
+						.map((f) => f.text)
+			: null,
+		retryModel: (name) => models.retryHeal(name),
+		quietMs: config.backgroundQuietS * 1000,
+	});
+	// Every minute, each service's state, since when and its last error (the self-preservation evidence).
+	const watchServices = () =>
+		recordServices(
+			db,
+			() => ({
+				"the model router": { state: models.state },
+				"long-term memory": config.memory.enabled ? memory.status : { state: "disabled" },
+				"the decision service": decisions.status,
+				"web search": searxng.status,
+				Telegram: poller ? poller.status : { state: "disabled" },
+			}),
+			new Date(),
+		);
 	const motivation = new MotivationTracker({
 		db,
 		log,
+		actor,
 		mode: () => rhythm.mode(),
 		sweepMs: config.self.motivationSweepS * 1000,
 		threshold: config.self.motivationThreshold,
@@ -541,6 +577,19 @@ async function main(): Promise<number> {
 		sentReport: () => sentReport(db),
 		self: selfModel,
 		motivationReport: () => motivation.report(),
+		motivations: {
+			pause: (m: string, by: string) => {
+				const x = motivationNamed(m);
+				return x ? actor.pause(x, by) : null;
+			},
+			resume: (m: string) => {
+				const x = motivationNamed(m);
+				return x ? actor.resume(x) : null;
+			},
+			questionsReport: () => actor.questionsReport(),
+			accept: (ref: string, text: string, by: string) => actor.accept(ref, text, by),
+			dismiss: (ref: string) => actor.dismiss(ref),
+		},
 		energyReport: () => adenosine.report(),
 		opportunities: () => investigations.report(),
 		domains: {
@@ -625,6 +674,7 @@ async function main(): Promise<number> {
 		initiative: new InitiativeShadow({ client: decisionClient, device }),
 		log,
 		sweepMs: config.sweepS * 1000,
+		curiosityPaused: () => actor.paused("curiosity"),
 	});
 	const observer = new Observer({
 		db,
@@ -775,6 +825,9 @@ async function main(): Promise<number> {
 	commitmentClock.start();
 	plans.start();
 	selfModel.start();
+	watchServices();
+	const serviceTimer = setInterval(watchServices, 60_000);
+	serviceTimer.unref();
 	motivation.start();
 	adenosine.start();
 	searxng.start();

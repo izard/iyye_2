@@ -200,7 +200,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		self: {
 			geolocation: env.IYYE2_GEOLOCATION !== "0",
 			motivationSweepS: int(env, "IYYE2_MOTIVATION_SWEEP_S", 600, 10, 86_400),
-			motivationThreshold: Number(env.IYYE2_MOTIVATION_THRESHOLD ?? 0.6),
+			motivationThreshold: Number(env.IYYE2_MOTIVATION_THRESHOLD ?? 0.55),
 			motivationSustain: int(env, "IYYE2_MOTIVATION_SUSTAIN", 3, 1, 1000),
 		},
 		send: {

@@ -59,6 +59,14 @@ export interface CommandContext {
 	sentReport?: (() => string) | null;
 	/** /self, /motivation (plan 0.010 M0b, M0). */
 	self?: { command(args: string[], by: string): string } | null;
+	/** /pause|/resume <motivation>, /self questions|accept|dismiss (plan 0.010 M1). */
+	motivations?: {
+		pause(m: string, by: string): string | null;
+		resume(m: string): string | null;
+		questionsReport(): string;
+		accept(ref: string, text: string, by: string): string;
+		dismiss(ref: string): string;
+	} | null;
 	motivationReport?: (() => string) | null;
 	/** /opportunities: findings that raised a question and their investigations (plan 0.007 S5). */
 	opportunities?: (() => string) | null;
@@ -113,6 +121,8 @@ const HELP = [
 	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened (shadow)",
 	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps",
 	"/pause initiative, /resume initiative — stop or allow background work",
+	"/pause <motivation>, /resume <motivation> — self-preservation, curiosity, agency or social: stop or allow what it opens and does",
+	"/self questions — what Iyye asked about itself; /self accept <id> [answer], /self dismiss <id>; /self estimate misleading",
 	"/day — awake or asleep, day number, when the next night starts and why",
 	"/night — the night in progress (what it is doing, what is left) and the last night's result",
 	"/memory — memory status: short-term (today) and long-term, the last night",
@@ -237,11 +247,20 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			if (!rest) return usage("/cancel <id>");
 			return { handled: true, reply: ctx.commitments.cancel(rest, ctx.issuer) };
 		}
-		case "/self":
+		case "/self": {
+			const q = ctx.motivations;
+			if (q && args[0] === "questions") return { handled: true, reply: q.questionsReport() };
+			if (q && args[0] === "accept" && args[1])
+				return {
+					handled: true,
+					reply: q.accept(args[1], text.trim().split(/\s+/).slice(3).join(" "), ctx.issuer),
+				};
+			if (q && args[0] === "dismiss" && args[1]) return { handled: true, reply: q.dismiss(args[1]) };
 			return {
 				handled: true,
 				reply: ctx.self ? ctx.self.command(args, ctx.issuer) : "the self model is not available here",
 			};
+		}
 		case "/motivation":
 			return {
 				handled: true,
@@ -282,7 +301,13 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			return { handled: true, reply: ctx.focus ? await ctx.focus.report() : "focus is not available here" };
 		case "/pause":
 		case "/resume": {
-			if (args.length !== 1 || args[0] !== "initiative") return usage(`${cmd} initiative`);
+			const which = "initiative | self-preservation | curiosity | agency | social";
+			if (args.length !== 1) return usage(`${cmd} ${which}`);
+			if (args[0] !== "initiative") {
+				const m = ctx.motivations;
+				const reply = m ? (cmd === "/pause" ? m.pause(args[0]!, ctx.issuer) : m.resume(args[0]!)) : null;
+				return reply ? { handled: true, reply } : usage(`${cmd} ${which}`);
+			}
 			if (!ctx.focus) return { handled: true, reply: "background work is not available here" };
 			return { handled: true, reply: cmd === "/pause" ? ctx.focus.pause(ctx.issuer) : ctx.focus.resume() };
 		}

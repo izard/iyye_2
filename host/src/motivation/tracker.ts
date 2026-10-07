@@ -17,6 +17,7 @@
 
 import type { Logger } from "../log.ts";
 import type { Db } from "../state/db.ts";
+import type { Opening } from "./actor.ts";
 import {
 	collectSignals,
 	MOTIVATIONS,
@@ -42,6 +43,8 @@ export interface TrackerDeps {
 	sustain?: number;
 	/** Samples older than this are pruned. */
 	keepDays?: number;
+	/** M1: what acts on sustained needs; without it the tracker stays shadow (M0). */
+	actor?: { act(openings: readonly Opening[], current: ReadonlySet<string>): Promise<void> } | null;
 }
 
 interface State {
@@ -60,7 +63,10 @@ export class MotivationTracker {
 			newId: () => crypto.randomUUID(),
 			sweepMs: 600_000,
 			alpha: 0.3,
-			threshold: 0.6,
+			// 0.55, not 0.6 (M1): a steady 0.6 signal's smoothed need approaches 0.6 from below and never reached it
+			// (2026-10-07: eight hours of a Telegram outage at 0.59).
+			threshold: 0.55,
+			actor: null,
 			sustain: 3,
 			keepDays: 14,
 			...deps,
@@ -83,7 +89,10 @@ export class MotivationTracker {
 	sweep(): Promise<void> {
 		if (this.running) return this.running;
 		this.running = Promise.resolve()
-			.then(() => this.sweepOnce())
+			.then(async () => {
+				const r = this.sweepOnce();
+				if (r && this.d.actor) await this.d.actor.act(r.openings, r.current);
+			})
 			.catch((err) => this.d.log.warn("motivation: sweep failed", { error: (err as Error).message }))
 			.finally(() => {
 				this.running = null;
@@ -91,11 +100,12 @@ export class MotivationTracker {
 		return this.running;
 	}
 
-	private sweepOnce(): void {
-		if (this.d.mode() !== "awake") return;
+	private sweepOnce(): { openings: Opening[]; current: Set<string> } | null {
+		if (this.d.mode() !== "awake") return null;
 		const now = this.d.now();
 		const signals = collectSignals({ ...this.d.sources, db: this.d.db, now });
 		const at = now.toISOString();
+		const openings: Opening[] = [];
 		this.d.db.transaction(() => {
 			for (const m of MOTIVATIONS) {
 				const mine = signals.filter((s) => s.motivation === m);
@@ -119,11 +129,13 @@ export class MotivationTracker {
 						JSON.stringify(top.slice(0, 10).map((s) => brief(s, now))),
 						sustained >= this.d.sustain && top[0] ? top[0].cluster : null,
 					);
+				if (sustained >= this.d.sustain && top[0]) openings.push({ motivation: m, signal: top[0] });
 			}
 			this.d.db
 				.prepare("DELETE FROM motivation_samples WHERE at < ?")
 				.run(new Date(now.getTime() - this.d.keepDays * 86_400_000).toISOString());
 		})();
+		return { openings, current: new Set(signals.map((s) => s.cluster)) };
 	}
 
 	/** The latest sample of a motivation: restores the smoothing and the sustain count after a restart. */
@@ -140,7 +152,7 @@ export class MotivationTracker {
 	report(): string {
 		const now = this.d.now();
 		const lines = [
-			`motivations (shadow: nothing acts on these yet; need is smoothed, α ${this.d.alpha}; an opportunity would open after ${this.d.sustain} sweeps at ≥ ${this.d.threshold}):`,
+			`motivations (need is smoothed, α ${this.d.alpha}; an opportunity opens after ${this.d.sustain} sweeps at ≥ ${this.d.threshold}):`,
 		];
 		for (const m of MOTIVATIONS) {
 			const r = this.d.db
@@ -162,7 +174,7 @@ export class MotivationTracker {
 			const sigs = JSON.parse(r.signals_json) as ReturnType<typeof brief>[];
 			const min = Math.round((now.getTime() - Date.parse(r.at)) / 60_000);
 			lines.push(
-				`  ${m}: need ${r.smoothed.toFixed(2)} (raw ${r.raw.toFixed(2)}, ${min} min ago)${r.sustained ? ` · high for ${r.sustained} sweep(s)` : ""}${r.would_open ? ` · would open: ${r.would_open}` : ""}`,
+				`  ${m}: need ${r.smoothed.toFixed(2)} (raw ${r.raw.toFixed(2)}, ${min} min ago)${r.sustained ? ` · high for ${r.sustained} sweep(s)` : ""}${r.would_open ? ` · opens: ${r.would_open}` : ""}`,
 				...sigs.slice(0, 3).map((s) => `    ${s.strength.toFixed(2)} ${s.kind}: ${s.text}`),
 			);
 		}

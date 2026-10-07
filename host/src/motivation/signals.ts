@@ -15,6 +15,7 @@ import { CLAIM_QUESTION, commitmentsOfReply, REPLY_REVIEW } from "../decisions/r
 import type { Gap } from "../self/model.ts";
 import type { Db } from "../state/db.ts";
 import { getKv } from "../state/kv.ts";
+import { OK_SERVICE_STATES, serviceStatuses } from "./services.ts";
 
 export const MOTIVATIONS = ["self_preservation", "curiosity", "agency", "social"] as const;
 export type Motivation = (typeof MOTIVATIONS)[number];
@@ -81,24 +82,41 @@ export function collectSignals(s: SignalSources): Signal[] {
 				observedAt: machine.at,
 				text: `only ${r.memAvailableGb} GB memory available`,
 			});
-		for (const [name, state] of Object.entries((r.services ?? {}) as Record<string, string>)) {
-			if (OK_SERVICES.has(state)) continue;
-			add({
-				motivation: "self_preservation",
-				kind: "service_down",
-				cluster: `service:${name}`,
-				evidence: [`observation:${machine.id}`],
-				weight: 0.6,
-				observedAt: machine.at,
-				text: `${name} is ${state}`,
-			});
-		}
+		// Before the service watcher's first record (M1), the latest observation is the only source.
+		if (serviceStatuses(db).length === 0)
+			for (const [name, state] of Object.entries((r.services ?? {}) as Record<string, string>)) {
+				if (OK_SERVICES.has(state)) continue;
+				add({
+					motivation: "self_preservation",
+					kind: "service_down",
+					cluster: `service:${name}`,
+					evidence: [`observation:${machine.id}`],
+					weight: 0.6,
+					observedAt: machine.at,
+					text: `${name} is ${state}`,
+				});
+			}
+	}
+	// Services, from `service_status` (M1): current, with the outage's duration and its cause. A long outage
+	// weighs more (0.6, +0.05 an hour, at most 0.9: 2026-10-07's eight hours of "retrying" sat at 0.59).
+	// The episode (since when) is in the cluster: a later outage of the same service is a new one.
+	for (const svc of serviceStatuses(db)) {
+		if (OK_SERVICE_STATES.has(svc.state)) continue;
+		const hours = Math.max(0, s.now.getTime() - Date.parse(svc.since)) / H;
+		add({
+			motivation: "self_preservation",
+			kind: "service_down",
+			cluster: `service:${svc.name}@${svc.since}`,
+			evidence: [`service_status:${svc.name}`],
+			weight: Math.min(0.9, 0.6 + 0.05 * hours),
+			text: `${svc.name} has been ${svc.state} for ${hours < 1 ? `${Math.round(hours * 60)} min` : `${hours.toFixed(1)} h`}${svc.last_error ? `: ${svc.last_error}` : ""}`,
+		});
 	}
 	for (const h of s.healing())
 		add({
 			motivation: "self_preservation",
 			kind: h.gaveUp ? "model_gave_up" : "model_reloading",
-			cluster: `model:${h.model}`,
+			cluster: `model:${h.model}@${now.slice(0, 10)}`,
 			evidence: [`model_ops:${h.model}`],
 			weight: h.gaveUp ? 0.9 : 0.5,
 			text: `${h.model} ${h.gaveUp ? "could not be loaded" : "is being loaded again"} (${h.attempts} attempt(s); ${h.lastError.slice(0, 80)})`,
@@ -155,7 +173,8 @@ export function collectSignals(s: SignalSources): Signal[] {
 		add({
 			motivation: "curiosity",
 			kind: `self_${g.kind}`,
-			cluster: `self:${g.facet}:${g.field}`,
+			// A contradiction's episode (the network it was seen on) is in the cluster: a new network is a new one.
+			cluster: `self:${g.facet}:${g.field}${g.episode ? `@${g.episode}` : ""}`,
 			evidence: [`self_facts:${g.facet}:${g.field}`],
 			// M0 tuning (2026-10-06, 24 h of samples): a missing statement only the owner can give is a mild
 			// reason (M1 asks, a few a day); a contradiction is a strong one; a failing probe in between.
@@ -163,7 +182,10 @@ export function collectSignals(s: SignalSources): Signal[] {
 			text: g.why,
 		});
 	for (const o of db
-		.prepare("SELECT id, question, created_at FROM opportunities WHERE status IN ('open', 'running')")
+		// Only investigations: the motivations' own asks and notices are actions, never evidence of more need.
+		.prepare(
+			"SELECT id, question, created_at FROM opportunities WHERE status IN ('open', 'running') AND action_kind = 'investigate'",
+		)
 		.all() as { id: string; question: string; created_at: string }[])
 		add({
 			motivation: "curiosity",

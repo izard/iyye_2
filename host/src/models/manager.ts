@@ -347,6 +347,19 @@ export class ModelManager {
 		};
 	}
 
+	/**
+	 * Self-preservation's maintenance (plan 0.010 M1): after self-healing gave
+	 * up on a selected model, start its attempts afresh. Never for a model the
+	 * owner unloaded or while asleep; the actor allows it once a day per model.
+	 */
+	retryHeal(name: string): boolean {
+		const h = this.healingState(name);
+		if (!h || h.retrying) return false;
+		this.heal.delete(name);
+		this.healSelected();
+		return true;
+	}
+
 	/** Self-healing as it stands (read-only, plan 0.010 signals): each model being brought back, and whether Iyye gave up. */
 	healingReport(): { model: string; attempts: number; gaveUp: boolean; lastError: string }[] {
 		return [...this.heal].map(([model, h]) => ({

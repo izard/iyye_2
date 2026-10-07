@@ -49,6 +49,9 @@ export interface Opportunity {
 	decision_id: string | null;
 	answer: string | null;
 	finding_id: string | null;
+	/** Plan 0.010 M1: every opportunity has a motivation and an action (investigations: curiosity, investigate). */
+	motivation?: string;
+	action_kind?: string;
 	created_at: string;
 	updated_at: string;
 }
@@ -72,6 +75,8 @@ export interface InvestigationDeps {
 		initiativePaused(): boolean;
 	};
 	energy?: { backgroundAllowed(): boolean } | null;
+	/** `/pause curiosity` (plan 0.010 M1): no investigation starts. */
+	curiosityPaused?: () => boolean;
 	mode: () => "awake" | "winding_down" | "asleep";
 	initiative?: Pick<InitiativeShadow, "ask" | "outcome"> | null;
 	log: Logger;
@@ -100,6 +105,7 @@ export class Investigations {
 			cooldownMs: 3_600_000,
 			maxFruitless: 3,
 			maxSteps: 3,
+			curiosityPaused: () => false,
 			...deps,
 		};
 	}
@@ -167,15 +173,16 @@ export class Investigations {
 	/** `/opportunities`. */
 	report(): string {
 		const rows = this.d.db
-			.prepare("SELECT * FROM opportunities ORDER BY updated_at DESC LIMIT 10")
+			.prepare("SELECT * FROM opportunities ORDER BY updated_at DESC LIMIT 12")
 			.all() as Opportunity[];
 		if (rows.length === 0) return "no opportunities yet (they come from findings that raise a question)";
 		const at = (iso: string | null) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "?");
 		return [
-			`opportunities (at most ${this.d.maxFruitless} fruitless attempts each, ${Math.round(this.d.cooldownMs / 60_000)} min apart):`,
-			...rows.map(
-				(o) =>
-					`  ${o.id.slice(0, 8)} ${o.domain} — ${o.status}, ${o.attempts} attempt(s), ${o.fruitless} fruitless${o.cooldown_until && o.status === "open" ? `, next after ${at(o.cooldown_until)}` : ""}\n    evidence: ${o.evidence_text.slice(0, 120)}${o.answer ? `\n    found: ${o.answer.replace(/\s+/g, " ").slice(0, 200)}` : ""}`,
+			`opportunities (investigations: at most ${this.d.maxFruitless} fruitless attempts each, ${Math.round(this.d.cooldownMs / 60_000)} min apart; the motivations' asks, notices and maintenance):`,
+			...rows.map((o) =>
+				o.action_kind && o.action_kind !== "investigate"
+					? `  ${o.id.slice(0, 8)} ${o.motivation} · ${o.action_kind} — ${o.status}\n    evidence: ${o.evidence_text.slice(0, 160)}${o.answer ? `\n    ${o.answer.slice(0, 160)}` : ""}`
+					: `  ${o.id.slice(0, 8)} ${o.domain} · investigate — ${o.status}, ${o.attempts} attempt(s), ${o.fruitless} fruitless${o.cooldown_until && o.status === "open" ? `, next after ${at(o.cooldown_until)}` : ""}\n    evidence: ${o.evidence_text.slice(0, 120)}${o.answer ? `\n    found: ${o.answer.replace(/\s+/g, " ").slice(0, 200)}` : ""}`,
 			),
 		].join("\n");
 	}
@@ -227,7 +234,7 @@ export class Investigations {
 	 */
 	private reconcile(): void {
 		for (const o of this.d.db
-			.prepare("SELECT * FROM opportunities WHERE status = 'running'")
+			.prepare("SELECT * FROM opportunities WHERE status = 'running' AND action_kind = 'investigate'")
 			.all() as Opportunity[]) {
 			const last = this.d.db
 				.prepare("SELECT * FROM background_jobs WHERE session = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
@@ -240,13 +247,15 @@ export class Investigations {
 	}
 
 	private async startNext(): Promise<void> {
-		if (this.d.worker.initiativePaused()) return;
+		if (this.d.worker.initiativePaused() || this.d.curiosityPaused()) return; // investigating is curiosity's action
 		if (this.d.energy && !this.d.energy.backgroundAllowed()) return;
-		const busy = this.d.db.prepare("SELECT 1 FROM opportunities WHERE status = 'running'").get();
+		const busy = this.d.db
+			.prepare("SELECT 1 FROM opportunities WHERE status = 'running' AND action_kind = 'investigate'")
+			.get();
 		if (busy) return; // one investigation at a time
 		const o = this.d.db
 			.prepare(
-				"SELECT * FROM opportunities WHERE status = 'open' AND fruitless < ? AND (cooldown_until IS NULL OR cooldown_until <= ?) ORDER BY created_at LIMIT 1",
+				"SELECT * FROM opportunities WHERE status = 'open' AND action_kind = 'investigate' AND fruitless < ? AND (cooldown_until IS NULL OR cooldown_until <= ?) ORDER BY created_at LIMIT 1",
 			)
 			.get(this.d.maxFruitless, this.iso()) as Opportunity | undefined;
 		if (!o) return;

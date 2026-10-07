@@ -260,6 +260,7 @@ describe("model manager", () => {
 			assert.ok((await rig.manager.unload("small", "owner_web")).ok);
 			const r = await rig.manager.acquire("small");
 			assert.ok(!isLease(r) && !r.busy);
+			assert.equal(rig.manager.retryHeal("small"), false, "maintenance never undoes the owner's unload");
 			await new Promise((x) => setTimeout(x, 300));
 			assert.equal((await rig.manager.status()).models.find((m) => m.name === "small")!.status, "unloaded");
 			// /load brings it back and lifts the hold.
@@ -306,6 +307,9 @@ describe("model manager", () => {
 				3,
 				"no fourth try",
 			);
+			// Self-preservation's maintenance (plan 0.010 M1) may try again, once more round.
+			assert.equal(rig.manager.retryHeal("broken-x"), true);
+			await waitFor(() => ops(rig).filter((o) => o.op === "load" && o.model_name === "broken-x").length >= 4, 8000);
 		});
 
 		test("a load deadline does not count time the computer slept", async () => {

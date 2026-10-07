@@ -194,14 +194,14 @@ describe("the tracker (shadow)", () => {
 		await make(db, now).sweep();
 		sp = latest(db, "self_preservation");
 		assert.equal(sp.sustained, 2);
-		assert.equal(sp.would_open, "model:gemma-4-26B", "the strongest evidence cluster");
+		assert.equal(sp.would_open, "model:gemma-4-26B@2026-10-05", "the strongest evidence cluster");
 		assert.equal(latest(db, "curiosity").raw, 0);
 		assert.equal((db.prepare("SELECT count(*) AS n FROM opportunities").get() as { n: number }).n, 0, "shadow");
 
 		const report = make(db, now).report();
 		assert.match(
 			report,
-			/self_preservation: need [01]\.\d+ \(raw [01]\.\d+, 0 min ago\) · high for 2 sweep\(s\) · would open: model:gemma-4-26B/,
+			/self_preservation: need [01]\.\d+ \(raw [01]\.\d+, 0 min ago\) · high for 2 sweep\(s\) · opens: model:gemma-4-26B@2026-10-05/,
 		);
 		assert.match(report, /0\.90 model_gave_up: gemma-4-26B could not be loaded/);
 		const ctx = { models: {} as never, db, issuer: "owner_web", motivationReport: () => report };
