@@ -1,6 +1,6 @@
 # Iyye 2.0.001 — Implementation Plan
 
-- Status (2026-10-02): M0–M7 and M3b (read-only tools) are implemented in `host/` (144 tests, plus manual smoke tests against the real router with gemma-4-E4B). Telegram receiving and sending are tested against an in-process fake Bot API only; the first live run is the owner's. M8 (a real day) is next.
+- Status (2026-10-02): M0–M7 and M3b (read-only tools) are implemented in `host/` (144 tests, plus manual smoke tests against the real router with gemma-4-E4B). Telegram receiving and sending are tested against an in-process fake Bot API only; the first live run is the owner's. **M8 closed on 2026-10-07** after six days of real use (`host/NOTES-0.001.md`): 0.001 is complete.
 - Scope: the first runnable increment of Iyye 2.0. Three things:
   - **Local model management:** start and stop local models, and select which one answers.
   - **Two input channels:** the owner's local web chat and Telegram, with every message admitted durably.
