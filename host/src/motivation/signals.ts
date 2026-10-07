@@ -199,22 +199,22 @@ export function collectSignals(s: SignalSources): Signal[] {
 		});
 
 	// Important beliefs Iyye is unsure of (plan 0.011 F4, §3.5): p in [0.3, 0.7], current, about the owner or
-	// a person who matters to them (trusted, or with a stated relation), or offered in a turn in the last week.
+	// a person who matters to them (trusted, or with a stated relation). ("Used in recalls" waits until recall
+	// knows what a reply actually used.) Recorded only: the tracker does not count them yet (JOURNAL_ONLY).
 	// Settled only by new independent evidence moving p out of the band; a belief resting on Iyye's own
 	// words alone is never a reason (HLD §11.2).
-	const week = new Date(Date.parse(now) - 7 * 86_400_000).toISOString();
 	for (const b of db
 		.prepare(
 			`SELECT b.id, b.subject, b.predicate, b.object, b.negated, b.details, b.p, b.updated_at FROM beliefs b
 			 WHERE b.state = 'current' AND b.p >= 0.3 AND b.p <= 0.7
 			 AND EXISTS (SELECT 1 FROM belief_evidence e WHERE e.belief_id = b.id AND e.source NOT IN ('iyye', 'probe') AND e.weight > 0)
-			 AND (b.subject_ref = 'owner' OR b.recalled_at >= ?
+			 AND (b.subject_ref = 'owner'
 				OR (b.subject_ref LIKE 'contact:%' AND (
 					EXISTS (SELECT 1 FROM contacts c WHERE 'contact:' || c.id = b.subject_ref AND c.trusted = 1)
 					OR EXISTS (SELECT 1 FROM self_facts f WHERE f.facet = 'social' AND 'contact:' || substr(f.field, 10) = b.subject_ref))))
 			 ORDER BY b.updated_at DESC LIMIT 20`,
 		)
-		.all(week) as {
+		.all() as {
 		id: string;
 		subject: string;
 		predicate: string;

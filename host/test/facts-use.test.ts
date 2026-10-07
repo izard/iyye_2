@@ -15,7 +15,7 @@ import { after, before, beforeEach, describe, test } from "node:test";
 import { loadConfig } from "../src/config.ts";
 import { mergeFact } from "../src/facts/beliefs.ts";
 import { FactsCommand } from "../src/facts/commands.ts";
-import { type BeliefReader, offerBeliefs } from "../src/facts/disclosure.ts";
+import { type BeliefReader, beliefQuery, offerBeliefs } from "../src/facts/disclosure.ts";
 import { privateReason, processFacts } from "../src/facts/extract.ts";
 import type { StmFact } from "../src/facts/store.ts";
 import { silentLogger } from "../src/log.ts";
@@ -23,6 +23,7 @@ import { forgetRecords, forgetTarget } from "../src/memory/forget.ts";
 import { MemoryGateway } from "../src/memory/gateway.ts";
 import { NightWork } from "../src/memory/night.ts";
 import { collectSignals } from "../src/motivation/signals.ts";
+import { MotivationTracker } from "../src/motivation/tracker.ts";
 import { getContact } from "../src/state/contacts.ts";
 import { type Db, openDb } from "../src/state/db.ts";
 import { getEvent } from "../src/state/events.ts";
@@ -242,6 +243,14 @@ describe("F4: who may be told what (owner decision 1, revised)", () => {
 			assert.ok(!offered(db, r, "Julia violin dentist").some((x) => /Julia/.test(x)), JSON.stringify(r));
 	});
 
+	test("an unrelated question gets no beliefs: stopwords and the rewrite's words never match", () => {
+		const db = freshDb();
+		world(db);
+		assert.deepEqual(offered(db, reader("owner", true), "What did the user say about the weekend?"), []);
+		assert.deepEqual(offered(db, reader("owner", true), "Что ты помнишь про это?"), []);
+		assert.equal(beliefQuery("What did the user say about the weekend?"), '"weeke"*');
+	});
+
 	test("recall: beliefs come labelled; a stored structured fact found by Hindsight is offered as its belief, filtered", async () => {
 		const db = freshDb();
 		world(db);
@@ -318,9 +327,6 @@ describe("F4: curiosity from important uncertain beliefs", () => {
 			sig().map((s) => s.text),
 			["unsure (p 0.60) whether Julia plans to a trip to Rome"],
 		);
-		// Recalled in a turn this week: Kevin's cat matters now.
-		db.prepare("UPDATE beliefs SET recalled_at = ? WHERE fact_key = 'kevin|owns'").run(T0.toISOString());
-		assert.equal(sig().length, 2);
 		// Settled by new independent evidence: out of the band, no signal.
 		fact(db, {
 			id: "g3",
@@ -330,7 +336,50 @@ describe("F4: curiosity from important uncertain beliefs", () => {
 			fact_key: "contact:julia|plans_to",
 			subject: "Julia",
 		});
-		assert.equal(sig().length, 1);
+		assert.equal(sig().length, 0);
+	});
+
+	test("recorded, not counted: an uncertain belief adds no need and opens nothing (no question credited to the wrong cause)", async () => {
+		const db = freshDb();
+		fact(db, {
+			id: "g1",
+			source: "jacob",
+			scope: "contact:jacob",
+			object: "a trip to Rome",
+			fact_key: "contact:julia|plans_to",
+			subject: "Julia",
+			p: 0.6,
+		});
+		const gaps = [
+			{ facet: "place" as const, field: "stated", kind: "missing" as const, why: "no place" },
+			{ facet: "social" as const, field: "relation:jacob", kind: "missing" as const, why: "who is Jacob" },
+		];
+		const opened: string[] = [];
+		const tracker = new MotivationTracker({
+			db,
+			log: silentLogger,
+			mode: () => "awake",
+			sources: { selfGaps: () => gaps, healing: () => [], sleep: () => null },
+			now: () => T0,
+			alpha: 1,
+			threshold: 0.55,
+			sustain: 1,
+			actor: {
+				act: async (o) => {
+					opened.push(...o.map((x) => x.signal.cluster));
+				},
+			},
+		});
+		await tracker.sweep();
+		const sample = db
+			.prepare("SELECT raw, signals_json FROM motivation_samples WHERE motivation = 'curiosity'")
+			.get() as {
+			raw: number;
+			signals_json: string;
+		};
+		assert.ok(sample.raw < 0.55, String(sample.raw));
+		assert.match(sample.signals_json, /belief_uncertain/, "still recorded with the sample");
+		assert.deepEqual(opened, []);
 	});
 });
 

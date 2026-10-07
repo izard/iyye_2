@@ -21,7 +21,7 @@
 
 import { getContact, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
-import { IYYE_SCOPE, stmQuery } from "../state/stm.ts";
+import { IYYE_SCOPE } from "../state/stm.ts";
 import { type Belief, type Evidence, evidenceOf, getBelief } from "./beliefs.ts";
 import { factSentence } from "./extract.ts";
 
@@ -40,6 +40,25 @@ export interface OfferedBelief {
 	evidence: Evidence[];
 	text: string;
 	when: string;
+}
+
+/** Words that say nothing about what a belief is about (English, Russian, and the rewrite's "the user"). */
+const STOPWORDS = new Set(
+	(
+		"the a an and or but not no yes you your yours he him his she her hers it its we us our they them their this that these those " +
+		"what which who whom whose when where why how did does do done is are was were be been being have has had can could would " +
+		"should will shall may might must about with from for into onto over under than then there here some any all each every " +
+		"tell told say said know knew remember think thought please also just only very much many more most user owner iyye " +
+		"что как где когда кто чей чья почему зачем это эта этот эти тот та те его её их мой моя моё мои твой твоя наш наша ваш " +
+		"был была было были есть быть мне меня мной тебе ты вы он она они оно для или если тоже уже только ещё еще про скажи сказал помнишь знаешь"
+	).split(" "),
+);
+
+/** The lexical query for beliefs: content words only (stems as prefixes, OR-ed); null when there are none. */
+export function beliefQuery(text: string): string | null {
+	const words = (text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter((w) => !STOPWORDS.has(w));
+	const stems = [...new Set(words.map((w) => w.slice(0, Math.max(3, w.length - 2))))].slice(0, 24);
+	return stems.length ? stems.map((s) => `"${s}"*`).join(" OR ") : null;
 }
 
 /** True when the belief reaches only its speakers and the owner. */
@@ -106,7 +125,7 @@ export function offerBeliefs(
 	query: string,
 	o: { minP: number; limit: number; now: Date; extraIds?: readonly string[] },
 ): OfferedBelief[] {
-	const q = stmQuery(query);
+	const q = beliefQuery(query);
 	const ids = new Set<string>(o.extraIds ?? []);
 	if (q) {
 		for (const r of db

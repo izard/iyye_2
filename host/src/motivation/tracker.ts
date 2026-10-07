@@ -52,6 +52,12 @@ interface State {
 	sustained: number;
 }
 
+/**
+ * Signal kinds recorded but not yet counted (plan 0.011 F4): an uncertain belief has no action until asking
+ * about beliefs exists (0.010 M2/M3).
+ */
+export const JOURNAL_ONLY = new Set(["belief_uncertain"]);
+
 export class MotivationTracker {
 	private readonly d: Required<TrackerDeps>;
 	private timer: NodeJS.Timeout | null = null;
@@ -109,11 +115,15 @@ export class MotivationTracker {
 		this.d.db.transaction(() => {
 			for (const m of MOTIVATIONS) {
 				const mine = signals.filter((s) => s.motivation === m);
-				const raw = rawNeed(mine, now);
+				// Signals with no action yet are recorded with the sample but never add to need or open anything:
+				// otherwise they would raise a need that some other signal's action then answers (HLD §11.2 credit).
+				const counted = mine.filter((s) => !JOURNAL_ONLY.has(s.kind));
+				const raw = rawNeed(counted, now);
 				const prev = this.state(m);
 				const smoothed = prev ? prev.smoothed * (1 - this.d.alpha) + raw * this.d.alpha : raw * this.d.alpha;
 				const sustained = smoothed >= this.d.threshold ? (prev?.sustained ?? 0) + 1 : 0;
 				const top = [...mine].sort((a, b) => strength(b, now) - strength(a, now));
+				const first = top.find((s) => !JOURNAL_ONLY.has(s.kind));
 				this.d.db
 					.prepare(
 						`INSERT INTO motivation_samples (id, at, motivation, raw, smoothed, sustained, signals_json, would_open)
@@ -127,14 +137,14 @@ export class MotivationTracker {
 						round(smoothed),
 						sustained,
 						JSON.stringify(top.slice(0, 10).map((s) => brief(s, now))),
-						sustained >= this.d.sustain && top[0] ? top[0].cluster : null,
+						sustained >= this.d.sustain && first ? first.cluster : null,
 					);
-				if (sustained >= this.d.sustain && top[0]) {
-					openings.push({ motivation: m, signal: top[0] });
+				if (sustained >= this.d.sustain && first) {
+					openings.push({ motivation: m, signal: first });
 					// Questions are bounded by the actor (a few a day, one at a time): every field it could ask about is
 					// queued, so an unanswered contradiction does not hold the only slot for a week.
-					for (const sig of top.slice(1))
-						if (actionFor(m, sig.kind) === "ask") openings.push({ motivation: m, signal: sig });
+					for (const sig of counted)
+						if (sig !== first && actionFor(m, sig.kind) === "ask") openings.push({ motivation: m, signal: sig });
 				}
 			}
 			this.d.db
