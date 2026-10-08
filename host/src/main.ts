@@ -202,6 +202,12 @@ async function main(): Promise<number> {
 		contactMaxPerDay: config.send.contactDailyMax,
 		iyyeMaxPerDay: config.send.iyyeDailyMax,
 	});
+	// Iyye's own repositories (plan 0.007 S5): the workspace and its own source. One instance, in the owner's
+	// turns and in background work; never a contact's (effect `private`).
+	const projectKit = projectToolkit({
+		workspace: config.workspaceDir,
+		...(config.projectRepo ? { project: config.projectRepo } : {}),
+	});
 	// One instance, in the people's broker and the background one (plan 0.010 M2): budgets by principal.
 	const webToolkit: Toolkit | null = config.web.enabled
 		? {
@@ -242,6 +248,8 @@ async function main(): Promise<number> {
 			plansToolkit({ propose: (p) => plans.propose(p) }),
 			// Last again (plan 0.008): messages to people Iyye knows (owner, trusted contacts, Iyye itself).
 			messaging,
+			// Last (2026-10-08): Iyye's own repositories, read-only, in the owner's turns only (effect `private`).
+			projectKit,
 		],
 	});
 	const runtime = await createLocalModelRuntime({ routerUrl: router.url, registry });
@@ -320,10 +328,7 @@ async function main(): Promise<number> {
 			log,
 			toolkits: [
 				machineToolkit,
-				projectToolkit({
-					workspace: config.workspaceDir,
-					...(config.projectRepo ? { project: config.projectRepo } : {}),
-				}),
+				projectKit,
 				// Iyye may write to people on its own (plan 0.008 change): labelled, capped, the owner told.
 				messaging,
 				// Last (plan 0.010 M2): the web for curiosity's investigations, on Iyye's own daily budget.

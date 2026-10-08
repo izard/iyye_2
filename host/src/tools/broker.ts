@@ -109,8 +109,10 @@ export interface Toolkit {
 	 * never Iyye's background work. "reach": messages to other people (plan
 	 * 0.008), for the owner, contacts the owner trusts and Iyye's own work
 	 * (owner decision). "act": other effects, owner-only until grants exist.
+	 * "private": observes only, but what it reads is the owner's (Iyye's own code repositories): the owner and
+	 * Iyye's own work, never contacts.
 	 */
-	effect: "read" | "self" | "reach" | "act";
+	effect: "read" | "self" | "reach" | "act" | "private";
 	tools: IyyeTool[];
 }
 
@@ -180,6 +182,7 @@ export class ToolBroker {
 	): boolean {
 		if (kit.name === WEB_TOOLKIT && principal === "iyye") return scope.startsWith(WEB_INVESTIGATION_SCOPE);
 		if (kit.effect === "read") return true;
+		if (kit.effect === "private") return principal === "owner" || principal === "iyye";
 		if (kit.effect === "self") return principal === "owner" || principal === "contact";
 		// A plan step runs a question a contact may have written, approved as a read-only look (0.006 C4): never `reach`.
 		if (kit.effect === "reach")

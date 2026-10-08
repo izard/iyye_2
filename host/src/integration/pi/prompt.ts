@@ -34,7 +34,7 @@ export function operatingNote(toolkits: readonly ToolkitSummary[]): string {
 		? " For something of several steps, call plan_propose; a plan that waits for the owner's approval arranges nothing yet, so say exactly what the tool returned."
 		: "";
 	if (toolkits.length === 0) return `In this conversation you have no tools. ${cannot}`;
-	const readOnly = toolkits.every((k) => k.effect === "read");
+	const readOnly = toolkits.every((k) => k.effect === "read" || k.effect === "private");
 	return [
 		`In this conversation you can use these ${readOnly ? "read-only " : ""}tools; use them instead of guessing:`,
 		...toolkits.flatMap((k) => [`- ${k.description} (${k.name}):`, ...k.tools.map((t) => `  - ${t}`)]),

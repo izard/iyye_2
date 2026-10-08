@@ -213,7 +213,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			env.IYYE2_WORKSPACE || resolve(absPath(env.IYYE2_STATE_DIR || "~/.iyye2", cwd), "workspace"),
 			cwd,
 		),
-		projectRepo: env.IYYE2_PROJECT_REPO ? absPath(env.IYYE2_PROJECT_REPO, cwd) : null,
+		// Iyye's own source, by default the iyye_2 repository it runs from (2026-10-08: the owner's turns read it).
+		projectRepo:
+			env.IYYE2_PROJECT_REPO === "0" ? null : absPath(env.IYYE2_PROJECT_REPO || resolve(PROJECT_ROOT), cwd),
 		findingsPerDay: int(env, "IYYE2_FINDINGS_PER_DAY", 5, 0, 100),
 		sweepS: int(env, "IYYE2_SWEEP_S", 1800, 10, 86_400),
 		commitments: {
