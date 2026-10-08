@@ -238,9 +238,17 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 		const beliefs = forgetBeliefs(db, t.scopes, [t.person.id], at);
 		// The motivations' records that may quote them (plan 0.010): questions and notices about those beliefs,
 		// notices about their plans, and the signal texts kept with the motivation samples.
+		// Follow-ups about what they said (plan 0.010 M3): the message itself is a sent message (above).
+		const followUps = (
+			db
+				.prepare(
+					`SELECT cluster FROM opportunities WHERE cluster IN (SELECT 'event:' || id FROM events WHERE scope IN (${marks}))`,
+				)
+				.all(...t.scopes) as { cluster: string }[]
+		).map((r) => r.cluster);
 		forgetMotivationRecords(
 			db,
-			[...beliefs.map((id) => `belief:${id}`), ...plans.map((p) => `plan:${p.id}`)],
+			[...beliefs.map((id) => `belief:${id}`), ...plans.map((p) => `plan:${p.id}`), ...followUps],
 			FORGOTTEN,
 		);
 		forgetFacts(db, t.scopes, [t.person.id], { ownerReplies: ownerTurns.map((r) => r.event_id) });

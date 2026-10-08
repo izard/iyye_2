@@ -159,7 +159,7 @@ describe("M2 detectors", () => {
 		assert.deepEqual(recurringQuestions(db, T0), [], "the investigation carries it");
 	});
 
-	test("intentions and past dated events are recorded with the samples but open nothing until M3", async () => {
+	test("intentions and past dated events are recorded with the samples, and since M3 they open", async () => {
 		const db = freshDb();
 		turn(db, {
 			id: "o1",
@@ -198,7 +198,7 @@ describe("M2 detectors", () => {
 			},
 		});
 		await tracker.sweep();
-		assert.deepEqual(opened, []);
+		assert.deepEqual(opened.sort(), ["event:j1", "intention:o1"]);
 	});
 });
 

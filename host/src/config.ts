@@ -37,7 +37,16 @@ export interface Config {
 	/** Plan 0.006 C1: the commitment clock, lateness notes and limits. Times are in the system's timezone. */
 	commitments: { tickMs: number; lateH: number; maxLateD: number; contactMax: number; contactPlansMax: number };
 	/** Plan 0.010 M0/M0b: the extended self model and the motivations (shadow). */
-	self: { geolocation: boolean; motivationSweepS: number; motivationThreshold: number; motivationSustain: number };
+	self: {
+		geolocation: boolean;
+		motivationSweepS: number;
+		motivationThreshold: number;
+		motivationSustain: number;
+		/** Plan 0.010 M3: plans Iyye proposes a day, follow-ups it starts a day, and the hours it may start one. */
+		proposalsDaily: number;
+		socialDailyMax: number;
+		socialHours: [number, number];
+	};
 	/**
 	 * The fact ledger (plan 0.011): extraction during the day, the nightly merge into beliefs (and structured
 	 * facts in long-term memory), the largest log-odds change one night may make to a belief, and the belief
@@ -170,6 +179,16 @@ function positive(env: NodeJS.ProcessEnv, name: string, dflt: number): number {
 	return n;
 }
 
+/** "9-21": local hours [from, to) in which Iyye may start a conversation. */
+function hours(v: string): [number, number] {
+	const m = /^\s*(\d{1,2})\s*-\s*(\d{1,2})\s*$/.exec(v);
+	const from = Number(m?.[1]);
+	const to = Number(m?.[2]);
+	if (!m || from >= to || to > 24)
+		throw new Error(`IYYE2_SOCIAL_HOURS must look like "9-21", got ${JSON.stringify(v)}`);
+	return [from, to];
+}
+
 function int(env: NodeJS.ProcessEnv, name: string, dflt: number, min: number, max: number): number {
 	const raw = env[name];
 	if (raw === undefined || raw === "") return dflt;
@@ -230,6 +249,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			motivationSweepS: int(env, "IYYE2_MOTIVATION_SWEEP_S", 600, 10, 86_400),
 			motivationThreshold: Number(env.IYYE2_MOTIVATION_THRESHOLD ?? 0.55),
 			motivationSustain: int(env, "IYYE2_MOTIVATION_SUSTAIN", 3, 1, 1000),
+			proposalsDaily: int(env, "IYYE2_PROPOSALS_DAILY", 2, 0, 20),
+			socialDailyMax: int(env, "IYYE2_SOCIAL_DAILY_MAX", 3, 0, 50),
+			socialHours: hours(env.IYYE2_SOCIAL_HOURS ?? "9-21"),
 		},
 		facts: {
 			extract: env.IYYE2_FACTS_EXTRACT !== "0",

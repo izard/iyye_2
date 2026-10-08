@@ -14,9 +14,15 @@
  *   questions are not used: an untrusted account must not steer Iyye's web
  *   activity, and their words would end up in Iyye's own findings.
  * - **An intention with no plan** (agency, the owner only): "I want to …",
- *   "I need to …", "let's …", «хочу», «надо», «собираюсь».
+ *   "I need to …", «хочу», «надо», «собираюсь». Since M3 an intention leads
+ *   to a proposed plan, so suggestions to Iyye ("let's …", "we should …")
+ *   and requests the turn itself handled (a tool call, a reminder, a plan)
+ *   are not intentions.
  * - **A dated event** (social): a message naming an event on a clear date
- *   ("tomorrow", "on Monday", "12 October", «завтра»), now past.
+ *   ("today", "tomorrow", "on Monday", "12 October", «завтра»), now past.
+ *   Since M3 a follow-up message comes of it, so a date in the past or a
+ *   recurring one ("last Monday", "every Monday") is not an event, and an
+ *   event with no time of day is over only in the evening.
  */
 
 import { contentStems } from "../facts/disclosure.ts";
@@ -36,7 +42,11 @@ export function statesIntention(text: string): string | null {
 		const t = sentence.trim();
 		if (!t || t.endsWith("?")) continue;
 		if (
-			/\b(i (want|need|have|plan|intend|hope) to|i'?d like to|i would like to|i'?m going to|i am going to|i'?ll (try|have) to|let'?s|we should|we need to|we want to)\b|(?<![\p{L}])(хочу|надо|нужно|собираюсь|планирую|давай|давайте)(?![\p{L}])/iu.test(
+			/\b(i (want|need|have|plan|intend|hope) to|i'?d like to|i would like to|i'?m going to|i am going to|i'?ll (try|have) to|we need to|we want to)\b|(?<![\p{L}])(хочу|надо|нужно|собираюсь|планирую)(?![\p{L}])/iu.test(
+				t,
+			) &&
+			// Asking Iyye to look something up is a request, not an intention ("I want to know …").
+			!/\b(want|need|like|have|going) to (know|see|check|ask|understand|find out|look|test|try)\b|(хочу|надо|нужно) (знать|узнать|посмотреть|проверить|спросить|понять)/iu.test(
 				t,
 			)
 		)
@@ -57,16 +67,37 @@ const RU_WEEKDAYS: Record<string, string> = {
 	воскресенье: "sunday",
 };
 
-/** The first clear date phrase in a message, resolved against when it was said; null when none. */
+/** The hour an event with no time of day is taken to be over ("how did the exam go?" not before the evening). */
+export const EVENING_HOUR = 18;
+
+/**
+ * The first clear date phrase in a message, resolved against when it was said, as the time the event is
+ * over; null when none.
+ */
 export function eventDate(text: string, saidAt: Date): { phrase: string; at: Date } | null {
 	const t = text.toLowerCase();
 	if (t.trim().endsWith("?") || /\bremind|напомни/.test(t)) return null; // a question; a reminder request is a commitment
+	// Past or recurring: "last Monday", "every Friday", "two days ago", «в прошлую пятницу», «каждый день».
+	if (
+		/\b(last|every|each|ago|yesterday|previous|past|used to)\b|(?<![\p{L}])(прошл\p{L}*|кажд\p{L}*|вчера|назад)(?![\p{L}])/iu.test(
+			t,
+		)
+	)
+		return null;
+	if (/\btoday\b|\btonight\b|\bthis evening\b|(?<![\p{L}])сегодня(?![\p{L}])/u.test(t)) {
+		const evening = new Date(saidAt);
+		evening.setHours(EVENING_HOUR, 0, 0, 0);
+		return { phrase: "today", at: new Date(Math.max(evening.getTime(), saidAt.getTime() + 3_600_000)) };
+	}
 	const candidates: string[] = [];
 	const push = (re: RegExp, map: (m: RegExpExecArray) => string) => {
 		const m = re.exec(t);
 		if (m) candidates.push(map(m));
 	};
-	push(/\btomorrow\b|завтра/, () => "tomorrow");
+	// With its time when one follows ("tomorrow at 10:00"): the event is over then, not in the evening.
+	push(/\btomorrow\b(?:,? (?:at )?(\d{1,2}(?::\d{2})?(?: ?[ap]m)?|noon)\b)?|завтра/, (m) =>
+		m[1] ? `tomorrow ${m[1]}` : "tomorrow",
+	);
 	push(new RegExp(`\\b(next )?(${WEEKDAYS})\\b`), (m) => `${m[1] ?? ""}${m[2]}`);
 	push(/в (понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)/, (m) => RU_WEEKDAYS[m[1]!]!);
 	push(new RegExp(`\\b(\\d{1,2}) (${MONTHS})\\b`), (m) => `${m[1]} ${m[2]}`);
@@ -75,7 +106,9 @@ export function eventDate(text: string, saidAt: Date): { phrase: string; at: Dat
 	push(/\b(\d{4}-\d{2}-\d{2})\b/, (m) => m[1]!);
 	for (const phrase of candidates) {
 		const w = parseWhen(phrase, saidAt);
-		if (w.ok) return { phrase, at: w.at };
+		if (!w.ok) continue;
+		if (w.defaulted) w.at.setHours(EVENING_HOUR, 0, 0, 0); // a whole day, not 09:00: over in the evening
+		return { phrase, at: w.at };
 	}
 	return null;
 }
@@ -144,6 +177,10 @@ export function unplannedIntentions(
 				 WHERE e.scope = 'owner' AND e.kind IN ('turn', 'remember') AND e.said_at >= ?
 				 AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.created_event_id = e.event_id)
 				 AND NOT EXISTS (SELECT 1 FROM commitments c WHERE c.created_event_id = e.event_id)
+				 -- A turn that used a tool did what was asked: the request is not an open intention.
+				 AND NOT EXISTS (SELECT 1 FROM tool_calls t WHERE t.scope = e.scope AND t.started_at >= e.said_at AND t.started_at <= e.answered_at)
+				 -- Once acted on (a plan proposed, or nothing to propose), the opportunity carries it.
+				 AND NOT EXISTS (SELECT 1 FROM opportunities o WHERE o.cluster = 'intention:' || e.event_id)
 				 ORDER BY e.said_at`,
 			)
 			.all(since) as { event_id: string; user_text: string; said_at: string }[]
@@ -168,6 +205,8 @@ export function pastEvents(
 			)
 			.all(since) as { event_id: string; scope: string; user_text: string; said_at: string }[]
 	).flatMap((r) => {
+		// Once followed up (or decided against), the opportunity carries it.
+		if (db.prepare("SELECT 1 FROM opportunities WHERE cluster = ?").get(`event:${r.event_id}`)) return [];
 		const d = eventDate(r.user_text, new Date(r.said_at));
 		if (!d) return [];
 		const ago = now.getTime() - d.at.getTime();

@@ -249,14 +249,15 @@ export function collectSignals(s: SignalSources): Signal[] {
 		});
 
 	// ---------------------------------------------------------------- agency
-	// An intention the owner stated with no plan (M2; recorded only until M3 proposes plans).
+	// An intention the owner stated with no plan (M2; M3 proposes a plan for it). Strong enough alone to open
+	// within the hour (0.7, fading with the remark's age): the plan only waits for the owner's approval.
 	for (const i of unplannedIntentions(db, s.now))
 		add({
 			motivation: "agency",
 			kind: "intention_unplanned",
 			cluster: i.cluster,
 			evidence: i.evidence,
-			weight: 0.4,
+			weight: 0.7,
 			observedAt: i.at,
 			text: `the owner said: ${i.text.slice(0, 120)}`,
 		});
@@ -299,15 +300,15 @@ export function collectSignals(s: SignalSources): Signal[] {
 		});
 
 	// ---------------------------------------------------------------- social
-	// A dated event someone mentioned, now past (M2; recorded only until M3 writes follow-ups).
+	// A dated event someone mentioned, now over (M2; M3 asks how it went). Its pressure is current while the
+	// follow-up is due (the three days after the event), so it is observed now, not when the event was.
 	for (const e of pastEvents(db, s.now))
 		add({
 			motivation: "social",
 			kind: "event_followup",
 			cluster: e.cluster,
 			evidence: e.evidence,
-			weight: 0.4,
-			observedAt: e.at,
+			weight: 0.65,
 			text: e.text,
 		});
 	for (const j of db

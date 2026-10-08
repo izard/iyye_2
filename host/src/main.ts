@@ -65,6 +65,7 @@ import { systemMemoryProbe } from "./models/memory.ts";
 import { loadRegistry, RegistryError } from "./models/registry.ts";
 import { pidAlive, RouterProcess } from "./models/router.ts";
 import { MotivationActor, motivationNamed } from "./motivation/actor.ts";
+import { makeComposer } from "./motivation/compose.ts";
 import { recordServices } from "./motivation/services.ts";
 import { MotivationTracker } from "./motivation/tracker.ts";
 import { gitDomain, machineDomain } from "./observe/domains.ts";
@@ -84,7 +85,7 @@ import { appendFeed } from "./state/web.ts";
 import { ToolBroker, type Toolkit } from "./tools/broker.ts";
 import { GuardedHttp } from "./tools/http.ts";
 import { memorySearchTool } from "./tools/memory-search.ts";
-import { messagingToolkit } from "./tools/messaging.ts";
+import { iyyeMessenger, messagingToolkit } from "./tools/messaging.ts";
 import { plansToolkit } from "./tools/plans.ts";
 import { currentTimeTool, systemStatusTool } from "./tools/probes.ts";
 import { projectToolkit } from "./tools/project.ts";
@@ -583,6 +584,25 @@ async function main(): Promise<number> {
 			: null,
 		retryModel: (name) => models.retryHeal(name),
 		quietMs: config.backgroundQuietS * 1000,
+		// Plan 0.010 M3: proposals and follow-ups, one model call each under background work's rules.
+		compose: makeComposer({
+			device,
+			models,
+			background,
+			complete: routerComplete(router.url, 600),
+			energy: adenosine,
+		}),
+		proposePlan: (p) => plans.proposePlan(p),
+		sendMessage: iyyeMessenger({
+			db,
+			outbox: { sendOwn: (req) => outbox.sendOwn(req), notifyOwner: (req) => outbox.notifyOwner(req) },
+			maxPerDay: config.send.dailyMax,
+			contactMaxPerDay: config.send.contactDailyMax,
+			iyyeMaxPerDay: config.send.iyyeDailyMax,
+		}),
+		proposalsPerDay: config.self.proposalsDaily,
+		socialPerDay: config.self.socialDailyMax,
+		socialHours: config.self.socialHours,
 	});
 	// Every minute, each service's state, since when and its last error (the self-preservation evidence).
 	let serviceTimer: NodeJS.Timeout | null = null;

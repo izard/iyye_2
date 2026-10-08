@@ -53,15 +53,11 @@ interface State {
 }
 
 /**
- * Signal kinds recorded but not yet counted: an intention with no plan and a past dated event have no action
- * until 0.010 M3 (Iyye-proposed plans, social follow-ups); a claim with no record comes from a shadow role.
+ * Signal kinds recorded but not counted. A claim with no record comes from Kev's reply review, a shadow
+ * role: a shadow answer must never change what Iyye needs or does. (An intention with no plan and a past
+ * dated event were here until 0.010 M3 gave them actions.)
  */
-export const JOURNAL_ONLY = new Set([
-	"intention_unplanned",
-	"event_followup",
-	// Read from Kev's reply review (a shadow role): a shadow answer must never change what Iyye needs or does.
-	"claim_without_record",
-]);
+export const JOURNAL_ONLY = new Set(["claim_without_record"]);
 
 export class MotivationTracker {
 	private readonly d: Required<TrackerDeps>;
