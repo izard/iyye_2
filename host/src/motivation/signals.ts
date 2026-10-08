@@ -14,6 +14,7 @@
 
 import { CLAIM_QUESTION, commitmentsOfReply, REPLY_REVIEW } from "../decisions/reply-review.ts";
 import { factSentence } from "../facts/extract.ts";
+import { IYYE_PROPOSED_VIA } from "../kernel/plans.ts";
 import type { Gap } from "../self/model.ts";
 import type { Db } from "../state/db.ts";
 import { getKv } from "../state/kv.ts";
@@ -263,9 +264,18 @@ export function collectSignals(s: SignalSources): Signal[] {
 		});
 	for (const p of db
 		.prepare(
-			"SELECT id, intent, state, steps_json, updated_at FROM plans WHERE state IN ('suspended', 'active', 'proposed')",
+			"SELECT id, intent, state, steps_json, updated_at, proposed_via FROM plans WHERE state IN ('suspended', 'active', 'proposed')",
 		)
-		.all() as { id: string; intent: string; state: string; steps_json: string; updated_at: string }[]) {
+		.all() as {
+		id: string;
+		intent: string;
+		state: string;
+		steps_json: string;
+		updated_at: string;
+		proposed_via: string;
+	}[]) {
+		// A plan Iyye proposed itself (M3) was announced once and lapses unapproved: waiting is no need of its own.
+		if (p.state === "proposed" && p.proposed_via === IYYE_PROPOSED_VIA) continue;
 		// A proposed plan whose first dated step falls due within a day (or has passed) cannot wait for the owner
 		// to look (2026-10-07: plan f9236bfb's reminder was due that morning, unseen).
 		const due = p.state === "proposed" ? firstDue(p.steps_json) : null;

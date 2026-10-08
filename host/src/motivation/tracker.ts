@@ -59,6 +59,9 @@ interface State {
  */
 export const JOURNAL_ONLY = new Set(["claim_without_record"]);
 
+/** Actions the actor bounds itself: each of their signals is queued, not only the strongest. */
+const QUEUED = new Set(["ask", "propose", "follow_up"]);
+
 export class MotivationTracker {
 	private readonly d: Required<TrackerDeps>;
 	private timer: NodeJS.Timeout | null = null;
@@ -142,10 +145,13 @@ export class MotivationTracker {
 					);
 				if (sustained >= this.d.sustain && first) {
 					openings.push({ motivation: m, signal: first });
-					// Questions are bounded by the actor (a few a day, one at a time): every field it could ask about is
-					// queued, so an unanswered contradiction does not hold the only slot for a week.
+					// Questions, proposals and follow-ups are bounded by the actor (a few a day, one at a time): every one
+					// the motivation could act on is queued, so an unanswered contradiction does not hold the only slot
+					// for a week, and a stronger signal with another action (an urgent plan, a failed reply) does not
+					// keep an intention or a past event from ever opening.
 					for (const sig of counted)
-						if (sig !== first && actionFor(m, sig.kind) === "ask") openings.push({ motivation: m, signal: sig });
+						if (sig !== first && QUEUED.has(actionFor(m, sig.kind) ?? ""))
+							openings.push({ motivation: m, signal: sig });
 				}
 			}
 			this.d.db

@@ -475,12 +475,15 @@ export class MotivationActor {
 			return true;
 		}
 		if (draft.steps.length === 0) {
-			// Nothing Iyye can do itself: say how a reminder would be set, once.
+			// Nothing Iyye can do itself: say how a reminder would be set, once (counted with the proposals).
+			const key = `motivation:${row.id}:${row.created_at}`;
 			await this.d.notifyOwner({
-				key: `motivation:${row.id}:${row.created_at}`,
+				key,
 				content: `You said: ${JSON.stringify(ep.user_text.replace(/\s+/g, " ").slice(0, 200))}. If you want a reminder for it, tell me when: /remind <when> <text>.`,
 			});
-			this.update(row.id, { status: "settled", answer: "no step Iyye can do: suggested /remind" });
+			this.d.db
+				.prepare("UPDATE opportunities SET status = 'settled', ref = ?, answer = ?, updated_at = ? WHERE id = ?")
+				.run(`notice:${key}`, "no step Iyye can do: suggested /remind", this.iso(), row.id);
 			return true;
 		}
 		const r = this.d.proposePlan({
@@ -545,6 +548,12 @@ export class MotivationActor {
 			return false;
 		}
 		if (person.kind !== "owner" && !this.d.sendMessage) return false;
+		// Iyye already wrote to them on its own today (the messenger's own key): no model call for a refusal.
+		if (
+			person.kind !== "owner" &&
+			this.d.db.prepare("SELECT 1 FROM sent_messages WHERE dedup_key = ?").get(`iyye:${person.id}:${localDay(now)}`)
+		)
+			return false;
 		const name = person.kind === "owner" ? null : person.display_name;
 		const raw = await this.compose(row, followUpSystem(name), followUpInput(ep));
 		if (raw === null) return true;
@@ -1002,6 +1011,10 @@ export function checkFollowUp(raw: string, others: readonly string[]): string | 
 	});
 	if (named) return { why: "names another person" };
 	return text;
+}
+
+function localDay(d: Date): string {
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function startOfDay(d: Date): string {

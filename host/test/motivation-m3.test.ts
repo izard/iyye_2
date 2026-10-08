@@ -16,10 +16,11 @@ import { type ActorDeps, checkFollowUp, MotivationActor, parseDraft } from "../s
 import type { Composed } from "../src/motivation/compose.ts";
 import { EVENING_HOUR, eventDate, statesIntention, unplannedIntentions } from "../src/motivation/detectors.ts";
 import { collectSignals } from "../src/motivation/signals.ts";
+import { MotivationTracker } from "../src/motivation/tracker.ts";
 import { getContact, linkAccount, OWNER_CONTACT_ID } from "../src/state/contacts.ts";
 import { type Db, openDb } from "../src/state/db.ts";
 import { getEvent } from "../src/state/events.ts";
-import { getPlan } from "../src/state/plans.ts";
+import { getPlan, insertPlan } from "../src/state/plans.ts";
 import { recordEpisode } from "../src/state/stm.ts";
 import { iyyeMessenger } from "../src/tools/messaging.ts";
 
@@ -225,10 +226,13 @@ describe("M3 agency: plans Iyye proposes", () => {
 		const notice = calls.notices.find((n) => n.key === `plan-proposed:${plan.id}`)!;
 		assert.match(notice.content, /^From what you said/);
 		assert.match(notice.content, /\/plan approve/);
-		// The intention now has its plan: the signal is gone, and nothing is drafted again.
-		assert.equal(
-			signals(db, clock.t).some((s) => s.kind === "intention_unplanned"),
-			false,
+		// The intention now has its plan: the signal is gone, and nothing is drafted again. Its reminder is due
+		// within a day, but Iyye's own proposal was announced once: no second notice about it waiting.
+		assert.deepEqual(
+			signals(db, clock.t)
+				.filter((s) => s.motivation === "agency")
+				.map((s) => s.kind),
+			[],
 		);
 		// Declined: the owner cancels it.
 		const { plans } = rig(db, clock);
@@ -286,6 +290,59 @@ describe("M3 agency: plans Iyye proposes", () => {
 		assert.equal((db.prepare("SELECT count(*) AS n FROM plans").get() as { n: number }).n, 0);
 		const n = calls.notices.find((x) => x.content.includes("/remind"))!;
 		assert.ok(n.content.includes("call the bank"));
+	});
+
+	test("an intention opens even when a stronger agency signal with another action is on top", async () => {
+		const db = freshDb();
+		insertPlan(db, {
+			id: "p-urgent",
+			intent: "Something Julia proposed",
+			proposer_contact_id: "julia",
+			scope: "contact:julia",
+			route_json: JSON.stringify({ channel: "telegram", chatId: 7001 }),
+			proposed_via: "Telegram",
+			created_event_id: null,
+			steps: [
+				{ kind: "remind", text: "x", due_at: new Date(NOON.getTime() + 3 * HOUR).toISOString(), status: "pending" },
+			],
+			state: "proposed",
+			authorization: null,
+			created_at: NOON.toISOString(),
+		});
+		turn(db, { id: "o1", who: "owner", text: "I need to renew my passport.", at: NOON });
+		const clock = { t: new Date(NOON.getTime() + HOUR) };
+		const { actor } = rig(db, clock, { answers: [ok('{"concrete": false, "intent": "", "steps": []}')] });
+		const tracker = new MotivationTracker({
+			db,
+			log: silentLogger,
+			mode: () => "awake",
+			sources: { selfGaps: () => [], healing: () => [], sleep: () => null },
+			now: () => clock.t,
+			newId,
+			alpha: 1,
+			threshold: 0.5,
+			sustain: 1,
+			actor,
+		});
+		await tracker.sweep();
+		assert.equal(opp(db, "plan:p-urgent")!.status, "running", "the stronger signal is acted on (a notice)");
+		assert.ok(opp(db, "intention:o1"), "and the intention is queued too");
+	});
+
+	test("suggestions of /remind count with the proposals", async () => {
+		const db = freshDb();
+		for (const i of [1, 2, 3])
+			turn(db, {
+				id: `o${i}`,
+				who: "owner",
+				text: `I need to call person ${i}.`,
+				at: new Date(NOON.getTime() + i * 60_000),
+			});
+		const clock = { t: new Date(NOON.getTime() + 2 * HOUR) };
+		const none = () => ok('{"concrete": true, "intent": "Call", "steps": []}');
+		const { actor, calls } = rig(db, clock, { answers: [none(), none(), none()] });
+		for (let k = 0; k < 4; k++) await openAll(actor, db, clock.t, "intention_unplanned");
+		assert.equal(calls.notices.filter((n) => n.content.includes("/remind")).length, 2);
 	});
 
 	test("not now leaves it open; a failing model is tried three times, then settled", async () => {
