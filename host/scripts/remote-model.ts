@@ -136,7 +136,12 @@ const [cmd, cmdArgs] =
 		: [config.llamaServer, serverArgs];
 const child = spawn(cmd, cmdArgs as string[], { stdio: "inherit" });
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => child.kill(sig));
-child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+child.on("exit", (code, signal) => {
+	console.error(`${new Date().toISOString()} llama-server exited (${signal ? `signal ${signal}` : `code ${code}`})`);
+	process.exit(code ?? (signal ? 1 : 0));
+});
+// Whatever happens to one connection must not take the server down: say what it was, keep serving.
+process.on("uncaughtException", (err) => console.error(`${new Date().toISOString()} front: ${err.stack ?? err}`));
 
 // The HTTPS front: each request forwarded as it is (llama-server checks the key), the answer streamed back,
 // the upstream request aborted when the caller goes away. No time limit: a slow answer beats a timed-out one.
@@ -148,6 +153,7 @@ const front = createServer({ key: readFileSync(certKeyFile), cert: readFileSync(
 			upRes.pipe(res);
 		},
 	);
+	req.on("error", () => up.destroy());
 	up.on("error", () => {
 		if (!res.headersSent) res.writeHead(502).end();
 		else res.destroy();
@@ -159,4 +165,11 @@ const front = createServer({ key: readFileSync(certKeyFile), cert: readFileSync(
 });
 front.requestTimeout = 0;
 front.headersTimeout = 60_000;
+front.on("clientError", (_err, socket) => socket.destroy());
+front.once("error", (err) => {
+	// The address is taken (another copy of this script?) or gone: nothing would be served.
+	console.error(`front: cannot listen on ${listen}:${port}: ${err.message}`);
+	child.kill("SIGTERM");
+	process.exit(1);
+});
 front.listen(port, listen, () => console.log(`HTTPS front on https://${listen}:${port} -> 127.0.0.1:${innerPort}`));
