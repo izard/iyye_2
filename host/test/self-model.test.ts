@@ -157,7 +157,7 @@ interface Rig {
 	geoCalls: number;
 }
 
-function rig(opts: { geo?: boolean } = {}): Rig {
+function rig(opts: { geo?: boolean; platform?: NodeJS.Platform } = {}): Rig {
 	const db = openDb(":memory:");
 	let now = new Date("2026-10-05T10:00:00Z");
 	let mode: "awake" | "asleep" = "awake";
@@ -210,6 +210,7 @@ function rig(opts: { geo?: boolean } = {}): Rig {
 						},
 					},
 		exec,
+		platform: opts.platform ?? "darwin",
 		now: () => now,
 		timezone: "Europe/Berlin",
 		live: () => ({ models: { web: "gemma-4-26B", background: "gemma-4-E4B" }, mode: "awake", day: 7 }),
@@ -370,5 +371,21 @@ describe("the self model", () => {
 		assert.equal(g.kind, "stale");
 		assert.match(g.why, /hardware is 49 h old \(no fake output for system_profiler\)/);
 		assert.equal(r.model.ageMs("power", new Date("2026-10-07T11:00:00Z")), 0, "power was still probed");
+	});
+
+	test("off macOS, the macOS-only facets are never probed and never a gap; the others still are", async () => {
+		const r = rig({ platform: "linux" });
+		await r.model.tick();
+		await r.model.afterWake();
+		assert.deepEqual(
+			r.calls.filter((c) => /system_profiler|sw_vers|pmset|ioreg/.test(c)),
+			[],
+			"no macOS command, so no failing probe to warn about",
+		);
+		assert.ok(r.model.ageMs("versions", new Date("2026-10-05T10:00:00Z")) !== null, "versions still probed");
+		assert.ok(r.model.ageMs("network", new Date("2026-10-05T10:00:00Z")) !== null, "network still probed");
+		r.setNow(new Date("2026-10-09T10:00:00Z"));
+		const facets = r.model.gaps().map((g) => g.facet);
+		for (const f of ["hardware", "power", "sleep"]) assert.ok(!facets.includes(f as never), `${f} is not a gap`);
 	});
 });

@@ -69,6 +69,13 @@ export const WINDOWS_MS: Record<"hardware" | "power" | "sleep" | "versions" | "n
 	place: 24 * 3_600_000,
 };
 
+/**
+ * Facets whose probes use macOS-only commands (`system_profiler`, `sw_vers`, `pmset`, `ioreg`). Elsewhere
+ * (the DGX Spark, 2026-10-09) they are not probed at all, so there is no failing probe every few minutes and
+ * no "stale" gap to ask the owner about.
+ */
+const MACOS_ONLY: ReadonlySet<Facet> = new Set(["hardware", "power", "sleep"]);
+
 const STABLE: ReadonlySet<Facet> = new Set(["hardware", "versions", "network", "place"]);
 const RETAINED: ReadonlySet<Facet> = new Set(["hardware", "versions", "place"]);
 
@@ -83,6 +90,8 @@ export interface SelfModelDeps {
 	/** The guarded HTTP client, for the IP-geolocation estimate; null switches it off. */
 	geoHttp: { get(url: string): Promise<{ status: number; body: string }> } | null;
 	exec?: Exec;
+	/** The platform the probes run on (tests); `process.platform` by default. */
+	platform?: NodeJS.Platform;
 	now?: () => Date;
 	newId?: () => string;
 	tickMs?: number;
@@ -162,6 +171,7 @@ export class SelfModel {
 	constructor(deps: SelfModelDeps) {
 		this.d = {
 			exec: execAsync,
+			platform: process.platform,
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
 			tickMs: 60_000,
@@ -202,7 +212,9 @@ export class SelfModel {
 		if (this.d.mode() !== "awake") return;
 		const now = this.d.now();
 		const due = (Object.keys(WINDOWS_MS) as (keyof typeof WINDOWS_MS)[]).filter(
-			(f) => force.includes(f) || this.ageMs(f, now) === null || this.ageMs(f, now)! >= WINDOWS_MS[f],
+			(f) =>
+				this.probeable(f) &&
+				(force.includes(f) || this.ageMs(f, now) === null || this.ageMs(f, now)! >= WINDOWS_MS[f]),
 		);
 		const order: (keyof typeof WINDOWS_MS)[] = ["hardware", "versions", "power", "sleep", "network", "place"];
 		for (const facet of order.filter((f) => due.includes(f))) {
@@ -363,6 +375,11 @@ export class SelfModel {
 	}
 
 	/** Age of a probed facet (its newest probe), or null if never probed. */
+	/** Whether this machine can probe a facet at all (`MACOS_ONLY`). */
+	private probeable(facet: Facet): boolean {
+		return this.d.platform === "darwin" || !MACOS_ONLY.has(facet);
+	}
+
 	ageMs(facet: Facet, now: Date): number | null {
 		const r = this.d.db
 			.prepare("SELECT max(observed_at) AS at FROM self_facts WHERE facet = ? AND source != 'owner'")
@@ -381,6 +398,7 @@ export class SelfModel {
 		const gaps: Gap[] = [];
 		for (const [facet, window] of Object.entries(WINDOWS_MS) as [keyof typeof WINDOWS_MS, number][]) {
 			if (facet === "place" && !this.d.geoHttp) continue;
+			if (!this.probeable(facet)) continue;
 			const age = this.ageMs(facet, now);
 			if (age === null) gaps.push({ facet, field: "*", kind: "missing", why: `${facet} was never probed` });
 			else if (age > 2 * window)

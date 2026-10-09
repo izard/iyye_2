@@ -74,7 +74,7 @@ import { Investigations } from "./observe/investigations.ts";
 import { Observer } from "./observe/observer.ts";
 import { ensureWorkspace } from "./observe/workspace.ts";
 import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
-import { SelfModel, selfNoteFor } from "./self/model.ts";
+import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
 import { getJob } from "./state/jobs.ts";
@@ -660,6 +660,9 @@ async function main(): Promise<number> {
 			selfGaps: () => selfModel.gaps(),
 			healing: () => models.healingReport(),
 			sleep: () => {
+				// Only a fresh reading: an old one (a probe that stopped, or another machine's, 2026-10-09) says nothing now.
+				const age = selfModel.ageMs("sleep", new Date());
+				if (age === null || age > 2 * WINDOWS_MS.sleep) return null;
 				const v = selfModel.value<boolean>("sleep", "sleptOnBattery");
 				const m = selfModel.value<number>("sleep", "asleepMinutes");
 				return v === null || m === null ? null : { sleptOnBattery: v, asleepMinutes: m };
