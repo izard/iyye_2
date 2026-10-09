@@ -712,6 +712,7 @@ async function main(): Promise<number> {
 					backgroundModel: {
 						name,
 						loaded: status.models.some((m) => m.name === name && m.status === "loaded"),
+						remote: name && models.isRemote(name) ? status.models.find((m) => m.name === name)?.status : null,
 					},
 					quietS: config.backgroundQuietS,
 					gapS: config.backgroundGapS,

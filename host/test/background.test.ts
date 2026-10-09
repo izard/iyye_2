@@ -365,6 +365,17 @@ describe("background work", () => {
 		assert.match(report, /background model: small-2 \(loaded\)/);
 		assert.match(report, /background: waiting: initiative is paused/);
 		assert.match(report, /background queue: 1\n {2}[0-9a-f]{8} investigation:disk — queued/);
+		// Plan 0.012: another machine's model is never "loaded" here; its machine's state is shown instead.
+		const far = focusReport({
+			db,
+			worker,
+			deviceHolder: null,
+			queuedReplies: 0,
+			backgroundModel: { name: "tak@mbp", loaded: false, remote: "on mbp: up" },
+			quietS: 180,
+			gapS: 30,
+		});
+		assert.match(far, /background model: tak@mbp \(on mbp: up; a conversation here does not hold it back\)/);
 	});
 });
 
