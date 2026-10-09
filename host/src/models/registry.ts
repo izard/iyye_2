@@ -66,6 +66,8 @@ const ARG_KEY_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
  * from `file`, and model-count/autoload/sleep policy must stay with the host.
  */
 const RESERVED_ARGS = new Set([
+	"load-mode", // IYYE2_LLAMA_LOAD_MODE: depends on the machine, not the model
+	"lm",
 	"model",
 	"m",
 	"host",

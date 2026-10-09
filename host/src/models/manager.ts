@@ -63,6 +63,8 @@ export interface ModelManagerDeps {
 	defaultMemoryModel?: string;
 	/** Initial model for background work (0.007); loaded by day like the chat models. */
 	defaultBackgroundModel?: string;
+	/** llama.cpp `--load-mode` for every model (IYYE2_LLAMA_LOAD_MODE). */
+	loadMode?: string | null;
 	log: Logger;
 	now?: () => Date;
 	newId?: () => string;
@@ -159,6 +161,7 @@ export class ModelManager {
 			defaultMemoryModel: "",
 			defaultBackgroundModel: "",
 			...deps,
+			loadMode: deps.loadMode ?? null,
 		};
 	}
 
@@ -194,7 +197,7 @@ export class ModelManager {
 			this.d.log.warn("models: default model is not in the registry", { model: this.d.defaultModel });
 		}
 		const presetPath = join(this.d.stateDir, "models.ini");
-		const preset = renderPreset(this.d.registry);
+		const preset = renderPreset(this.d.registry, { loadMode: this.d.loadMode });
 		let previous: string | null = null;
 		try {
 			previous = readFileSync(presetPath, "utf8");

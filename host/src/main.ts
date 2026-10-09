@@ -139,6 +139,7 @@ async function main(): Promise<number> {
 		defaultModel: config.defaultModel,
 		defaultMemoryModel: config.memory.defaultModel,
 		defaultBackgroundModel: config.backgroundModel,
+		loadMode: config.llamaLoadMode,
 		healthIntervalMs: config.healthIntervalS * 1000,
 		log,
 	});
@@ -803,6 +804,7 @@ async function main(): Promise<number> {
 	const owner = ensureOwnerToken(config.stateDir);
 	const web = new WebServer({
 		port: config.webPort,
+		host: config.webListen,
 		log,
 		ownerToken: owner.token,
 		sessions: new WebSessions(db),
@@ -878,6 +880,12 @@ async function main(): Promise<number> {
 			? `\nOwner web chat: ${web.loginUrl}\n\n`
 			: `\nOwner web chat: http://127.0.0.1:${config.webPort}/ (token in ${join(config.stateDir, "owner_token")})\n\n`,
 	);
+	if (web.lanLoginUrls.length)
+		process.stderr.write(
+			`Owner web chat on the LAN (plain HTTP, IYYE2_WEB_LISTEN=${config.webListen}):\n${web.lanLoginUrls
+				.map((u) => `  ${owner.created || process.stderr.isTTY ? u : u.replace(/#.*/, "")}`)
+				.join("\n")}\n\n`,
+		);
 	scheduler.start();
 	rhythm.start();
 	poller?.start();

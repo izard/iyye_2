@@ -1,6 +1,7 @@
 // Copyright 2026 Alexander Komarov
 // SPDX-License-Identifier: Apache-2.0
 
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,9 +13,13 @@ export const PROJECT_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export interface Config {
 	stateDir: string;
 	webPort: number;
+	/** The web chat's listen address (IYYE2_WEB_LISTEN): 127.0.0.1, or "0.0.0.0" / one address for the LAN. */
+	webListen: string;
 	/** Router launch command; tests replace it with a fake router. */
 	llamaServer: string;
 	llamaServerArgsPrefix: string[];
+	/** llama.cpp `--load-mode` for every model (IYYE2_LLAMA_LOAD_MODE); null: llama.cpp's own default. */
+	llamaLoadMode: string | null;
 	routerPort: number;
 	modelsRegistry: string;
 	/** Owner-written identity, the base of every system prompt (HLD §4.1). */
@@ -216,11 +221,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 	const webPort = int(env, "IYYE2_WEB_PORT", 5100, 1, 65535);
 	const routerPort = int(env, "IYYE2_ROUTER_PORT", 8180, 1, 65535);
 	if (webPort === routerPort) throw new ConfigError("IYYE2_WEB_PORT and IYYE2_ROUTER_PORT must differ");
+	// Owner decision 2026-10-09: the web chat may listen on the LAN. Plain HTTP: the session cookie crosses the LAN.
+	const webListen = env.IYYE2_WEB_LISTEN?.trim() || "127.0.0.1";
+	if (!isIP(webListen))
+		throw new ConfigError(`IYYE2_WEB_LISTEN must be an IP address (e.g. 0.0.0.0), got ${JSON.stringify(webListen)}`);
 	return {
 		stateDir: absPath(env.IYYE2_STATE_DIR || "~/.iyye2", cwd),
 		webPort,
+		webListen,
 		llamaServer: absPath(env.IYYE2_LLAMA_SERVER || "~/Downloads/llama.cpp/build_27/bin/llama-server", cwd),
 		llamaServerArgsPrefix: [],
+		llamaLoadMode: loadMode(env.IYYE2_LLAMA_LOAD_MODE),
 		routerPort,
 		modelsRegistry: absPath(env.IYYE2_MODELS_REGISTRY || resolve(PROJECT_ROOT, "config/models.json"), cwd),
 		identityFile: absPath(env.IYYE2_IDENTITY || resolve(PROJECT_ROOT, "config/identity.md"), cwd),
@@ -309,4 +320,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			toolkitSelection: oneOf(env, "IYYE2_TOOLKIT_SELECTION", ["act", "shadow"], "act"),
 		},
 	};
+}
+
+/**
+ * llama.cpp's model loading mode. On Linux (the DGX Spark, owner 2026-10-09) "none": CPU and GPU share one
+ * memory, and the default mmap would hold a second copy of the weights. On macOS, llama.cpp's own default.
+ */
+function loadMode(v: string | undefined): string | null {
+	const m = v?.trim() || (process.platform === "linux" ? "none" : "");
+	if (!m) return null;
+	if (!["auto", "none", "mmap", "mlock"].includes(m))
+		throw new ConfigError(`IYYE2_LLAMA_LOAD_MODE must be auto, none, mmap or mlock, got ${JSON.stringify(m)}`);
+	return m;
 }

@@ -3,12 +3,42 @@
 
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
+import { hostAllowed } from "../src/channels/web/server.ts";
 import { admitTelegramUpdate } from "../src/kernel/admission.ts";
 import { getEvent } from "../src/state/events.ts";
 import { getJobForEvent } from "../src/state/jobs.ts";
 import type { FeedView } from "../src/state/web.ts";
 import { type Sandbox, sandbox, waitFor } from "./model-helpers.ts";
 import { http, loginAs, msgId, type Stack, startStack, TOKEN } from "./web-helpers.ts";
+
+describe("owner web chat listening beyond 127.0.0.1 (IYYE2_WEB_LISTEN)", () => {
+	const sb: Sandbox = sandbox();
+	let s: Stack;
+	before(async () => {
+		s = await startStack(sb, {}, { webHost: "::1" });
+	});
+	after(async () => {
+		await s.stop();
+		sb.cleanup();
+	});
+
+	test("a request may name the address it arrived on, in Host and Origin; a foreign name is still refused", async () => {
+		const at = { address: "::1", host: `[::1]:${s.port}` };
+		assert.equal((await http(s.port, "GET", "/", at)).status, 200);
+		const login = await http(s.port, "POST", "/api/login", {
+			...at,
+			origin: `http://[::1]:${s.port}`,
+			body: { token: TOKEN },
+		});
+		assert.equal(login.status, 200);
+		assert.equal((await http(s.port, "GET", "/", { address: "::1", host: `evil.example:${s.port}` })).status, 403);
+		assert.equal(
+			(await http(s.port, "POST", "/api/login", { ...at, origin: "http://evil.example", body: { token: TOKEN } }))
+				.status,
+			403,
+		);
+	});
+});
 
 describe("owner web chat", () => {
 	const sb: Sandbox = sandbox();
@@ -56,6 +86,24 @@ describe("owner web chat", () => {
 				403,
 			);
 			assert.equal((await http(s.port, "GET", "/", { host: `localhost:${s.port}` })).status, 200);
+		});
+
+		test("on the LAN, Host may name the address it arrived on or this machine; never another name", () => {
+			const lan = { port: 5100, listen: "0.0.0.0", localAddress: "::ffff:192.168.1.123", hostname: "spark-3ac3" };
+			assert.equal(hostAllowed("192.168.1.123:5100", lan), true);
+			assert.equal(hostAllowed("spark-3ac3:5100", lan), true);
+			assert.equal(hostAllowed("SPARK-3AC3.local:5100", lan), true);
+			assert.equal(hostAllowed("127.0.0.1:5100", lan), true);
+			// DNS rebinding: a foreign name resolving to this address is still refused, as are other addresses and ports.
+			assert.equal(hostAllowed("evil.example:5100", lan), false);
+			assert.equal(hostAllowed("192.168.1.124:5100", lan), false);
+			assert.equal(hostAllowed("192.168.1.123:5101", lan), false);
+			assert.equal(hostAllowed("192.168.1.123", lan), false);
+			// On loopback (the default) the hostname is refused; the address the request arrived on is loopback anyway.
+			const local = { ...lan, listen: "127.0.0.1", localAddress: "127.0.0.1" };
+			assert.equal(hostAllowed("spark-3ac3:5100", local), false);
+			assert.equal(hostAllowed("192.168.1.123:5100", local), false);
+			assert.equal(hostAllowed("[::1]:5100", { ...local, listen: "::1", localAddress: "::1" }), true);
 		});
 
 		test("POSTs need the session's CSRF token", async () => {

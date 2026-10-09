@@ -35,6 +35,10 @@ test("unknown keys, duplicates and host-managed options are rejected", () => {
 	assert.throws(() => parseRegistry(base([model(), model()]), "/"), /duplicate model name/);
 	assert.throws(() => parseRegistry(base([model({ server_args: { "models-max": 4 } })]), "/"), /managed by the host/);
 	assert.throws(() => parseRegistry(base([model({ server_args: { port: 1 } })]), "/"), /managed by the host/);
+	assert.throws(
+		() => parseRegistry(base([model({ server_args: { "load-mode": "mmap" } })]), "/"),
+		/managed by the host/,
+	);
 	assert.throws(() => parseRegistry(base([model({ server_args: { x: "a\nb" } })]), "/"), /single line/);
 	assert.throws(() => parseRegistry(base([model({ server_args: { "Bad Key": 1 } })]), "/"), /invalid option name/);
 	assert.throws(() => parseRegistry(base([model({ name: "a b" })]), "/"), /invalid characters/);
@@ -76,6 +80,12 @@ test("the preset INI matches the golden file and leaves out unavailable models",
 		);
 		const golden = readFileSync(new URL("./fixtures/preset.golden.ini", import.meta.url), "utf8");
 		assert.equal(renderPreset(reg), golden.replaceAll("$DIR", dir));
+		// IYYE2_LLAMA_LOAD_MODE goes in [*], after the registry defaults; nothing when unset.
+		assert.equal(
+			renderPreset(reg, { loadMode: "none" }),
+			golden.replaceAll("$DIR", dir).replace("repeat-penalty = 1.2\n", "repeat-penalty = 1.2\nload-mode = none\n"),
+		);
+		assert.equal(renderPreset(reg, { loadMode: null }), renderPreset(reg));
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

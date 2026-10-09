@@ -139,11 +139,19 @@ export class DecisionService {
 		return readFileSync(file, "utf8").trim();
 	}
 
-	/** What `provision-decisions.ts` downloaded, if it matches the configured model. */
+	/**
+	 * What `provision-decisions.ts` downloaded, if it matches the configured model. A state dir moved from
+	 * another machine (2026-10-09, Mac → DGX Spark) records that machine's absolute path: the same snapshot
+	 * is then looked for in this state dir's own model cache.
+	 */
 	provisioned(): Provisioned | null {
 		try {
 			const p = JSON.parse(readFileSync(join(this.o.stateDir, "provisioned.json"), "utf8")) as Provisioned;
-			return p.run === this.o.model && existsSync(p.path) ? p : null;
+			if (p.run !== this.o.model) return null;
+			if (existsSync(p.path)) return p;
+			const i = p.path.lastIndexOf("/hf/");
+			const here = i >= 0 ? join(this.modelCacheDir, p.path.slice(i + 4)) : null;
+			return here && existsSync(here) ? { ...p, path: here } : null;
 		} catch {
 			return null;
 		}

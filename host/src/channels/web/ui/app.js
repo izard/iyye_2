@@ -239,7 +239,9 @@ async function refreshAttention() {
 }
 
 async function send(text) {
-	const id = crypto.randomUUID().replaceAll("-", "");
+	// Not crypto.randomUUID(): browsers offer it only on HTTPS or localhost, and on the LAN (IYYE2_WEB_LISTEN)
+	// the page is plain HTTP, where it throws and the message was lost.
+	const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
 	for (let attempt = 0; attempt < 3; attempt++) {
 		try {
 			const r = await api("/api/messages", { method: "POST", body: JSON.stringify({ client_msg_id: id, text }) });
