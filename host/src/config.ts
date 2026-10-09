@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseWindow, type RestWindow } from "./kernel/rhythm.ts";
+import { parseRemoteModel, RemoteConfigError, type RemoteModelConfig } from "./models/remote-config.ts";
 
 /** iyye_2/ — the project root holding config/ and the host package. */
 export const PROJECT_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -20,6 +21,11 @@ export interface Config {
 	llamaServerArgsPrefix: string[];
 	/** llama.cpp `--load-mode` for every model (IYYE2_LLAMA_LOAD_MODE); null: llama.cpp's own default. */
 	llamaLoadMode: string | null;
+	/**
+	 * A model another of the owner's machines serves (plan 0.012, IYYE2_REMOTE_MODEL), reached through the
+	 * pass-through on 127.0.0.1:`proxyPort`; its key and certificate are in `<state>/remote/<endpoint>/`.
+	 */
+	remote: { model: RemoteModelConfig | null; proxyPort: number };
 	routerPort: number;
 	modelsRegistry: string;
 	/** Owner-written identity, the base of every system prompt (HLD §4.1). */
@@ -232,6 +238,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		llamaServer: absPath(env.IYYE2_LLAMA_SERVER || "~/Downloads/llama.cpp/build_27/bin/llama-server", cwd),
 		llamaServerArgsPrefix: [],
 		llamaLoadMode: loadMode(env.IYYE2_LLAMA_LOAD_MODE),
+		remote: {
+			model: remoteModel(env.IYYE2_REMOTE_MODEL),
+			proxyPort: int(env, "IYYE2_REMOTE_PROXY_PORT", 8183, 1, 65535),
+		},
 		routerPort,
 		modelsRegistry: absPath(env.IYYE2_MODELS_REGISTRY || resolve(PROJECT_ROOT, "config/models.json"), cwd),
 		identityFile: absPath(env.IYYE2_IDENTITY || resolve(PROJECT_ROOT, "config/identity.md"), cwd),
@@ -332,4 +342,13 @@ function loadMode(v: string | undefined): string | null {
 	if (!["auto", "none", "mmap", "mlock"].includes(m))
 		throw new ConfigError(`IYYE2_LLAMA_LOAD_MODE must be auto, none, mmap or mlock, got ${JSON.stringify(m)}`);
 	return m;
+}
+
+function remoteModel(v: string | undefined): RemoteModelConfig | null {
+	try {
+		return parseRemoteModel(v);
+	} catch (err) {
+		if (err instanceof RemoteConfigError) throw new ConfigError(err.message);
+		throw err;
+	}
 }

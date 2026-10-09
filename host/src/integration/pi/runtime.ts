@@ -56,6 +56,9 @@ export async function createLocalModelRuntime(opts: LocalRuntimeOptions): Promis
 			.map((m) => ({
 				id: m.name,
 				name: m.name,
+				// A remote model (plan 0.012) goes through the host's own pass-through on 127.0.0.1, never to
+				// the other machine directly: the provider, and so this runtime's guard, are the same.
+				...(m.remote ? { baseUrl: `${m.remote.proxyUrl.replace(/\/$/, "")}/v1` } : {}),
 				input: ["text" as const],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				// Declared as a reasoning model only so Pi sends the switch: `enable_thinking` goes out

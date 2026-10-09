@@ -63,6 +63,7 @@ import { RouterClient } from "./models/client.ts";
 import { ModelManager } from "./models/manager.ts";
 import { systemMemoryProbe } from "./models/memory.ts";
 import { loadRegistry, RegistryError } from "./models/registry.ts";
+import { addRemoteModel, RemoteConfigError, RemoteModels, secretFile } from "./models/remote.ts";
 import { pidAlive, RouterProcess } from "./models/router.ts";
 import { MotivationActor, motivationNamed } from "./motivation/actor.ts";
 import { makeComposer } from "./motivation/compose.ts";
@@ -102,9 +103,12 @@ async function main(): Promise<number> {
 	try {
 		config = loadConfig();
 		registry = loadRegistry(config.modelsRegistry);
+		// Plan 0.012: a model another of the owner's machines serves, reached through the host's pass-through.
+		if (config.remote.model)
+			addRemoteModel(registry, config.remote.model, `http://127.0.0.1:${config.remote.proxyPort}`);
 		identity = readFileSync(config.identityFile, "utf8");
 	} catch (err) {
-		if (err instanceof ConfigError || err instanceof RegistryError) {
+		if (err instanceof ConfigError || err instanceof RegistryError || err instanceof RemoteConfigError) {
 			log.error(err.message);
 			return 2;
 		}
@@ -118,6 +122,18 @@ async function main(): Promise<number> {
 	if (!acquireHostLock(config.stateDir, log)) return 3;
 
 	const db = openDb(join(config.stateDir, "iyye.db"));
+	const remoteDir = config.remote.model ? join(config.stateDir, "remote", config.remote.model.endpoint) : null;
+	const remote =
+		config.remote.model && remoteDir
+			? new RemoteModels({
+					config: config.remote.model,
+					registry,
+					port: config.remote.proxyPort,
+					cert: secretFile(join(remoteDir, "cert.pem")),
+					key: secretFile(join(remoteDir, "api_key")),
+					log,
+				})
+			: null;
 	const router = new RouterProcess({
 		command: config.llamaServer,
 		argsPrefix: config.llamaServerArgsPrefix,
@@ -140,6 +156,7 @@ async function main(): Promise<number> {
 		defaultMemoryModel: config.memory.defaultModel,
 		defaultBackgroundModel: config.backgroundModel,
 		loadMode: config.llamaLoadMode,
+		remote,
 		healthIntervalMs: config.healthIntervalS * 1000,
 		log,
 	});
@@ -293,6 +310,10 @@ async function main(): Promise<number> {
 	const outbox = new Outbox({ db, log, adapters, held: () => rhythm.mode() === "asleep" });
 	// One device-consuming task at a time (HLD §5.1): chat jobs, console turns and memory work share it.
 	const device = new DeviceSlot();
+	// Plan 0.012: the other machine's own device. Work there never holds this one's, nor waits for it.
+	const remoteDevice = new DeviceSlot();
+	const deviceFor = (model: string) => (models.isRemote(model) ? remoteDevice : device);
+	const modelUrl = (model: string) => (remote?.has(model) ? remote.proxyUrl : router.url);
 	// Adenosine (plan 0.007 S2): one writer of energy charges; `rhythm` is created below and read later.
 	const adenosine = new Adenosine({
 		db,
@@ -342,6 +363,7 @@ async function main(): Promise<number> {
 	const background = new BackgroundWorker({
 		db,
 		device,
+		deviceFor,
 		models,
 		conversations: backgroundConversations,
 		chatPending: () => scheduler.hasRunnableJobs() || scheduler.busy,
@@ -361,9 +383,10 @@ async function main(): Promise<number> {
 		db,
 		log,
 		device,
+		deviceFor,
 		models,
 		background,
-		complete: routerComplete(router.url),
+		complete: routerComplete(modelUrl),
 		energy: adenosine,
 		enabled: config.facts.extract,
 	});
@@ -499,7 +522,10 @@ async function main(): Promise<number> {
 				}
 				const status = await models.status();
 				const missing = DAY_KEYS.map((k) => models.selected(k)).filter(
-					(m): m is string => m !== null && !status.models.some((s) => s.name === m && s.status === "loaded"),
+					(m): m is string =>
+						m !== null &&
+						!models.isRemote(m) &&
+						!status.models.some((s) => s.name === m && s.status === "loaded"),
 				);
 				const problems = wakeProblems({
 					db,
@@ -588,9 +614,10 @@ async function main(): Promise<number> {
 		// Plan 0.010 M3: proposals and follow-ups, one model call each under background work's rules.
 		compose: makeComposer({
 			device,
+			deviceFor,
 			models,
 			background,
-			complete: routerComplete(router.url, 600),
+			complete: routerComplete(modelUrl, 600),
 			energy: adenosine,
 		}),
 		proposePlan: (p) => plans.proposePlan(p),
@@ -616,6 +643,8 @@ async function main(): Promise<number> {
 				"the decision service": decisions.status,
 				"web search": searxng.status,
 				Telegram: poller ? poller.status : { state: "disabled" },
+				// Plan 0.012: an outage of the other machine is one visible service state, not stalled work.
+				...(remote ? { [`the background model on ${remote.endpoint}`]: remote.status } : {}),
 			}),
 			new Date(),
 		);
@@ -857,6 +886,7 @@ async function main(): Promise<number> {
 				await passthrough.stop();
 				await conversations.disposeAll();
 				await backgroundConversations.disposeAll();
+				await remote?.stop();
 				await models.stop();
 			} catch (err) {
 				log.error("stopping models failed", { error: (err as Error).message });
@@ -916,6 +946,8 @@ async function main(): Promise<number> {
 	motivation.start();
 	adenosine.start();
 	searxng.start();
+	// Plan 0.012: the pass-through to the other machine, and its first health check.
+	await remote?.start();
 	// After every service has started (one still "stopped" here would be recorded as an outage).
 	watchServices();
 	serviceTimer = setInterval(watchServices, 60_000);

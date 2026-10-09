@@ -28,10 +28,14 @@ import { type FactDoc, knownPeople, pendingDocs, recordExtraction, recordExtract
 /** One completion: the model's text, or null when it gave nothing usable (an error is thrown). */
 export type Complete = (model: string, system: string, user: string, signal: AbortSignal) => Promise<string>;
 
-/** A completion on the router (as the day summary does): explicit max_tokens, thinking off, a hang detector. */
-export function routerComplete(routerUrl: string, maxTokens = 1200): Complete {
+/**
+ * A completion on the router (as the day summary does): explicit max_tokens, thinking off, a hang detector.
+ * `routerUrl` may depend on the model: another machine's model goes to its pass-through (plan 0.012).
+ */
+export function routerComplete(routerUrl: string | ((model: string) => string), maxTokens = 1200): Complete {
 	return async (model, system, user, signal) => {
-		const res = await fetch(`${routerUrl}/v1/chat/completions`, {
+		const base = typeof routerUrl === "string" ? routerUrl : routerUrl(model);
+		const res = await fetch(`${base}/v1/chat/completions`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
@@ -87,15 +91,24 @@ export async function extractOne(
 	});
 }
 
+type Slot = { tryAcquire(label: string, opts?: { onPreempt?: () => void }): (() => void) | null };
+
 export interface FactExtractorDeps {
 	db: Db;
 	log: Logger;
-	device: {
-		tryAcquire(label: string, opts?: { onPreempt?: () => void }): (() => void) | null;
+	device: Slot;
+	/** The device slot of the machine a model runs on (plan 0.012); `device` when absent. */
+	deviceFor?: ((model: string) => Slot) | null;
+	models: {
+		selected(key: "background"): string | null;
+		acquire(name: string): Promise<ModelLease | OpResult>;
+		isRemote?(name: string): boolean;
 	};
-	models: { selected(key: "background"): string | null; acquire(name: string): Promise<ModelLease | OpResult> };
 	/** The background worker: its rules for when background work may start, and when it must give way. */
-	background: { blockedReason(): string | null; yieldReason(): string | null };
+	background: {
+		blockedReason(opts?: { remote?: boolean }): string | null;
+		yieldReason(opts?: { remote?: boolean }): string | null;
+	};
 	complete: Complete;
 	energy?: { deviceTime(kind: "background", ms: number, ref: string): void } | null;
 	enabled?: boolean;
@@ -114,6 +127,7 @@ export class FactExtractor {
 	constructor(deps: FactExtractorDeps) {
 		this.d = {
 			energy: null,
+			deviceFor: null,
 			enabled: true,
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
@@ -144,7 +158,9 @@ export class FactExtractor {
 	/** Extract one document if one may run now (exposed for tests). Returns true if one was attempted. */
 	async drainOnce(): Promise<boolean> {
 		if (this.running) return false;
-		const blocked = this.d.background.blockedReason();
+		const model = this.d.models.selected("background");
+		const remote = model !== null && this.d.models.isRemote?.(model) === true;
+		const blocked = this.d.background.blockedReason({ remote });
 		if (blocked) {
 			this.lastReason = blocked;
 			return false;
@@ -154,7 +170,6 @@ export class FactExtractor {
 			this.lastReason = "nothing to extract";
 			return false;
 		}
-		const model = this.d.models.selected("background");
 		if (!model) {
 			this.lastReason = "no background model is selected";
 			return false;
@@ -170,7 +185,7 @@ export class FactExtractor {
 			gaveWay ??= why;
 			abort.abort();
 		};
-		const release = this.d.device.tryAcquire(`facts:${d.docId}`, {
+		const release = (this.d.deviceFor?.(model) ?? this.d.device).tryAcquire(`facts:${d.docId}`, {
 			onPreempt: () => giveWay("a person needs the device"),
 		});
 		if (!release) {
@@ -180,7 +195,7 @@ export class FactExtractor {
 		}
 		this.running = true;
 		const watch = setInterval(() => {
-			const why = this.d.background.yieldReason();
+			const why = this.d.background.yieldReason({ remote });
 			if (why) giveWay(why);
 		}, this.d.watchMs);
 		watch.unref();
@@ -196,8 +211,10 @@ export class FactExtractor {
 			this.lastReason = "extracting";
 			this.d.log.info("facts: extracted", { doc: d.docId, kept: n });
 		} catch (err) {
-			// Given way: the output is discarded and the document stays to do, uncharged.
-			if (!gaveWay) recordExtractionFailure(this.d.db, d, model, (err as Error).message, this.d.now().toISOString());
+			// Given way, or the other machine was lost (plan 0.012): the output is discarded and the document
+			// stays to do, uncharged.
+			if (!gaveWay && !(remote && !lease.valid()))
+				recordExtractionFailure(this.d.db, d, model, (err as Error).message, this.d.now().toISOString());
 			this.lastReason = gaveWay ? `gave way: ${gaveWay}` : `the last extraction failed: ${(err as Error).message}`;
 		} finally {
 			clearInterval(watch);

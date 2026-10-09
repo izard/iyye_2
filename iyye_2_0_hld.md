@@ -406,7 +406,7 @@ Pi supports local generative endpoints and typed classifier calls, including ext
 
 Use one resource admission broker with priority queues, request IDs, cancellation, usage accounting, and bounded context/output budgets. Pi, decision inference, Hindsight, and the training worker use it when sharing a device. CPU/RAM, GPU memory, thermal limits, checkpoint storage, and training optimizer memory count too. Choose residency from measurements: dialogue plus a small decision model if they fit, otherwise explicit loading windows. Never hide model-load latency or maintain one full backbone per adapter by default.
 
-External tools may require internet access even in a local-model deployment. “Local-only inference” means no conversation or memory is sent to hosted model services; it does not imply weather or Telegram can work without a network.
+External tools may require internet access even in a local-model deployment. “Local-only inference” means no conversation or memory is sent to hosted model services; it does not imply weather or Telegram can work without a network. The owner's own machines on the owner's LAN count as local (owner decision 2026-10-09, plan 0.012): another of them may serve a model for background work, reached only through a host-owned pass-through with its certificate pinned and an API key, and never as an automatic fallback.
 
 ### 9.4 Typed local judgment is a first-class subsystem
 

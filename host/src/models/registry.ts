@@ -31,6 +31,11 @@ export interface ModelSpec {
 	thinking: "off" | "on";
 	/** False when the GGUF (or any of its shards) is missing; such a model is listed but cannot load. */
 	available: boolean;
+	/**
+	 * A model served by another of the owner's machines (plan 0.012), reached only through the host's
+	 * pass-through at `proxyUrl`. Never in the preset, never loaded or unloaded by the host.
+	 */
+	remote?: { endpoint: string; proxyUrl: string };
 }
 
 export interface Registry {

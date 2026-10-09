@@ -1,7 +1,7 @@
 // Copyright 2026 Alexander Komarov
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Registry, ServerArgs } from "./registry.ts";
+import type { ModelSpec, Registry, ServerArgs } from "./registry.ts";
 
 /** Seconds the router waits after an unload request before force-killing the model process. */
 export const STOP_TIMEOUT_S = 30;
@@ -24,7 +24,7 @@ export function renderPreset(registry: Registry, opts: { loadMode?: string | nul
 		"",
 	];
 	for (const m of registry.models) {
-		if (!m.available) continue;
+		if (!m.available || m.remote) continue;
 		lines.push(`[${m.name}]`, `model = ${m.path}`, ...argLines(m.serverArgs), `stop-timeout = ${STOP_TIMEOUT_S}`, "");
 	}
 	return lines.join("\n");
@@ -32,4 +32,19 @@ export function renderPreset(registry: Registry, opts: { loadMode?: string | nul
 
 function argLines(args: ServerArgs): string[] {
 	return Object.entries(args).map(([k, v]) => `${k} = ${typeof v === "boolean" ? String(v) : v}`);
+}
+
+/**
+ * The same server arguments as a llama-server command line, for a single model served on its own (plan
+ * 0.012: the owner's other machine). Registry `defaults`, then the model's `server_args`, exactly as the
+ * preset gives them; a short key (`c`, `np`) is one dash, a long one two; `true` is a bare flag, `false` left out.
+ */
+export function serverCliArgs(registry: Registry, m: ModelSpec): string[] {
+	const out: string[] = [];
+	for (const [k, v] of Object.entries({ ...registry.defaults, ...m.serverArgs })) {
+		if (v === false) continue;
+		out.push(k.length <= 2 ? `-${k}` : `--${k}`);
+		if (v !== true) out.push(String(v));
+	}
+	return out;
 }

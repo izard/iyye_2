@@ -15,6 +15,9 @@
  *   is discarded;
  * - one direct completion: no tools and no Pi session, so nothing the prompt
  *   holds is kept anywhere; device time is paid for.
+ * - on another machine's model (plan 0.012) it takes that machine's device
+ *   slot, a conversation here does not hold it back, and a lost connection
+ *   is "not now", never an error.
  */
 
 import type { Complete } from "../facts/extractor.ts";
@@ -22,10 +25,21 @@ import type { ModelLease, OpResult } from "../models/manager.ts";
 
 export type Composed = { ok: true; text: string } | { ok: false; notNow: string } | { ok: false; error: string };
 
+type Slot = { tryAcquire(label: string, opts?: { onPreempt?: () => void }): (() => void) | null };
+
 export interface ComposerDeps {
-	device: { tryAcquire(label: string, opts?: { onPreempt?: () => void }): (() => void) | null };
-	models: { selected(key: "background"): string | null; acquire(name: string): Promise<ModelLease | OpResult> };
-	background: { blockedReason(): string | null; yieldReason(): string | null };
+	device: Slot;
+	/** The device slot of the machine a model runs on (plan 0.012); `device` when absent. */
+	deviceFor?: ((model: string) => Slot) | null;
+	models: {
+		selected(key: "background"): string | null;
+		acquire(name: string): Promise<ModelLease | OpResult>;
+		isRemote?(name: string): boolean;
+	};
+	background: {
+		blockedReason(opts?: { remote?: boolean }): string | null;
+		yieldReason(opts?: { remote?: boolean }): string | null;
+	};
 	complete: Complete;
 	energy?: { deviceTime(kind: "background", ms: number, ref: string): void } | null;
 	now?: () => Date;
@@ -36,9 +50,10 @@ export interface ComposerDeps {
 export function makeComposer(deps: ComposerDeps): (label: string, system: string, user: string) => Promise<Composed> {
 	const now = deps.now ?? (() => new Date());
 	return async (label, system, user) => {
-		const blocked = deps.background.blockedReason();
-		if (blocked) return { ok: false, notNow: blocked };
 		const model = deps.models.selected("background");
+		const remote = model !== null && deps.models.isRemote?.(model) === true;
+		const blocked = deps.background.blockedReason({ remote });
+		if (blocked) return { ok: false, notNow: blocked };
 		if (!model) return { ok: false, notNow: "no background model is selected" };
 		const lease = await deps.models.acquire(model);
 		if (!("release" in lease))
@@ -49,7 +64,7 @@ export function makeComposer(deps: ComposerDeps): (label: string, system: string
 			gaveWay ??= why;
 			abort.abort();
 		};
-		const release = deps.device.tryAcquire(`motivation:${label}`, {
+		const release = (deps.deviceFor?.(model) ?? deps.device).tryAcquire(`motivation:${label}`, {
 			onPreempt: () => giveWay("a person needs the device"),
 		});
 		if (!release) {
@@ -57,7 +72,7 @@ export function makeComposer(deps: ComposerDeps): (label: string, system: string
 			return { ok: false, notNow: "the device is busy" };
 		}
 		const watch = setInterval(() => {
-			const why = deps.background.yieldReason();
+			const why = deps.background.yieldReason({ remote });
 			if (why) giveWay(why);
 		}, deps.watchMs ?? 250);
 		watch.unref();
@@ -67,7 +82,10 @@ export function makeComposer(deps: ComposerDeps): (label: string, system: string
 			if (gaveWay) return { ok: false, notNow: `gave way: ${gaveWay}` };
 			return { ok: true, text };
 		} catch (err) {
-			return gaveWay ? { ok: false, notNow: `gave way: ${gaveWay}` } : { ok: false, error: (err as Error).message };
+			if (gaveWay) return { ok: false, notNow: `gave way: ${gaveWay}` };
+			// Plan 0.012: the other machine went away mid-call; the work waits for it.
+			if (remote && !lease.valid()) return { ok: false, notNow: "the remote model's machine was lost" };
+			return { ok: false, error: (err as Error).message };
 		} finally {
 			clearInterval(watch);
 			release();
