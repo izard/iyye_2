@@ -16,7 +16,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { TelegramPoller } from "./channels/telegram/poller.ts";
+import { TelegramFiles } from "./channels/telegram/files.ts";
+import { MAX_IMAGE_BYTES, TelegramPoller } from "./channels/telegram/poller.ts";
 import { TelegramSender } from "./channels/telegram/sender.ts";
 import { WebChatAdapter } from "./channels/web/adapter.ts";
 import { ensureOwnerToken, WebSessions } from "./channels/web/auth.ts";
@@ -34,7 +35,7 @@ import { ToolkitSelectionShadow, ToolkitSelector } from "./decisions/toolkit-sel
 import { FactsCommand } from "./facts/commands.ts";
 import { FactExtractor, routerComplete } from "./facts/extractor.ts";
 import { FactNight } from "./facts/night.ts";
-import { createLocalModelRuntime, thinkingLevelFor } from "./integration/pi/runtime.ts";
+import { createLocalModelRuntime, outputCap, thinkingLevelFor } from "./integration/pi/runtime.ts";
 import { PiConversations } from "./integration/pi/sessions.ts";
 import { Adenosine } from "./kernel/adenosine.ts";
 import { BackgroundWorker } from "./kernel/background.ts";
@@ -92,6 +93,8 @@ import { currentTimeTool, systemStatusTool } from "./tools/probes.ts";
 import { projectToolkit } from "./tools/project.ts";
 import { remindersToolkit } from "./tools/reminders.ts";
 import { toolsReport } from "./tools/report.ts";
+import { thinkComplete, thinkingToolkit } from "./tools/thinking.ts";
+import { visionToolkit } from "./tools/vision.ts";
 import { WEB_TOOLKIT, webFetchTool, webSearchTool } from "./tools/web.ts";
 import { SearxngService } from "./web/searxng.ts";
 
@@ -245,6 +248,38 @@ async function main(): Promise<number> {
 				],
 			}
 		: null;
+	// Owner decision 2026-10-09: the owner's turns may ask the other machine's reasoning model one question
+	// (effect `act`, owner-only). `remoteDevice` and `adenosine` are created below and read only when it runs.
+	const remoteSpec = remote ? registry.models.find((m) => m.name === remote.name) : undefined;
+	const thinkingKit =
+		remote && remoteSpec && config.remote.thinkingDailyMax > 0
+			? thinkingToolkit({
+					db,
+					model: remote.name,
+					machine: remote.endpoint,
+					models,
+					device: { acquire: (label) => remoteDevice.acquire(label) },
+					complete: thinkComplete(() => remote.proxyUrl, outputCap(registry.defaults, remoteSpec)),
+					dailyMax: config.remote.thinkingDailyMax,
+					energy: { deviceTime: (kind, ms, ref) => adenosine.deviceTime(kind, ms, ref) },
+				})
+			: null;
+	// Images people send on Telegram (owner decision 2026-10-09): the owner and trusted contacts (effect `trusted`).
+	const visionSpec = config.vision.model ? registry.models.find((m) => m.name === config.vision.model) : undefined;
+	const visionKit =
+		visionSpec && !visionSpec.remote && config.vision.dailyMax > 0
+			? visionToolkit({
+					db,
+					mediaDir: join(config.stateDir, "media"),
+					model: visionSpec.name,
+					hasProjector: () => visionSpec.mmproj?.available === true,
+					models,
+					url: router.url,
+					telegram: config.telegramBotToken ? new TelegramFiles({ token: config.telegramBotToken }) : null,
+					maxBytes: MAX_IMAGE_BYTES,
+					dailyMax: config.vision.dailyMax,
+				})
+			: null;
 	const tools = new ToolBroker({
 		db,
 		log,
@@ -269,11 +304,16 @@ async function main(): Promise<number> {
 			messaging,
 			// Last (2026-10-08): Iyye's own repositories, read-only, in the owner's turns only (effect `private`).
 			projectKit,
+			// Last (2026-10-09): the reasoning model on the owner's other machine, owner-only.
+			...(thinkingKit ? [thinkingKit] : []),
+			// Last (2026-10-09): images sent in the conversation, the owner and trusted contacts.
+			...(visionKit ? [visionKit] : []),
 		],
 	});
 	const runtime = await createLocalModelRuntime({ routerUrl: router.url, registry });
 	const selectionActs = config.decisions.toolkitSelection === "act";
 	const conversations = new PiConversations({
+		clockNote: true,
 		db,
 		runtime,
 		thinkingLevel: (m) => thinkingLevelFor(registry, m),
@@ -339,6 +379,7 @@ async function main(): Promise<number> {
 	});
 	// Background work (plan 0.007 S1): its own conversations and read-only toolkits, on the background model.
 	const backgroundConversations = new PiConversations({
+		clockNote: true,
 		db,
 		runtime,
 		thinkingLevel: (m) => thinkingLevelFor(registry, m),
@@ -560,6 +601,7 @@ async function main(): Promise<number> {
 			selector.forgetScopes(scopes);
 		},
 		purgeTraces: (bank) => memory.purgeTraces(bank),
+		mediaDir: join(config.stateDir, "media"),
 	});
 	// The commitment clock (plan 0.006 C1): due reminders become actions on their exact route; asleep, they wait.
 	const commitmentClock = new CommitmentClock({

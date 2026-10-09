@@ -140,7 +140,7 @@ function telegramDropReason(
 	if (m.fromUserId == null) return "no_sender";
 	if (m.fromIsBot) return "bot_sender";
 	if (allowed && allowed.size > 0 && !allowed.has(m.fromUserId)) return "sender_not_allowed";
-	if (m.text.trim() === "") return "no_text";
+	if (m.text.trim() === "" && !m.image) return "no_text";
 	return null;
 }
 

@@ -36,6 +36,11 @@ export interface ModelSpec {
 	 * pass-through at `proxyUrl`. Never in the preset, never loaded or unloaded by the host.
 	 */
 	remote?: { endpoint: string; proxyUrl: string };
+	/**
+	 * The vision projector (registry `mmproj`, a file in `models_dir`): the model can look at images. Passed to
+	 * llama-server only while the file exists; a missing projector never makes the model itself unavailable.
+	 */
+	mmproj?: { path: string; available: boolean };
 }
 
 export interface Registry {
@@ -61,6 +66,7 @@ const MODEL_KEYS = new Set([
 	"description",
 	"server_args",
 	"thinking",
+	"mmproj",
 ]);
 const TOP_KEYS = new Set(["models_dir", "defaults", "models"]);
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -88,6 +94,8 @@ const RESERVED_ARGS = new Set([
 	"no-models-autoload",
 	"sleep-idle-seconds",
 	"load-on-startup",
+	"mmproj", // the registry's own `mmproj` key, only while the file exists
+	"mm",
 ]);
 
 export function loadRegistry(path: string): Registry {
@@ -132,9 +140,15 @@ export function parseRegistry(raw: unknown, baseDir: string): Registry {
 			serverArgs: serverArgs(o.server_args ?? {}, `${where}.server_args`),
 			thinking: thinking(o.thinking, `${where}.thinking`),
 			available: shardsExist(path),
+			...(o.mmproj === undefined ? {} : { mmproj: projector(str(o.mmproj, `${where}.mmproj`), modelsDir) }),
 		};
 	});
 	return { modelsDir, defaults, models };
+}
+
+function projector(file: string, modelsDir: string): { path: string; available: boolean } {
+	const path = isAbsolute(expandHome(file)) ? expandHome(file) : resolve(modelsDir, file);
+	return { path, available: existsSync(path) };
 }
 
 /** For `x-00001-of-00003.gguf`, every shard must exist; otherwise just the file. */

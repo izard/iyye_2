@@ -53,6 +53,7 @@ import {
 	touchSession,
 } from "../../state/sessions.ts";
 import type { SessionTools, ToolBroker, ToolkitSummary, TurnContext } from "../../tools/broker.ts";
+import { describeTime } from "../../tools/probes.ts";
 import { currentTurnStart, HOST_NOTE_PREFIX, trimEarlierToolResults } from "./context.ts";
 import { composeSystemPrompt, type ScopeView } from "./prompt.ts";
 import { IyyeResourceLoader, loadInlineExtensions } from "./resources.ts";
@@ -80,6 +81,8 @@ export interface ConversationsDeps {
 	 * (plan 0.006, owner choice), so it knows what "done, thanks" answers.
 	 */
 	turnNotes?: ((scope: string) => string | null) | null;
+	/** Add the current time to every turn's notes, background steps included (`nowNote`). Off in tests. */
+	clockNote?: boolean;
 	/** The thinking level for a model: "medium" for a registry `thinking: on`, else "off". */
 	thinkingLevel?: (model: string) => "medium" | "off";
 	/**
@@ -140,6 +143,7 @@ export class PiConversations {
 			memory: null,
 			afterTurn: null,
 			turnNotes: null,
+			clockNote: false,
 			toolkitSelection: null,
 			thinkingLevel: () => "off",
 			...deps,
@@ -242,7 +246,10 @@ export class PiConversations {
 			return { ok: false, reason: "error", message: (err as Error).message };
 		}
 		const notes = req.view.kind === "background" ? null : (this.d.turnNotes?.(req.scope) ?? null);
-		live.recall.block = [await this.recallFor(req), notes].filter(Boolean).join("\n\n") || null;
+		live.recall.block =
+			[await this.recallFor(req), notes, this.d.clockNote ? nowNote(this.d.now()) : null]
+				.filter(Boolean)
+				.join("\n\n") || null;
 		const startedAt = this.d.now().toISOString();
 		let result: TurnResult;
 		try {
@@ -469,6 +476,15 @@ interface TurnState {
 export const RECOVERY_NOTE = `${HOST_NOTE_PREFIX} Your previous reply was cut off at the length limit before you answered. Answer the person's last message now, briefly, using only what you have already found. Do not call tools. If you could not find the answer, say so plainly.`;
 
 /** Sent when the model finished without any answer text (2026-10-03: it reasoned for 9 minutes and stopped). */
+/**
+ * The current time on every turn, background steps included (2026-10-09: with no clock in the prompt a
+ * reasoning model kept calling `current_time`, again and again within one turn). Request-local, like the
+ * other notes: never stored in the transcript, so earlier turns keep their cached prefix.
+ */
+export function nowNote(d: Date): string {
+	return `<now>It is ${describeTime(d)}. No need to call current_time for this.</now>`;
+}
+
 export const RECOVERY_NOTE_TOOL_LOOP = `${HOST_NOTE_PREFIX} Your tool calls were stopped: they kept failing or repeating. Answer the person's last message now, briefly, from what the tools already returned. Do not call tools. If you could not find the answer, say so plainly and say what went wrong.`;
 
 export const RECOVERY_NOTE_EMPTY = `${HOST_NOTE_PREFIX} Your previous reply ended without an answer. Answer the person's last message now, directly. If you are not sure of a fact, look it up with your tools first; if you still cannot find it, say so plainly.`;

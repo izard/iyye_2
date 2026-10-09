@@ -23,6 +23,7 @@
  *   remembered normally: the contact, its channel bindings and trust stay.
  */
 
+import { existsSync, rmSync } from "node:fs";
 import { forgetReplyReviews } from "../decisions/reply-review.ts";
 import { forgetBeliefs } from "../facts/beliefs.ts";
 import { queueFactDocDeletions } from "../facts/night.ts";
@@ -33,6 +34,7 @@ import { forgetSelfFacts } from "../self/model.ts";
 import { accountsOf, type Contact, OWNER_CONTACT_ID, resolvePerson, scopeFor } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
+import { mediaPath } from "../state/media.ts";
 import {
 	addTombstone,
 	bankDeletionDone,
@@ -77,6 +79,31 @@ export function forgetTarget(db: Db, contact: Contact): ForgetTarget | string {
 }
 
 /** The background conversations of the person's plan steps (plan 0.006 C4): their prompts quote the person. */
+/** Events in these scopes that came with an image (to delete their kept copies, `forgetMedia`). */
+export function imageEvents(db: Db, scopes: readonly string[]): string[] {
+	const marks = scopes.map(() => "?").join(", ");
+	return (
+		db
+			.prepare(
+				`SELECT id FROM events WHERE scope IN (${marks}) AND json_extract(payload_json, '$.message.image') IS NOT NULL`,
+			)
+			.all(...scopes) as { id: string }[]
+	).map((r) => r.id);
+}
+
+/** Delete the kept copies of these events' images (`<state>/media/<event id>`); returns how many there were. */
+export function forgetMedia(mediaDir: string, eventIds: readonly string[]): number {
+	let n = 0;
+	for (const id of eventIds) {
+		const path = mediaPath(mediaDir, id);
+		if (existsSync(path)) {
+			rmSync(path, { force: true });
+			n++;
+		}
+	}
+	return n;
+}
+
 export function planSessions(db: Db, scopes: readonly string[]): string[] {
 	const marks = scopes.map(() => "?").join(", ");
 	return (
@@ -271,6 +298,11 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			ownerTurns.map((r) => r.action_id),
 			at,
 		);
+		// …and the images they sent (only Telegram's file id is in the payload; kept copies: `forgetMedia`).
+		db.prepare(
+			`UPDATE events SET payload_json = json_remove(payload_json, '$.message.image')
+			 WHERE scope IN (${marks}) AND json_extract(payload_json, '$.message.image') IS NOT NULL`,
+		).run(...t.scopes);
 		// Telegram payloads keep their routing (chat id, user id); only the words go.
 		db.prepare(
 			`UPDATE events SET payload_json = json_set(payload_json, '$.message.text', ?)

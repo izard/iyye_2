@@ -39,4 +39,17 @@ export interface TelegramMessage {
 	/** `text`, falling back to `caption`; "" when neither exists. */
 	text: string;
 	dateUnix: number | null;
+	/**
+	 * A photo (its largest size within `MAX_IMAGE_BYTES`) or an image sent as a file: only Telegram's file id,
+	 * never the image. It is downloaded when a tool looks at it (`channels/telegram/files.ts`).
+	 */
+	image?: TelegramImage;
+}
+
+export interface TelegramImage {
+	fileId: string;
+	/** Bytes, when Telegram says. */
+	size: number | null;
+	/** "photo" (Telegram re-encodes them as JPEG) or the document's own image MIME type. */
+	kind: "photo" | "image/jpeg" | "image/png" | "image/webp";
 }

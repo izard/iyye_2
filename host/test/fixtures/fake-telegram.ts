@@ -3,7 +3,7 @@
 
 /**
  * An in-process stand-in for the Telegram Bot API: sendMessage,
- * sendChatAction, getMe and getUpdates (long polling with Telegram's offset
+ * sendChatAction, getMe, getFile (and the file download) and getUpdates (long polling with Telegram's offset
  * semantics: asking for offset N confirms and drops every update below N).
  * Each chat's next sendMessage responses and each method's next responses
  * can be scripted; unscripted requests succeed. Nothing here ever talks to
@@ -32,6 +32,9 @@ export interface IncomingMessage {
 	noFrom?: boolean;
 	/** Unix seconds; defaults to now. */
 	date?: number;
+	/** A photo's sizes (file ids from `addFile`), as Telegram sends them: smallest first. */
+	photo?: { file_id: string; width: number; height: number; file_size?: number }[];
+	document?: { file_id: string; mime_type: string; file_size?: number };
 }
 
 export type ApiResponse = "401" | "409" | "500" | "drop";
@@ -49,7 +52,15 @@ export class FakeTelegram {
 	private readonly scripts = new Map<number, FakeResponse[]>();
 	private server: Server | null = null;
 	private nextId = 100;
+	private readonly files = new Map<string, Buffer>();
+	/** Every file download's request path (it holds the token, as Telegram's does). */
+	readonly downloads: string[] = [];
 	port = 0;
+
+	/** A file `getFile` knows and the download serves. */
+	addFile(fileId: string, bytes: Buffer): void {
+		this.files.set(fileId, bytes);
+	}
 
 	get apiBase(): string {
 		return `http://127.0.0.1:${this.port}`;
@@ -74,6 +85,8 @@ export class FakeTelegram {
 					: { from: { id: m.fromId, is_bot: m.isBot ?? false, first_name: m.firstName ?? "User" } }),
 				...(m.text !== undefined ? { text: m.text } : {}),
 				...(m.caption !== undefined ? { caption: m.caption } : {}),
+				...(m.photo ? { photo: m.photo } : {}),
+				...(m.document ? { document: m.document } : {}),
 			},
 		});
 		for (const w of this.waiters.splice(0)) w();
@@ -96,6 +109,14 @@ export class FakeTelegram {
 				data += c;
 			});
 			req.on("end", () => {
+				const dl = /^\/file\/bot[^/]+\/files\/(.+)$/.exec(req.url ?? "");
+				if (dl) {
+					this.downloads.push(req.url ?? "");
+					const bytes = this.files.get(decodeURIComponent(dl[1]!));
+					if (!bytes) res.writeHead(404).end();
+					else res.writeHead(200, { "content-type": "application/octet-stream" }).end(bytes);
+					return;
+				}
 				const m = /^\/bot([^/]+)\/(\w+)$/.exec(req.url ?? "");
 				const body = JSON.parse(data || "{}") as { chat_id: number; text?: string };
 				if (!m) {
@@ -103,6 +124,19 @@ export class FakeTelegram {
 					return;
 				}
 				const [, token, method] = m;
+				if (method === "getFile") {
+					const id = (body as unknown as { file_id?: string }).file_id ?? "";
+					const bytes = this.files.get(id);
+					res.writeHead(bytes ? 200 : 400, { "content-type": "application/json" });
+					res.end(
+						JSON.stringify(
+							bytes
+								? { ok: true, result: { file_id: id, file_size: bytes.length, file_path: `files/${id}` } }
+								: { ok: false, error_code: 400, description: "Bad Request: invalid file_id" },
+						),
+					);
+					return;
+				}
 				if (method === "getMe" || method === "getUpdates") {
 					this.handleApi(method, body as unknown as Record<string, unknown>, res, req);
 					return;

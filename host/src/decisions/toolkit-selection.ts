@@ -38,7 +38,7 @@ export const CORE_TOOLKIT = "core";
  * `messaging` (plan 0.008, owner-only) likewise: a hidden one would make Iyye
  * refuse "send Jacob a greeting", the request that motivated it.
  */
-export const ALWAYS_ON: readonly string[] = [CORE_TOOLKIT, "reminders", "plans", "messaging"];
+export const ALWAYS_ON: readonly string[] = [CORE_TOOLKIT, "reminders", "plans", "messaging", "thinking", "vision"];
 
 export const TOOLKIT_SELECTION: Role = {
 	name: "toolkit_selection",

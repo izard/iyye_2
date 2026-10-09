@@ -25,7 +25,14 @@ export function renderPreset(registry: Registry, opts: { loadMode?: string | nul
 	];
 	for (const m of registry.models) {
 		if (!m.available || m.remote) continue;
-		lines.push(`[${m.name}]`, `model = ${m.path}`, ...argLines(m.serverArgs), `stop-timeout = ${STOP_TIMEOUT_S}`, "");
+		lines.push(
+			`[${m.name}]`,
+			`model = ${m.path}`,
+			...(m.mmproj?.available ? [`mmproj = ${m.mmproj.path}`] : []),
+			...argLines(m.serverArgs),
+			`stop-timeout = ${STOP_TIMEOUT_S}`,
+			"",
+		);
 	}
 	return lines.join("\n");
 }
@@ -46,5 +53,6 @@ export function serverCliArgs(registry: Registry, m: ModelSpec): string[] {
 		out.push(k.length <= 2 ? `-${k}` : `--${k}`);
 		if (v !== true) out.push(String(v));
 	}
+	if (m.mmproj?.available) out.push("--mmproj", m.mmproj.path);
 	return out;
 }

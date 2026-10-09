@@ -111,8 +111,10 @@ export interface Toolkit {
 	 * (owner decision). "act": other effects, owner-only until grants exist.
 	 * "private": observes only, but what it reads is the owner's (Iyye's own code repositories): the owner and
 	 * Iyye's own work, never contacts.
+	 * "trusted": observes only what the asker sent in this conversation (images, 2026-10-09), but costs a
+	 * model call on the owner's machine: the owner and contacts the owner trusts, never Iyye's own work.
 	 */
-	effect: "read" | "self" | "reach" | "act" | "private";
+	effect: "read" | "self" | "reach" | "act" | "private" | "trusted";
 	tools: IyyeTool[];
 }
 
@@ -184,6 +186,7 @@ export class ToolBroker {
 		if (kit.effect === "read") return true;
 		if (kit.effect === "private") return principal === "owner" || principal === "iyye";
 		if (kit.effect === "self") return principal === "owner" || principal === "contact";
+		if (kit.effect === "trusted") return principal === "owner" || (principal === "contact" && trusted);
 		// A plan step runs a question a contact may have written, approved as a read-only look (0.006 C4): never `reach`.
 		if (kit.effect === "reach")
 			// …nor an investigation: it reads web pages, and a page must never be able to make Iyye write to someone.

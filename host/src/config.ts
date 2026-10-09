@@ -25,7 +25,12 @@ export interface Config {
 	 * A model another of the owner's machines serves (plan 0.012, IYYE2_REMOTE_MODEL), reached through the
 	 * pass-through on 127.0.0.1:`proxyPort`; its key and certificate are in `<state>/remote/<endpoint>/`.
 	 */
-	remote: { model: RemoteModelConfig | null; proxyPort: number };
+	remote: {
+		model: RemoteModelConfig | null;
+		proxyPort: number;
+		/** Questions the owner's turns may hand to it a day (`ask_thinking_model`, IYYE2_THINKING_DAILY_MAX; 0 turns it off). */
+		thinkingDailyMax: number;
+	};
 	routerPort: number;
 	modelsRegistry: string;
 	/** Owner-written identity, the base of every system prompt (HLD §4.1). */
@@ -70,6 +75,11 @@ export interface Config {
 	/** Seconds between router health checks. */
 	healthIntervalS: number;
 	telegramBotToken: string | null;
+	/**
+	 * Looking at images people send (2026-10-09): the model with a projector (IYYE2_VISION_MODEL, default
+	 * gemma-4-26B; "0" turns it off) and looks per conversation a day (IYYE2_VISION_DAILY_MAX).
+	 */
+	vision: { model: string | null; dailyMax: number };
 	telegramAllowedUserIds: Set<number>;
 	memory: {
 		enabled: boolean;
@@ -241,6 +251,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		remote: {
 			model: remoteModel(env.IYYE2_REMOTE_MODEL),
 			proxyPort: int(env, "IYYE2_REMOTE_PROXY_PORT", 8183, 1, 65535),
+			thinkingDailyMax: int(env, "IYYE2_THINKING_DAILY_MAX", 20, 0, 1000),
 		},
 		routerPort,
 		modelsRegistry: absPath(env.IYYE2_MODELS_REGISTRY || resolve(PROJECT_ROOT, "config/models.json"), cwd),
@@ -295,6 +306,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		defaultModel: env.IYYE2_DEFAULT_MODEL || "gemma-4-26B",
 		healthIntervalS: int(env, "IYYE2_HEALTH_INTERVAL_S", 30, 1, 3600),
 		telegramBotToken,
+		vision: {
+			model: env.IYYE2_VISION_MODEL === "0" ? null : env.IYYE2_VISION_MODEL || "gemma-4-26B",
+			dailyMax: int(env, "IYYE2_VISION_DAILY_MAX", 30, 0, 1000),
+		},
 		telegramAllowedUserIds: allowed,
 		memory: {
 			enabled: env.IYYE2_MEMORY_ENABLED !== "0",
