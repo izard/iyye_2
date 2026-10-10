@@ -69,6 +69,11 @@ export interface ExtractionDoc {
 	asked?: string;
 	/** When it was said (ISO): relative dates resolve against it. */
 	at: string;
+	/**
+	 * For a reply: the host found a successful call to a world-reading tool in its turn. Only then may a source
+	 * the reply names make its facts "cited"; the extraction model's label alone never does.
+	 */
+	toolBacked?: boolean;
 }
 
 /** What the model returns for one fact (only text fields and two flags). */
@@ -476,7 +481,7 @@ export function processFacts(
 		const subjectRef = resolveSubject(f.subject, doc, people);
 		const modality: Modality = doc.kind === "reply" ? "told_by_iyye" : doc.kind === "finding" ? "measured" : "stated";
 		const source = doc.kind === "person" ? (doc.speakerId ?? "unknown") : doc.kind === "reply" ? "iyye" : "probe";
-		const cited = doc.kind === "reply" ? f.source_named?.trim() || null : null;
+		const cited = doc.kind === "reply" && doc.toolBacked === true ? f.source_named?.trim() || null : null;
 		const timeFrame = (TIME_FRAMES as readonly string[]).includes(f.time_frame ?? "")
 			? (f.time_frame as TimeFrame)
 			: doc.kind === "finding"

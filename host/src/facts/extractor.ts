@@ -52,7 +52,11 @@ export function routerComplete(routerUrl: string | ((model: string) => string), 
 			signal: AbortSignal.any([signal, AbortSignal.timeout(600_000)]), // a hang detector, not a latency budget
 		});
 		if (!res.ok) throw new Error(`the model answered HTTP ${res.status}`);
-		const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+		const body = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
+		// Cut off at max_tokens: what arrived is not the answer (2026-10-10 review: a partial JSON line read as
+		// a complete extraction). A failure, so the caller tries again or gives up, never uses half an answer.
+		if (body.choices?.[0]?.finish_reason === "length")
+			throw new Error(`the answer was cut off at ${maxTokens} tokens`);
 		return body.choices?.[0]?.message?.content ?? "";
 	};
 }
@@ -74,6 +78,14 @@ export async function extractOne(
 	const text = await opts.complete(opts.model, extractionPrompt(d.doc.kind), extractionInput(d.doc), opts.signal);
 	if (opts.signal.aborted) throw new Error("aborted");
 	const parsed = parseFacts(text);
+	// "Nothing to extract" is an empty reply (the prompt's own rule). Text with no well-formed fact line is a
+	// failed attempt, not an empty document: retried, and given up only after MAX_ATTEMPTS.
+	if (text.trim() && parsed.facts.length === 0)
+		throw new Error(
+			parsed.bad > 0
+				? `${parsed.bad} malformed line(s) and no fact`
+				: "the reply was not JSON lines (and not empty)",
+		);
 	const { kept, dropped } = processFacts(parsed.facts, d.doc, opts.people ?? knownPeople(db));
 	const reasons: Record<string, number> = {};
 	for (const x of dropped) {

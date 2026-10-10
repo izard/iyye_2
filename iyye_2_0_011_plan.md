@@ -135,6 +135,14 @@ Exit gate (HLD §15):
 - **#15 Forgetting:** a forgotten person's facts and evidence leave every belief; nothing returns through a merge.
 - **#18 Label integrity:** owner corrections join the right belief; self-generated agreement is never an authoritative label.
 
+*(Review fixes, 2026-10-10; `test/review-2026-10-10.test.ts`)*
+- **Privacy before trust:** a private belief reaches only its speakers for every contact reader; an untrusted one was shown it through personless evidence (a cited relay).
+- **A value said again:** the fact key's earlier value said after its replacement (Berlin → Munich → Berlin) reopens the closed belief and closes the replacement; a later fact about the past only adds history, and Iyye's words never reopen. `/facts correct` to a value replaced earlier reopens it. One belief per value: its `valid_from` moves to the return, the earlier interval stays only in the evidence.
+- **Incomplete extraction:** a completion cut off at `max_tokens` (`finish_reason: length`) is an error in `routerComplete`, and a non-empty reply with no well-formed fact line is a failed attempt (retried, then given up), never an empty document.
+- **Citations are the host's:** a reply's fact is `cited` only when its turn has a successful call to a world-reading tool (`toolBacked`, from `tool_calls`); the extraction model's `source_named` alone no longer is.
+- **Contacts' prompt:** a trusted contact's says to share about other people only what recall labels with its source (the disclosure rule); an untrusted one's still says nothing.
+- **Known limit, kept:** grounding checks the quote, numbers, dates and names, not that the claim follows from the quote ("the grass is purple" from "the grass is green" passes); it is a filter, not proof.
+
 ## 5. Risks
 
 - **Extraction quality on a 4B model:** F0 decides; the grounding check bounds hallucination; the memory model is the fallback.

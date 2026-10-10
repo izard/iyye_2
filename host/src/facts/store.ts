@@ -76,6 +76,37 @@ export function knownPeople(db: Db): KnownPerson[] {
 	}));
 }
 
+/**
+ * Tools whose results are evidence about the world, for a reply's citations (2026-10-10 review: a source the
+ * extraction model named was taken as cited without any). Memory, reminders, plans and messages are not.
+ */
+const WORLD_TOOLS = [
+	"web_search",
+	"web_fetch",
+	"current_time",
+	"system_status",
+	"git_log",
+	"git_show",
+	"git_status",
+	"read_file",
+	"list_dir",
+	"look_at_image",
+	"ask_thinking_model",
+];
+
+/** Whether the turn behind a reply read the world through a tool (a successful call between message and reply). */
+function toolBacked(db: Db, e: StmEpisode): boolean {
+	if (!e.answered_at) return false;
+	return Boolean(
+		db
+			.prepare(
+				`SELECT 1 FROM tool_calls WHERE scope = ? AND outcome = 'ok' AND started_at >= ? AND started_at <= ?
+				 AND tool IN (${WORLD_TOOLS.map(() => "?").join(", ")}) LIMIT 1`,
+			)
+			.get(e.scope, e.said_at, e.answered_at, ...WORLD_TOOLS),
+	);
+}
+
 /** The documents of one STM entry that facts are extracted from (none for entries that are not evidence). */
 export function docsFor(db: Db, e: StmEpisode): FactDoc[] {
 	if (e.kind === "summary") return [];
@@ -112,6 +143,7 @@ export function docsFor(db: Db, e: StmEpisode): FactDoc[] {
 				recipient: who.speaker,
 				asked: e.user_text,
 				at: e.answered_at ?? e.said_at,
+				toolBacked: toolBacked(db, e),
 			},
 		});
 	return out;

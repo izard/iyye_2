@@ -244,6 +244,20 @@ function createBelief(
 	return id;
 }
 
+/** A closed belief is current again from `validFrom` (its value was said again after it was replaced). */
+function reopen(db: Db, beliefId: string, validFrom: string, at: string): void {
+	db.prepare(
+		"UPDATE beliefs SET state = 'current', valid_from = ?, valid_to = NULL, closed_by = NULL, updated_at = ? WHERE id = ?",
+	).run(validFrom, at, beliefId);
+}
+
+/** The current beliefs of a key other than `except`. */
+function currentValues(db: Db, key: string, except: string): Belief[] {
+	return db
+		.prepare("SELECT * FROM beliefs WHERE fact_key = ? AND state = 'current' AND id <> ?")
+		.all(key, except) as Belief[];
+}
+
 function findBelief(db: Db, key: string, objectNorm: string, negated: number): Belief | null {
 	return (
 		(db
@@ -298,7 +312,27 @@ export function mergeFact(db: Db, f: StmFact, o: MergeOptions): MergeResult {
 		db.prepare("UPDATE stm_facts SET state = 'merged', merged_at = ?, belief_id = NULL WHERE id = ?").run(at, f.id);
 		return { beliefId: null, relation: "new", touched: [] };
 	}
-	if (same) {
+	// A value said again after it was replaced (Berlin → Munich → Berlin; 2026-10-10 review): the old belief is
+	// current again and what replaced it is closed, unless this is Iyye's own word or about the past.
+	const returns =
+		same?.state === "closed" &&
+		f.negated === 0 &&
+		f.modality !== "told_by_iyye" &&
+		SINGLE_VALUED.has(predicateOf(f.fact_key)) &&
+		f.valid_from >= (same.valid_to ?? "");
+	if (same && returns) {
+		beliefId = same.id;
+		relation = "changes";
+		reopen(db, same.id, f.valid_from, at);
+		addEvidence(db, beliefId, row("changes", 1), o);
+		for (const b of currentValues(db, f.fact_key, same.id)) {
+			if (b.negated !== 0 || approximate(b.object_norm) || b.valid_from > f.valid_from) continue;
+			db.prepare(
+				"UPDATE beliefs SET state = 'closed', valid_to = ?, closed_by = ?, updated_at = ? WHERE id = ?",
+			).run(f.valid_from, beliefId, at, b.id);
+			touched.push({ beliefId: b.id, how: "changes" });
+		}
+	} else if (same) {
 		beliefId = same.id;
 		relation = "corroborates";
 		addEvidence(db, beliefId, row("corroborates", 1), o);
@@ -380,6 +414,8 @@ export function correctBelief(
 		});
 		const target = findBelief(db, old.fact_key, norm, 0);
 		if (target?.id === old.id) return { newId: old.id, old };
+		// The owner's right value may be one that was replaced earlier: it is current again.
+		if (target?.state === "closed") reopen(db, target.id, o.now.toISOString().slice(0, 10), o.now.toISOString());
 		const newId =
 			target?.id ??
 			createBelief(

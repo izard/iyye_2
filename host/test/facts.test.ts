@@ -35,6 +35,7 @@ import { type Db, openDb } from "../src/state/db.ts";
 import { getEvent } from "../src/state/events.ts";
 import { recordEpisode, recordIyyeEntry, type StmEpisode } from "../src/state/stm.ts";
 import { addTombstone } from "../src/state/tombstones.ts";
+import { recordToolCall } from "../src/state/tool-calls.ts";
 import { CHECKPOINT, FakeKev } from "./fixtures/fake-kev-http.ts";
 import { FakeLtm } from "./fixtures/fake-ltm.ts";
 import { waitFor } from "./model-helpers.ts";
@@ -361,11 +362,26 @@ describe("F1: extraction, grounding and priors", () => {
 		const forJacob = await gw.recall({ scope: "contact:jacob", principal: "contact" }, "who plays violin?");
 		assert.equal(forJacob.items.length, 0, "another contact never sees what Julia said");
 		// Iyye's reply: only what Iyye told, labelled as its own words.
+		// The turn searched the web (the host's own record): the source the reply names counts.
+		const searched = new Date(T0.getTime() + 3_600_000);
 		turn(db, {
 			id: "e2",
 			who: "owner",
 			text: "When did Bunin win?",
 			reply: "Bunin won the Nobel Prize in 1933 (web search).",
+			at: searched,
+		});
+		recordToolCall(db, {
+			id: "t1",
+			scope: "owner",
+			principal: "owner",
+			tool: "web_search",
+			toolkit: "web",
+			args_json: "{}",
+			outcome: "ok",
+			result: "…",
+			started_at: searched.toISOString(),
+			finished_at: searched.toISOString(),
 		});
 		const reply = scripted({
 			"Bunin won": [
@@ -394,6 +410,32 @@ describe("F1: extraction, grounding and priors", () => {
 			).p,
 			0.6,
 			"a cited relay",
+		);
+		// The same reply with no tool call in its turn: the extraction model's label alone cites nothing.
+		turn(db, {
+			id: "e3",
+			who: "owner",
+			text: "And Pasternak?",
+			reply: "Pasternak won the Nobel Prize in 1958 (verified web search).",
+			at: new Date(T0.getTime() + 7_200_000),
+		});
+		const claimed = scripted({
+			"Pasternak won": [
+				line({
+					subject: "Pasternak",
+					predicate: "other: won",
+					object: "the Nobel Prize in 1958",
+					quote: "Pasternak won the Nobel Prize in 1958",
+					source_named: "verified web search",
+				}),
+			],
+		});
+		const ex2 = extractor(db, claimed);
+		while (await ex2.drainOnce()) {}
+		assert.deepEqual(
+			db.prepare("SELECT cited, p FROM stm_facts WHERE event_id = 'e3'").get(),
+			{ cited: null, p: 0.4 },
+			"an uncited relay",
 		);
 	});
 

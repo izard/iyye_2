@@ -82,9 +82,11 @@ export function visibleEvidence(db: Db, b: Belief, reader: BeliefReader): Eviden
 	const own = outward.filter((e) => e.source === reader.personId || reader.ownScopes.includes(e.scope));
 	// Tied to no person: a cited relay that created the belief, a measurement.
 	const personless = outward.filter((e) => (e.source === "iyye" && e.weight > 0) || e.source === "probe");
+	// Privacy first, whoever reads: a private belief reaches only its speakers (2026-10-10 review: an untrusted
+	// reader was shown a private belief through its personless evidence, a trusted one was not).
 	let visible: Evidence[];
-	if (!reader.trusted) visible = [...own, ...personless];
-	else if (isPrivate(db, b)) visible = own;
+	if (isPrivate(db, b)) visible = own;
+	else if (!reader.trusted) visible = [...own, ...personless];
 	else visible = outward;
 	const seen = new Set<string>();
 	visible = visible.filter((e) => !seen.has(e.id) && seen.add(e.id));

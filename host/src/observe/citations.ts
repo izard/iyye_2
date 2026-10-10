@@ -31,10 +31,18 @@ export function checkCitations(answer: string, grounded: string): CitationCheck 
 	];
 	const flat = grounded.replace(/\s/g, "");
 	const cited = [...new Set(tokens)];
-	return {
-		cited,
-		invented: cited.filter((t) => !flat.includes(t.replace(/GB|MB|%$/, "")) && !flat.includes(t)),
-	};
+	return { cited, invented: cited.filter((t) => !found(t, flat)) };
+}
+
+/**
+ * A cited token in the grounded text as a whole: a figure only as a whole number ("12GB" is not in "512GB",
+ * nor "1.5" in "11.52"; 2026-10-10 review), with or without its unit; a hash or a file name as itself.
+ */
+function found(token: string, flat: string): boolean {
+	const figure = /^(\d+(?:\.\d+)?)(GB|MB|%)$/.exec(token);
+	if (!figure) return flat.includes(token);
+	const n = figure[1]!.replace(".", "\\.");
+	return new RegExp(`(?<![\\d.])${n}(?![\\d]|\\.\\d)`).test(flat);
 }
 
 /**
