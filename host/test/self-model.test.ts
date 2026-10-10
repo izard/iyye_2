@@ -157,6 +157,33 @@ interface Rig {
 	geoCalls: number;
 }
 
+/** The DGX Spark as it answered on 2026-10-10 (serials and UUIDs planted to prove they are never kept). */
+const LSCPU = `Architecture:                            aarch64
+CPU(s):                                  20
+Vendor ID:                               ARM
+Model name:                              Cortex-X925
+Thread(s) per core:                      1
+Core(s) per socket:                      10
+Socket(s):                               1
+Model name:                              Cortex-A725
+Thread(s) per core:                      1
+Core(s) per socket:                      10
+Socket(s):                               1
+`;
+const SPARK_FILES: Record<string, string> = {
+	"/sys/devices/virtual/dmi/id/product_name": "NVIDIA_DGX_Spark\n",
+	"/sys/devices/virtual/dmi/id/sys_vendor": "NVIDIA\n",
+	"/sys/devices/virtual/dmi/id/product_family": "DGX Spark\n",
+	"/sys/devices/virtual/dmi/id/product_serial": "SECRET-SERIAL-123",
+	"/sys/devices/virtual/dmi/id/product_uuid": "00000000-SECRET-UUID",
+	"/etc/os-release": 'PRETTY_NAME="Ubuntu 24.04.5 LTS"\nNAME="Ubuntu"\n',
+	"/proc/acpi/button/lid/LID0/state": "state:      open\n",
+};
+const SUSPEND_LOG = [
+	"2026-10-04T23:30:00+02:00 spark-3ac3 kernel: PM: suspend entry (s2idle)",
+	"2026-10-05T07:00:00+02:00 spark-3ac3 kernel: PM: suspend exit",
+].join("\n");
+
 function rig(opts: { geo?: boolean; platform?: NodeJS.Platform } = {}): Rig {
 	const db = openDb(":memory:");
 	let now = new Date("2026-10-05T10:00:00Z");
@@ -170,11 +197,16 @@ function rig(opts: { geo?: boolean; platform?: NodeJS.Platform } = {}): Rig {
 		["route", ROUTE],
 		["arp", ARP_A],
 		["git", "e75a57c\n"],
+		["lscpu", LSCPU],
+		["nvidia-smi", "NVIDIA GB10\n"],
+		["journalctl", SUSPEND_LOG],
+		["ip route", "default via 192.168.1.1 dev wlP9s9 proto dhcp src 192.168.1.123 metric 600\n"],
+		["ip neigh", "192.168.1.1 dev wlP9s9 lladdr 3c:a6:2f:00:00:01 REACHABLE\n"],
 	]);
 	const calls: string[] = [];
 	const exec: Exec = async (file, args) => {
 		const base = file.split("/").pop()!;
-		const key = base === "pmset" ? `pmset ${args.join(" ")}` : base;
+		const key = base === "pmset" ? `pmset ${args.join(" ")}` : base === "ip" ? `ip ${args[0]}` : base;
 		calls.push(key);
 		const v = out.get(key);
 		if (v === undefined) throw new Error(`no fake output for ${key}`);
@@ -211,6 +243,8 @@ function rig(opts: { geo?: boolean; platform?: NodeJS.Platform } = {}): Rig {
 					},
 		exec,
 		platform: opts.platform ?? "darwin",
+		readFile: (path) => SPARK_FILES[path] ?? null,
+		listDir: (path) => (path === "/proc/acpi/button/lid" ? ["LID0"] : []),
 		now: () => now,
 		timezone: "Europe/Berlin",
 		live: () => ({ models: { web: "gemma-4-26B", background: "gemma-4-E4B" }, mode: "awake", day: 7 }),
@@ -373,17 +407,45 @@ describe("the self model", () => {
 		assert.equal(r.model.ageMs("power", new Date("2026-10-07T11:00:00Z")), 0, "power was still probed");
 	});
 
-	test("off macOS, the macOS-only facets are never probed and never a gap; the others still are", async () => {
+	test("on Linux (the Spark) every facet is probed with Linux's own tools, and no serial or UUID is kept", async () => {
 		const r = rig({ platform: "linux" });
 		await r.model.tick();
 		await r.model.afterWake();
 		assert.deepEqual(
-			r.calls.filter((c) => /system_profiler|sw_vers|pmset|ioreg/.test(c)),
+			r.calls.filter((c) => /^(system_profiler|sw_vers|pmset|ioreg|route|arp)/.test(c)),
 			[],
-			"no macOS command, so no failing probe to warn about",
+			"no macOS command",
+		);
+		assert.equal(r.model.value("hardware", "machine"), "NVIDIA DGX Spark");
+		assert.equal(r.model.value("hardware", "model"), "DGX Spark");
+		assert.equal(r.model.value("hardware", "chip"), "Cortex-X925 + Cortex-A725; GPU NVIDIA GB10");
+		assert.equal(r.model.value("hardware", "cores"), "20 (10 Cortex-X925, 10 Cortex-A725)");
+		assert.equal(r.model.value("hardware", "os"), "Ubuntu 24.04.5 LTS");
+		assert.equal(r.model.value("power", "source"), "AC", "no power supply at all: mains, no battery");
+		assert.equal(r.model.value("power", "batteryPct"), null);
+		assert.equal(r.model.value("power", "lidClosed"), false);
+		assert.equal(r.model.value("sleep", "sleeps"), 1);
+		assert.equal(r.model.value("sleep", "asleepMinutes"), 450);
+		assert.equal(r.model.value("sleep", "sleptOnBattery"), false);
+		assert.equal(r.model.value("network", "interface"), "wlP9s9");
+		assert.match(String(r.model.value("network", "networkId")), /^[0-9a-f]{12}$/);
+		const all = JSON.stringify(r.db.prepare("SELECT * FROM self_facts").all());
+		assert.ok(!/SECRET|3c:a6:2f|192\.168\.1\.1\b/.test(all), "never a serial, UUID, gateway or hardware address");
+		r.setNow(new Date("2026-10-05T10:05:00Z"));
+		assert.deepEqual(
+			r.model.gaps().filter((g) => ["hardware", "power", "sleep"].includes(g.facet)),
+			[],
+		);
+	});
+
+	test("on another platform, the platform-probed facets are never probed and never a gap", async () => {
+		const r = rig({ platform: "freebsd" });
+		await r.model.tick();
+		assert.deepEqual(
+			r.calls.filter((c) => /system_profiler|sw_vers|pmset|ioreg|lscpu|nvidia-smi|journalctl/.test(c)),
+			[],
 		);
 		assert.ok(r.model.ageMs("versions", new Date("2026-10-05T10:00:00Z")) !== null, "versions still probed");
-		assert.ok(r.model.ageMs("network", new Date("2026-10-05T10:00:00Z")) !== null, "network still probed");
 		r.setNow(new Date("2026-10-09T10:00:00Z"));
 		const facets = r.model.gaps().map((g) => g.facet);
 		for (const f of ["hardware", "power", "sleep"]) assert.ok(!facets.includes(f as never), `${f} is not a gap`);

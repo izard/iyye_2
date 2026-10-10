@@ -34,14 +34,22 @@ import {
 	type Exec,
 	execAsync,
 	type Hardware,
+	type ListDir,
+	listSysDir,
 	type Network,
 	type Power,
 	probeHardware,
+	probeHardwareLinux,
 	probeNetwork,
+	probeNetworkLinux,
 	probePlace,
 	probePower,
+	probePowerLinux,
 	probeSleep,
+	probeSleepLinux,
 	probeVersions,
+	type ReadFile,
+	readSysFile,
 	type SleepHistory,
 	solarTimes,
 	type Versions,
@@ -70,11 +78,11 @@ export const WINDOWS_MS: Record<"hardware" | "power" | "sleep" | "versions" | "n
 };
 
 /**
- * Facets whose probes use macOS-only commands (`system_profiler`, `sw_vers`, `pmset`, `ioreg`). Elsewhere
- * (the DGX Spark, 2026-10-09) they are not probed at all, so there is no failing probe every few minutes and
- * no "stale" gap to ask the owner about.
+ * Facets probed with each platform's own tools: on macOS `system_profiler`, `sw_vers`, `pmset`, `ioreg`; on
+ * Linux (the DGX Spark, 2026-10-10) DMI, `lscpu`, `nvidia-smi`, `/sys/class/power_supply`, the ACPI lid and the
+ * kernel journal. Elsewhere they are not probed at all: no failing probe every few minutes, no "stale" gap.
  */
-const MACOS_ONLY: ReadonlySet<Facet> = new Set(["hardware", "power", "sleep"]);
+const PLATFORM_PROBED: ReadonlySet<Facet> = new Set(["hardware", "power", "sleep"]);
 
 const STABLE: ReadonlySet<Facet> = new Set(["hardware", "versions", "network", "place"]);
 const RETAINED: ReadonlySet<Facet> = new Set(["hardware", "versions", "place"]);
@@ -92,6 +100,9 @@ export interface SelfModelDeps {
 	exec?: Exec;
 	/** The platform the probes run on (tests); `process.platform` by default. */
 	platform?: NodeJS.Platform;
+	/** Linux system files and directories (tests replace them). */
+	readFile?: ReadFile;
+	listDir?: ListDir;
 	now?: () => Date;
 	newId?: () => string;
 	tickMs?: number;
@@ -172,6 +183,8 @@ export class SelfModel {
 		this.d = {
 			exec: execAsync,
 			platform: process.platform,
+			readFile: readSysFile,
+			listDir: listSysDir,
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
 			tickMs: 60_000,
@@ -231,11 +244,33 @@ export class SelfModel {
 	private async refresh(facet: keyof typeof WINDOWS_MS, now: Date): Promise<void> {
 		switch (facet) {
 			case "hardware":
-				return this.setFacet("hardware", { ...(await probeHardware(this.d.exec)) }, "probe", null, now);
+				return this.setFacet(
+					"hardware",
+					{
+						...(await (this.linux
+							? probeHardwareLinux(this.d.exec, this.d.readFile)
+							: probeHardware(this.d.exec))),
+					},
+					"probe",
+					null,
+					now,
+				);
 			case "power":
-				return this.setFacet("power", { ...(await probePower(this.d.exec)) }, "probe", null, now);
+				return this.setFacet(
+					"power",
+					{ ...(this.linux ? probePowerLinux(this.d.readFile, this.d.listDir) : await probePower(this.d.exec)) },
+					"probe",
+					null,
+					now,
+				);
 			case "sleep":
-				return this.setFacet("sleep", { ...(await probeSleep(this.d.exec, now)) }, "probe", null, now);
+				return this.setFacet(
+					"sleep",
+					{ ...(await (this.linux ? probeSleepLinux(this.d.exec, now) : probeSleep(this.d.exec, now))) },
+					"probe",
+					null,
+					now,
+				);
 			case "versions":
 				return this.setFacet(
 					"versions",
@@ -252,7 +287,13 @@ export class SelfModel {
 				);
 			case "network": {
 				const before = this.value<Network["networkId"]>("network", "networkId");
-				await this.setFacet("network", { ...(await probeNetwork(this.d.exec)) }, "probe", null, now);
+				await this.setFacet(
+					"network",
+					{ ...(await (this.linux ? probeNetworkLinux(this.d.exec) : probeNetwork(this.d.exec))) },
+					"probe",
+					null,
+					now,
+				);
 				const after = this.value<Network["networkId"]>("network", "networkId");
 				// A new network: the place estimate is due again (once a day otherwise).
 				if (before && after && before !== after) await this.refresh("place", now);
@@ -375,9 +416,13 @@ export class SelfModel {
 	}
 
 	/** Age of a probed facet (its newest probe), or null if never probed. */
-	/** Whether this machine can probe a facet at all (`MACOS_ONLY`). */
+	/** Whether this machine can probe a facet at all (`PLATFORM_PROBED`: macOS and Linux). */
 	private probeable(facet: Facet): boolean {
-		return this.d.platform === "darwin" || !MACOS_ONLY.has(facet);
+		return this.d.platform === "darwin" || this.d.platform === "linux" || !PLATFORM_PROBED.has(facet);
+	}
+
+	private get linux(): boolean {
+		return this.d.platform === "linux";
 	}
 
 	ageMs(facet: Facet, now: Date): number | null {

@@ -14,7 +14,8 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { totalmem } from "node:os";
 import { join } from "node:path";
 
 export type Exec = (file: string, args: string[], opts?: { timeoutMs?: number; maxBuffer?: number }) => Promise<string>;
@@ -174,6 +175,206 @@ export async function probeSleep(exec: Exec, now: Date, windowMs = 24 * 3_600_00
 	// About 4 MB and a second of CPU: asynchronous, and only the last day is parsed.
 	const log = await exec("/usr/bin/pmset", ["-g", "log"], { timeoutMs: 30_000, maxBuffer: 64 * 1024 * 1024 });
 	return parseSleepLog(log, new Date(now.getTime() - windowMs), now);
+}
+
+// ---------------------------------------------------------------- Linux (2026-10-10: the DGX Spark)
+
+/** Read a small system file; null when it is missing or unreadable. Tests replace it. */
+export type ReadFile = (path: string) => string | null;
+export const readSysFile: ReadFile = (path) => {
+	try {
+		return readFileSync(path, "utf8");
+	} catch {
+		return null;
+	}
+};
+/** The entries of a system directory (empty when missing). */
+export type ListDir = (path: string) => string[];
+export const listSysDir: ListDir = (path) => {
+	try {
+		return readdirSync(path);
+	} catch {
+		return [];
+	}
+};
+
+const clean = (s: string | null | undefined) => {
+	const t = (s ?? "").replace(/\0/g, "").replace(/_/g, " ").trim();
+	return t && !/^(to be filled|default string|system product name|not specified)/i.test(t) ? t.slice(0, 80) : null;
+};
+
+/**
+ * Linux hardware from DMI or the device tree (product and vendor only; never the serial number, the board
+ * serial or the product UUID), `lscpu` (core types), the memory size, `nvidia-smi` (the GPU's name) and
+ * os-release.
+ */
+export function parseHardwareLinux(o: {
+	product: string | null;
+	vendor: string | null;
+	family: string | null;
+	deviceTreeModel: string | null;
+	lscpu: string;
+	memoryBytes: number;
+	gpu: string;
+	osRelease: string | null;
+}): Hardware {
+	const groups: { model: string; cores: number }[] = [];
+	let current: { model: string; cores: number; sockets: number } | null = null;
+	const flush = () => {
+		if (current) groups.push({ model: current.model, cores: current.cores * current.sockets });
+	};
+	for (const line of o.lscpu.split("\n")) {
+		const m = /^\s*([^:]+):\s*(.*)$/.exec(line);
+		if (!m) continue;
+		const [key, value] = [m[1]!.trim(), m[2]!.trim()];
+		if (key === "Model name") {
+			flush();
+			current = { model: value, cores: 0, sockets: 1 };
+		} else if (current && key === "Core(s) per socket") current.cores = Number(value) || 0;
+		else if (current && (key === "Socket(s)" || key === "Cluster(s)")) current.sockets = Number(value) || 1;
+	}
+	flush();
+	const total = groups.reduce((x, g) => x + g.cores, 0);
+	const gpus = o.gpu
+		.split("\n")
+		.map((l) => l.trim())
+		.filter(Boolean);
+	const cpu = groups.map((g) => g.model).join(" + ");
+	const machine = clean(o.product) ?? clean(o.deviceTreeModel);
+	const vendor = clean(o.vendor);
+	return {
+		machine: machine
+			? vendor && !machine.toLowerCase().startsWith(vendor.toLowerCase())
+				? `${vendor} ${machine}`
+				: machine
+			: null,
+		model: clean(o.family),
+		chip: [cpu || null, gpus.length ? `GPU ${gpus.join(", ")}` : null].filter(Boolean).join("; ") || null,
+		cores: total
+			? groups.length > 1
+				? `${total} (${groups.map((g) => `${g.cores} ${g.model}`).join(", ")})`
+				: String(total)
+			: null,
+		memoryGb: o.memoryBytes > 0 ? Math.round(o.memoryBytes / 2 ** 30) : null,
+		os: /^PRETTY_NAME="?([^"\n]+)"?/m.exec(o.osRelease ?? "")?.[1]?.trim() ?? null,
+	};
+}
+
+export async function probeHardwareLinux(exec: Exec, read: ReadFile = readSysFile): Promise<Hardware> {
+	const [lscpu, gpu] = await Promise.all([
+		exec("lscpu", []).catch(() => ""),
+		exec("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader"]).catch(() => ""),
+	]);
+	return parseHardwareLinux({
+		product: read("/sys/devices/virtual/dmi/id/product_name"),
+		vendor: read("/sys/devices/virtual/dmi/id/sys_vendor"),
+		family: read("/sys/devices/virtual/dmi/id/product_family"),
+		deviceTreeModel: read("/proc/device-tree/model"),
+		lscpu,
+		memoryBytes: totalmem(),
+		gpu,
+		osRelease: read("/etc/os-release"),
+	});
+}
+
+/**
+ * Linux power from `/sys/class/power_supply` (mains, batteries) and the ACPI lid. No supply at all is a
+ * machine on mains power without a battery (a desktop such as the Spark).
+ */
+export function probePowerLinux(read: ReadFile = readSysFile, list: ListDir = listSysDir): Power {
+	const base = "/sys/class/power_supply";
+	const supplies = list(base).map((name) => ({
+		type: read(join(base, name, "type"))?.trim() ?? "",
+		online: read(join(base, name, "online"))?.trim() ?? null,
+		capacity: read(join(base, name, "capacity"))?.trim() ?? null,
+		status:
+			read(join(base, name, "status"))
+				?.trim()
+				.toLowerCase() ?? null,
+	}));
+	const mains = supplies.filter((s) => s.type === "Mains" || s.type === "USB");
+	const battery = supplies.find((s) => s.type === "Battery");
+	const onMains =
+		mains.length === 0
+			? battery === undefined || battery.status !== "discharging"
+			: mains.some((s) => s.online === "1");
+	const lid = list("/proc/acpi/button/lid")
+		.map((d) => /state:\s*(open|closed)/.exec(read(`/proc/acpi/button/lid/${d}/state`) ?? "")?.[1])
+		.find(Boolean);
+	return {
+		source: onMains ? "AC" : "battery",
+		batteryPct: battery?.capacity && /^\d+$/.test(battery.capacity) ? Number(battery.capacity) : null,
+		charging: battery?.status ? battery.status === "charging" : null,
+		lidClosed: lid ? lid === "closed" : null,
+		lidCausesSleep: null,
+	};
+}
+
+/**
+ * Linux sleep history from the kernel journal: "PM: suspend entry" and "PM: suspend exit" (and hibernation),
+ * with times only (`-o short-iso`; the host name on each line is never kept). No dark wakes on Linux.
+ */
+export function parseSuspendJournal(log: string, since: Date, now: Date, onBattery = false): SleepHistory {
+	const events: { at: number; kind: "Sleep" | "Wake" }[] = [];
+	for (const line of log.split("\n")) {
+		const m =
+			/^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?)\s.*PM: (?:suspend|hibernation) (entry|exit)/.exec(
+				line,
+			);
+		if (!m) continue;
+		const at = Date.parse(m[1]!.replace(/([+-]\d\d)(\d\d)$/, "$1:$2"));
+		if (Number.isNaN(at) || at < since.getTime()) continue;
+		events.push({ at, kind: m[2] === "entry" ? "Sleep" : "Wake" });
+	}
+	const pmsetLike = events
+		.map((e) => {
+			const d = new Date(e.at);
+			const p = (x: number) => String(x).padStart(2, "0");
+			return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} +0000 ${e.kind}  ${onBattery && e.kind === "Sleep" ? "Using Batt" : "Using AC"}`;
+		})
+		.join("\n");
+	return parseSleepLog(pmsetLike, since, now);
+}
+
+export async function probeSleepLinux(exec: Exec, now: Date, windowMs = 24 * 3_600_000): Promise<SleepHistory> {
+	const since = new Date(now.getTime() - windowMs);
+	const log = await exec(
+		"journalctl",
+		[
+			"-k",
+			"--since",
+			`@${Math.floor(since.getTime() / 1000)}`,
+			"-o",
+			"short-iso",
+			"--no-pager",
+			"-g",
+			"PM: (suspend|hibernation) (entry|exit)",
+		],
+		{ timeoutMs: 30_000, maxBuffer: 16 * 1024 * 1024 },
+	).catch((err: Error & { code?: number }) => {
+		// journalctl exits 1 when nothing matched: no sleep in the window.
+		if (err.code === 1) return "";
+		throw err;
+	});
+	return parseSuspendJournal(log, since, now, probePowerLinux().source === "battery");
+}
+
+/** `ip route show default` and `ip neigh show <gateway>`: the same opaque network id as on macOS. */
+export function parseNetworkLinux(route: string, neigh: string): Network {
+	const m = /^default via (\S+) dev (\S+)/m.exec(route);
+	const mac = /lladdr ([0-9a-f]{1,2}(?::[0-9a-f]{1,2}){5})/i.exec(neigh)?.[1] ?? "";
+	return {
+		interface: m?.[2] ?? null,
+		networkId: m ? createHash("sha256").update(`${m[1]}|${mac}`).digest("hex").slice(0, 12) : null,
+	};
+}
+
+export async function probeNetworkLinux(exec: Exec): Promise<Network> {
+	const route = await exec("ip", ["route", "show", "default"]).catch(() => "");
+	const gateway = /^default via (\S+)/m.exec(route)?.[1];
+	const neigh =
+		gateway && /^[\d.]+$/.test(gateway) ? await exec("ip", ["neigh", "show", gateway]).catch(() => "") : "";
+	return parseNetworkLinux(route, neigh);
 }
 
 // ---------------------------------------------------------------- network
