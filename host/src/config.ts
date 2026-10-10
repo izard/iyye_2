@@ -115,6 +115,11 @@ export interface Config {
 		enabled: boolean;
 		/** `iyye_2/kev`: the Kev checkout with its `.venv`. */
 		installDir: string;
+		/**
+		 * The Python that runs `kev.serve` (IYYE2_DECISIONS_PYTHON); null: `<installDir>/.venv/bin/python`. On the
+		 * Spark, the CUDA build in `iyye_2/kev-cuda/.venv` (2026-10-10): the clone's own lock pins CPU torch there.
+		 */
+		python: string | null;
 		port: number;
 		/** Hub id pinned to a revision (`repo@sha`); provisioned once by `scripts/provision-decisions.ts`. */
 		model: string;
@@ -339,6 +344,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		decisions: {
 			enabled: env.IYYE2_DECISIONS_ENABLED !== "0",
 			installDir: absPath(env.IYYE2_DECISIONS_DIR || resolve(PROJECT_ROOT, "kev"), cwd),
+			python: env.IYYE2_DECISIONS_PYTHON ? absPath(env.IYYE2_DECISIONS_PYTHON, cwd) : null,
 			port: int(env, "IYYE2_DECISIONS_PORT", 8188, 1, 65535),
 			model: env.IYYE2_DECISIONS_MODEL || "jaredpalmer/kev-4b@6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
 			timeoutMs: int(env, "IYYE2_DECISIONS_TIMEOUT_MS", 5000, 100, 600_000),

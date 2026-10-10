@@ -71,7 +71,7 @@ export interface DecisionServiceOptions {
 	healthIntervalMs?: number;
 	startTimeoutMs?: number;
 	restartBackoffMs?: number[];
-	/** Tests: a fake server; defaults to `<installDir>/.venv/bin/python -m kev.serve`. */
+	/** Defaults to `<installDir>/.venv/bin/python -m kev.serve`; another Python (IYYE2_DECISIONS_PYTHON), or a test fake. */
 	command?: string[];
 }
 
@@ -103,8 +103,9 @@ export class DecisionService {
 			stateDir: opts.stateDir,
 			healthUrl: `${this.baseUrl}/v1/models`,
 			healthHeaders: () => ({ authorization: `Bearer ${this.apiKey()}` }),
-			// "-m kev.serve" for the real server; the script path for a test fake.
-			identity: [prefix.join(" ") || command!, `--port ${opts.port}`],
+			// "-m kev.serve" for the real server; the script path for a test fake. The Python too: a Kev left
+			// running by another build (IYYE2_DECISIONS_PYTHON changed) is not adopted.
+			identity: [command!, prefix.join(" ") || command!, `--port ${opts.port}`],
 			startTimeoutMs: this.o.startTimeoutMs,
 			stopGraceMs: 10_000,
 			log: opts.log,

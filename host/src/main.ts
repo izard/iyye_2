@@ -818,6 +818,7 @@ async function main(): Promise<number> {
 	// Local typed decisions (plan 0.003): Kev, shadow-only in this increment.
 	const decisions = new DecisionService({
 		installDir: config.decisions.installDir,
+		...(config.decisions.python ? { command: [config.decisions.python, "-m", "kev.serve"] } : {}),
 		stateDir: join(config.stateDir, "decisions"),
 		port: config.decisions.port,
 		model: config.decisions.model,
