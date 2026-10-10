@@ -78,10 +78,10 @@ describe("the project toolkit", () => {
 		);
 		assert.match(await tool("git_log").run({ repo: "project" }, ctx, undefined), /no repository named "project"/);
 		const toolkit = projectToolkit({ workspace: ws });
-		assert.equal(toolkit.effect, "read");
+		assert.equal(toolkit.effect, "private"); // the owner and Iyye itself, never a contact (2026-10-08)
 		assert.deepEqual(
 			toolkit.tools.map((t) => t.name),
-			["git_log", "git_show", "git_status", "read_file"],
+			["git_log", "git_show", "git_status", "read_file", "list_dir"],
 		);
 	});
 

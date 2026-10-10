@@ -67,9 +67,15 @@ export function getEvent(db: Db, id: string): EventRow | undefined {
 	return db.prepare("SELECT * FROM events WHERE id = ?").get(id) as EventRow | undefined;
 }
 
-/** The text the sender wrote (web: `text`; Telegram: `message.text`). */
+/** What a message with an image says in place of it: the image itself reaches a model only through a tool. */
+export const IMAGE_MARK = "[sent an image]";
+
+/** The text the sender wrote (web: `text`; Telegram: `message.text`, after `IMAGE_MARK` when an image came with it). */
 export function messageText(event: EventRow): string {
-	const payload = JSON.parse(event.payload_json) as { text?: unknown; message?: { text?: unknown } };
-	const text = event.channel === "web" ? payload.text : payload.message?.text;
-	return typeof text === "string" ? text : "";
+	const payload = JSON.parse(event.payload_json) as { text?: unknown; message?: { text?: unknown; image?: unknown } };
+	const raw = event.channel === "web" ? payload.text : payload.message?.text;
+	const text = typeof raw === "string" ? raw : "";
+	if (event.channel === "telegram" && payload.message?.image)
+		return text.trim() ? `${IMAGE_MARK} ${text}` : IMAGE_MARK;
+	return text;
 }

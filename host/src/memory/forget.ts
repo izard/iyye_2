@@ -23,11 +23,19 @@
  *   remembered normally: the contact, its channel bindings and trust stay.
  */
 
+import { existsSync, rmSync } from "node:fs";
 import { forgetReplyReviews } from "../decisions/reply-review.ts";
+import { forgetBeliefs } from "../facts/beliefs.ts";
+import { queueFactDocDeletions } from "../facts/night.ts";
+import { forgetFacts } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
+import { forgetMotivationRecords } from "../motivation/actor.ts";
+import { forgetSelfFacts } from "../self/model.ts";
 import { accountsOf, type Contact, OWNER_CONTACT_ID, resolvePerson, scopeFor } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
+import { mediaPath } from "../state/media.ts";
+import { forgetNotes } from "../state/notes.ts";
 import {
 	addTombstone,
 	bankDeletionDone,
@@ -72,6 +80,31 @@ export function forgetTarget(db: Db, contact: Contact): ForgetTarget | string {
 }
 
 /** The background conversations of the person's plan steps (plan 0.006 C4): their prompts quote the person. */
+/** Events in these scopes that came with an image (to delete their kept copies, `forgetMedia`). */
+export function imageEvents(db: Db, scopes: readonly string[]): string[] {
+	const marks = scopes.map(() => "?").join(", ");
+	return (
+		db
+			.prepare(
+				`SELECT id FROM events WHERE scope IN (${marks}) AND json_extract(payload_json, '$.message.image') IS NOT NULL`,
+			)
+			.all(...scopes) as { id: string }[]
+	).map((r) => r.id);
+}
+
+/** Delete the kept copies of these events' images (`<state>/media/<event id>`); returns how many there were. */
+export function forgetMedia(mediaDir: string, eventIds: readonly string[]): number {
+	let n = 0;
+	for (const id of eventIds) {
+		const path = mediaPath(mediaDir, id);
+		if (existsSync(path)) {
+			rmSync(path, { force: true });
+			n++;
+		}
+	}
+	return n;
+}
+
 export function planSessions(db: Db, scopes: readonly string[]): string[] {
 	const marks = scopes.map(() => "?").join(", ");
 	return (
@@ -217,6 +250,36 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			db.prepare("UPDATE stm_episodes SET reply_text = '' WHERE event_id = ?").run(r.event_id);
 			db.prepare("UPDATE stm_fts SET body = ? WHERE event_id = ?").run(r.user_text, r.event_id);
 		}
+		// The fact ledger (plan 0.011 §3.6): their evidence leaves every belief, beliefs about them go, and so do
+		// their structured facts, every fact about them and the facts of those replies. Facts about them stored
+		// in other banks (the owner's) are queued for deletion there; their own banks go whole.
+		const elsewhere = db
+			.prepare(
+				`SELECT scope, id FROM stm_facts WHERE subject_ref = ? AND stored_at IS NOT NULL AND scope NOT IN (${marks})`,
+			)
+			.all(`contact:${t.person.id}`, ...t.scopes) as { scope: string; id: string }[];
+		queueFactDocDeletions(
+			db,
+			elsewhere.map((f) => ({ scope: f.scope, stmFactId: f.id })),
+			at,
+		);
+		const beliefs = forgetBeliefs(db, t.scopes, [t.person.id], at);
+		// The motivations' records that may quote them (plan 0.010): questions and notices about those beliefs,
+		// notices about their plans, and the signal texts kept with the motivation samples.
+		// Follow-ups about what they said (plan 0.010 M3): the message itself is a sent message (above).
+		const followUps = (
+			db
+				.prepare(
+					`SELECT cluster FROM opportunities WHERE cluster IN (SELECT 'event:' || id FROM events WHERE scope IN (${marks}))`,
+				)
+				.all(...t.scopes) as { cluster: string }[]
+		).map((r) => r.cluster);
+		forgetMotivationRecords(
+			db,
+			[...beliefs.map((id) => `belief:${id}`), ...plans.map((p) => `plan:${p.id}`), ...followUps],
+			FORGOTTEN,
+		);
+		forgetFacts(db, t.scopes, [t.person.id], { ownerReplies: ownerTurns.map((r) => r.event_id) });
 		// Day summaries not yet stored may name the person ("2 from Julia"): they go too (HLD §15 #15).
 		const names = [t.person.display_name, ...accountsOf(db, t.person.id).map((a) => a.display_name)]
 			.map((n) => n.trim().toLowerCase())
@@ -229,11 +292,20 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			db.prepare("DELETE FROM stm_episodes WHERE event_id = ?").run(r.event_id);
 		}
 		// The same replies are copied into reply-review rows (future training data): those go too, for good.
+		// The owner's statements about who they are (plan 0.010 self model).
+		forgetSelfFacts(db, [t.person.id]);
+		// The owner's notes about them (plan 0.005 Stage 2).
+		forgetNotes(db, [t.person.id]);
 		forgetReplyReviews(
 			db,
 			ownerTurns.map((r) => r.action_id),
 			at,
 		);
+		// …and the images they sent (only Telegram's file id is in the payload; kept copies: `forgetMedia`).
+		db.prepare(
+			`UPDATE events SET payload_json = json_remove(payload_json, '$.message.image')
+			 WHERE scope IN (${marks}) AND json_extract(payload_json, '$.message.image') IS NOT NULL`,
+		).run(...t.scopes);
 		// Telegram payloads keep their routing (chat id, user id); only the words go.
 		db.prepare(
 			`UPDATE events SET payload_json = json_set(payload_json, '$.message.text', ?)

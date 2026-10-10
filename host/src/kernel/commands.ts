@@ -57,6 +57,20 @@ export interface CommandContext {
 	} | null;
 	/** /sent: messages sent for the owner (plan 0.008). */
 	sentReport?: (() => string) | null;
+	/** /self, /motivation (plan 0.010 M0b, M0). */
+	self?: { command(args: string[], by: string): string } | null;
+	/** /pause|/resume <motivation>, /self questions|accept|dismiss (plan 0.010 M1). */
+	motivations?: {
+		pause(m: string, by: string): string | null;
+		resume(m: string): string | null;
+		questionsReport(): string;
+		accept(ref: string, text: string, by: string): string;
+		dismiss(ref: string): string;
+	} | null;
+	/** /motivation [report [days] | trace <id> | useful <id> yes|no] (plan 0.010 M0, M4). */
+	motivationReport?: ((args?: string[]) => string) | null;
+	/** /facts [<query> | compare | correct <id> <text> | wrong <id>] (plan 0.011). */
+	facts?: { command(args: string[], by: string): string | Promise<string> } | null;
 	/** /opportunities: findings that raised a question and their investigations (plan 0.007 S5). */
 	opportunities?: (() => string) | null;
 	/** /domains, /domain enable|disable <name> (plan 0.007 S4). */
@@ -71,6 +85,8 @@ export interface CommandContext {
 		forget(contact: Contact, by: string): Promise<string>;
 		remember(text: string): string;
 	} | null;
+	/** /person, /note: what Iyye knows about a person, and the owner's notes (plan 0.005 Stage 2). */
+	people?: { person(args: string, by: string): string; note(args: string, by: string): string } | null;
 	/** /day and /night: day/night status (plan 0.002 L4). */
 	rhythmReport?: { day(): string; night(): string } | null;
 }
@@ -93,6 +109,8 @@ const HELP = [
 	"/trust <contact> — mark a contact as trusted (name, Telegram user id, or id): they may then ask Iyye to message anyone it knows",
 	"/link <account> owner|<person> — this account is you (owner) or that person: shared conversation and memory",
 	"/unlink <account> — the account is its own contact again",
+	'/person <person> — what Iyye knows about someone: accounts, trust, your notes, relationship hypotheses; /person add <name> ["note"] — someone who has not written yet',
+	"/note <person> <text> — a note about someone, for your conversations only; /note share|private|delete <id> — let them see it too (Iyye may repeat it to them), or not",
 	"/untrust <contact> — remove a contact's trust",
 	"/tools — toolkits, who may use them, and the latest tool calls",
 	"/decisions — the local decision model's shadow answers and how they compared with what happened",
@@ -106,8 +124,14 @@ const HELP = [
 	"/cancel <id> — cancel a reminder (yours or a contact's)",
 	"/plans — plans and their states; /plan <id> — its steps and evidence",
 	"/sent — messages Iyye sent to people for you, with their delivery",
+	"/self — what Iyye knows about itself (hardware, power, sleep, versions, place, people) and its gaps; /self set place|expected-hardware <text>, /self relation <contact> <text>",
+	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened",
+	"/motivation report [days] — what each motivation opened, tried, resolved and was held back from (the trial period by default); /motivation trace <id>; /motivation useful <id> yes|no",
+	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts confirm <id>, /facts correct <id> <text>, /facts wrong <id>; /facts private|share <id>",
 	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps",
 	"/pause initiative, /resume initiative — stop or allow background work",
+	"/pause <motivation>, /resume <motivation> — self-preservation, curiosity, agency or social: stop or allow what it opens and does",
+	"/self questions — what Iyye asked about itself; /self accept <id> [answer], /self dismiss <id>; /self estimate misleading",
 	"/day — awake or asleep, day number, when the next night starts and why",
 	"/night — the night in progress (what it is doing, what is left) and the last night's result",
 	"/memory — memory status: short-term (today) and long-term, the last night",
@@ -129,6 +153,8 @@ const COMMANDS = new Set([
 	"/untrust",
 	"/link",
 	"/unlink",
+	"/person",
+	"/note",
 	"/memory",
 	"/remember",
 	"/forget",
@@ -145,6 +171,9 @@ const COMMANDS = new Set([
 	"/cancel",
 	"/plans",
 	"/sent",
+	"/self",
+	"/motivation",
+	"/facts",
 	"/plan",
 	"/domain",
 	"/pause",
@@ -212,6 +241,15 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			if (!ref) return usage("/unlink <account>");
 			return { handled: true, reply: unlink(ctx, ref) };
 		}
+		case "/person":
+		case "/note": {
+			if (!ctx.people) return { handled: true, reply: "people are not available here" };
+			const rest = text.trim().slice(cmd.length);
+			return {
+				handled: true,
+				reply: cmd === "/person" ? ctx.people.person(rest, ctx.issuer) : ctx.people.note(rest, ctx.issuer),
+			};
+		}
 		case "/trust":
 		case "/untrust": {
 			const ref = text.trim().slice(cmd.length).trim();
@@ -230,6 +268,30 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			if (!rest) return usage("/cancel <id>");
 			return { handled: true, reply: ctx.commitments.cancel(rest, ctx.issuer) };
 		}
+		case "/self": {
+			const q = ctx.motivations;
+			if (q && args[0] === "questions") return { handled: true, reply: q.questionsReport() };
+			if (q && args[0] === "accept" && args[1])
+				return {
+					handled: true,
+					reply: q.accept(args[1], text.trim().split(/\s+/).slice(3).join(" "), ctx.issuer),
+				};
+			if (q && args[0] === "dismiss" && args[1]) return { handled: true, reply: q.dismiss(args[1]) };
+			return {
+				handled: true,
+				reply: ctx.self ? ctx.self.command(args, ctx.issuer) : "the self model is not available here",
+			};
+		}
+		case "/motivation":
+			return {
+				handled: true,
+				reply: ctx.motivationReport ? ctx.motivationReport(args) : "motivations are not available here",
+			};
+		case "/facts":
+			return {
+				handled: true,
+				reply: ctx.facts ? await ctx.facts.command(args, ctx.issuer) : "facts are not available here",
+			};
 		case "/sent":
 			return { handled: true, reply: ctx.sentReport ? ctx.sentReport() : "sending is not available here" };
 		case "/plans":
@@ -265,7 +327,13 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			return { handled: true, reply: ctx.focus ? await ctx.focus.report() : "focus is not available here" };
 		case "/pause":
 		case "/resume": {
-			if (args.length !== 1 || args[0] !== "initiative") return usage(`${cmd} initiative`);
+			const which = "initiative | self-preservation | curiosity | agency | social";
+			if (args.length !== 1) return usage(`${cmd} ${which}`);
+			if (args[0] !== "initiative") {
+				const m = ctx.motivations;
+				const reply = m ? (cmd === "/pause" ? m.pause(args[0]!, ctx.issuer) : m.resume(args[0]!)) : null;
+				return reply ? { handled: true, reply } : usage(`${cmd} ${which}`);
+			}
 			if (!ctx.focus) return { handled: true, reply: "background work is not available here" };
 			return { handled: true, reply: cmd === "/pause" ? ctx.focus.pause(ctx.issuer) : ctx.focus.resume() };
 		}
@@ -363,8 +431,11 @@ function renderContacts(db: Db): string {
 		const twins = persons.filter(
 			(o) => o.id !== p.id && o.display_name.toLowerCase() === p.display_name.toLowerCase(),
 		);
+		const notes = (
+			db.prepare("SELECT count(*) AS n FROM person_notes WHERE person_id = ?").get(p.id) as { n: number }
+		).n;
 		lines.push(
-			`${p.display_name} — ${p.trusted ? "trusted" : "not trusted"} · ${p.bindings ?? "no channel"} · id ${p.id.slice(0, 8)}${when(p)}` +
+			`${p.display_name} — ${p.trusted ? "trusted" : "not trusted"} · ${p.bindings ?? (accounts.length ? "no channel of its own" : "no account yet")} · id ${p.id.slice(0, 8)}${when(p)}${notes ? ` · ${notes} note${notes === 1 ? "" : "s"}` : ""}` +
 				(accounts.length ? `\n    accounts: ${accounts.map(account).join(", ")}` : "") +
 				(twins.length
 					? `\n    same name as ${twins.map((t) => `id ${t.id.slice(0, 8)}`).join(", ")}: if this is the same person, /link one to the other`

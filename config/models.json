@@ -10,6 +10,7 @@
 		{
 			"name": "gemma-4-26B",
 			"file": "gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
+			"mmproj": "gemma4_26B-mmproj-BF16.gguf",
 			"ram_required_gb": 28.0,
 			"startup_s": 30,
 			"roles": [
@@ -156,7 +157,7 @@
 				"alignment",
 				"codegen"
 			],
-			"description": "Qwen3.5 9B dense at Q8. Quick agentic tasks \u2014 fast STM extraction, alignment scoring, and lightweight codegen. Not started by default.",
+			"description": "Qwen3.5 9B dense at Q8. Quick agentic tasks — fast STM extraction, alignment scoring, and lightweight codegen. Not started by default.",
 			"server_args": {}
 		},
 		{
@@ -231,7 +232,17 @@
 				"reasoning"
 			],
 			"description": "Qwen3.8 27B 'tak-reasoning' build in a compact quantization (8.4 GB file). Tool calling verified; ~12.3 GB resident at 64k context.",
-			"server_args": {},
+			"server_args": {
+				"repeat-penalty": 1.0,
+				"presence-penalty": 1.5,
+				"dry-multiplier": 0.8,
+				"temp": 0.6,
+				"top-p": 0.95,
+				"top-k": 20,
+				"min-p": 0,
+				"reasoning-budget": 2048,
+				"reasoning-budget-message": "Enough thinking. Answer now."
+			},
 			"thinking": "on"
 		},
 		{

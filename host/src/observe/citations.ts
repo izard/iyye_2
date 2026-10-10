@@ -30,9 +30,33 @@ export function checkCitations(answer: string, grounded: string): CitationCheck 
 		...(text.match(/\b[\w./-]+\.(?:py|ts|js|mjs|md|txt|json|sh|toml|yaml|yml|sql|css|html)\b/g) ?? []),
 	];
 	const flat = grounded.replace(/\s/g, "");
+	// Figures are matched where words stay apart ("56.4 GB of" must not read as the unit "GBof").
+	const spaced = grounded.replace(/\$|\\text\{\s*|\}|\*\*|`/g, "").replace(/\s+/g, " ");
 	const cited = [...new Set(tokens)];
-	return {
-		cited,
-		invented: cited.filter((t) => !flat.includes(t.replace(/GB|MB|%$/, "")) && !flat.includes(t)),
-	};
+	return { cited, invented: cited.filter((t) => !found(t, flat, spaced)) };
+}
+
+/**
+ * A cited token in the grounded text as a whole: a figure only as a whole number ("12GB" is not in "512GB",
+ * nor "1.5" in "11.52"; 2026-10-10 review), with its own unit (or its short form, "56.4G") or none; another
+ * unit is another figure ("12GB" is not "12MB"). A hash or a file name as itself.
+ */
+function found(token: string, flat: string, spaced: string): boolean {
+	const figure = /^(\d+(?:\.\d+)?)(GB|MB|%)$/.exec(token);
+	if (!figure) return flat.includes(token);
+	const n = figure[1]!.replace(".", "\\.");
+	const unit = figure[2] === "%" ? "%" : `${figure[2]![0]}(?:i?B)?`;
+	return new RegExp(`(?<![\\d.])${n} ?(?:${unit}(?![A-Za-z])|(?![\\d]|\\.\\d| ?[KMGTPkmgtp%]))`, "i").test(spaced);
+}
+
+/**
+ * Whether a web investigation's answer is grounded (plan 0.010 M2): it must
+ * cite at least one page by URL, and every URL it cites must be one the web
+ * tools returned in this investigation. The question's own text never
+ * grounds it (the person's words are what is being checked).
+ */
+export function checkWebCitations(answer: string, toolResults: string): CitationCheck {
+	const norm = (u: string) => u.replace(/[.,;:!?)\]}>"'`*]+$/, "").replace(/\/$/, "");
+	const cited = [...new Set((answer.match(/https?:\/\/[^\s<>()[\]"'`]+/g) ?? []).map(norm))];
+	return { cited, invented: cited.filter((u) => !toolResults.includes(u)) };
 }

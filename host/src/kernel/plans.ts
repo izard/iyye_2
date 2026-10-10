@@ -27,6 +27,13 @@
  * the local web chat and every step is internal or reminds that web chat.
  * Anything else waits, `proposed`, for `/plan approve`, an owner command
  * that never comes from Telegram. A Telegram message can at most propose.
+ *
+ * **Iyye's own proposals** (plan 0.010 M3, owner decision 3): from an
+ * intention the owner stated, Iyye may propose a plan for the owner. It is
+ * never authorized at once, wherever the owner said it; its reminders go to
+ * the owner's web chat; and if the owner does not approve it within
+ * `ownProposalTtlMs` it is dropped (abandoned, "not approved"), so a remark
+ * the owner let pass does not wait for ever.
  */
 
 import { HOST_NOTE_PREFIX } from "../integration/pi/context.ts";
@@ -53,6 +60,8 @@ import { PLAN_STEP_SCOPE } from "../tools/broker.ts";
 import { describeAt, parseWhen } from "./when.ts";
 
 export const PLAN_ORIGIN = "plan:";
+/** `proposed_via` of the plans Iyye proposes itself (plan 0.010 M3). */
+export const IYYE_PROPOSED_VIA = "Iyye, from the owner's words";
 
 /** A step as the proposer gives it, before the host resolves it. */
 export type ProposedStep =
@@ -63,9 +72,10 @@ export type ProposedStep =
 export interface Proposal {
 	intent: string;
 	steps: ProposedStep[];
-	/** From the turn (the triggering event), never from the model. */
+	/** From the turn (the triggering event), never from the model. Iyye's own proposals: the owner. */
 	proposer: string;
-	principal: "owner" | "contact";
+	/** `iyye`: Iyye proposes for the owner, from their words (never authorized at once). */
+	principal: "owner" | "contact" | "iyye";
 	scope: string;
 	route: Route;
 	eventId: string | null;
@@ -84,6 +94,8 @@ export interface PlanRunnerDeps {
 	maxSteps?: number;
 	/** Open plans a contact may have. */
 	contactMax?: number;
+	/** How long a plan Iyye proposed itself waits for approval before it is dropped. */
+	ownProposalTtlMs?: number;
 	timezone?: string;
 }
 
@@ -101,6 +113,7 @@ export class PlanRunner {
 			tickMs: 15_000,
 			maxSteps: 3,
 			contactMax: 5,
+			ownProposalTtlMs: 3 * 86_400_000,
 			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 			...deps,
 		};
@@ -133,35 +146,46 @@ export class PlanRunner {
 	 * model; a refusal tells it to ask, never to choose.
 	 */
 	propose(p: Proposal): string {
+		return this.proposePlan(p).text;
+	}
+
+	/** `propose`, with the new plan's id when one was recorded. */
+	proposePlan(p: Proposal): { id: string | null; text: string } {
+		const no = (text: string) => ({ id: null, text });
 		const intent = p.intent.replace(/\s+/g, " ").trim();
-		if (!intent) return "Not proposed: say what the plan is for.";
+		if (!intent) return no("Not proposed: say what the plan is for.");
 		if (p.steps.length === 0 || p.steps.length > MAX_STEPS_PER_PLAN)
-			return `Not proposed: a plan has 1 to ${MAX_STEPS_PER_PLAN} steps.`;
-		if (p.principal !== "owner") {
+			return no(`Not proposed: a plan has 1 to ${MAX_STEPS_PER_PLAN} steps.`);
+		if (p.principal === "contact") {
 			const open = plansIn(this.d.db, OPEN_PLAN_STATES).filter((x) => x.scope === p.scope).length;
 			if (open >= this.d.contactMax)
-				return `Not proposed: this chat already has ${open} open plans. They must finish or be cancelled by the owner first.`;
+				return no(
+					`Not proposed: this chat already has ${open} open plans. They must finish or be cancelled by the owner first.`,
+				);
 		}
 		const now = this.d.now();
 		const steps: PlanStep[] = [];
 		for (const [i, s] of p.steps.entries()) {
 			if (s.kind === "investigate") {
 				const question = s.question.trim();
-				if (!question) return `Not proposed: step ${i + 1} has no question.`;
+				if (!question) return no(`Not proposed: step ${i + 1} has no question.`);
 				steps.push({ kind: "investigate", question, status: "pending" });
 			} else if (s.kind === "remind") {
 				const text = s.text.trim();
-				if (!text) return `Not proposed: step ${i + 1} says nothing to remind about.`;
+				if (!text) return no(`Not proposed: step ${i + 1} says nothing to remind about.`);
 				const when = parseWhen(s.when, now);
 				if (!when.ok)
-					return `Not proposed: step ${i + 1}: ${when.error}. Ask the person what they meant; do not choose another time yourself.`;
+					return no(
+						`Not proposed: step ${i + 1}: ${when.error}. Ask the person what they meant; do not choose another time yourself.`,
+					);
 				steps.push({ kind: "remind", text, due_at: when.at.toISOString(), status: "pending" });
 			} else {
 				const description = s.description.trim();
-				if (!description) return `Not proposed: step ${i + 1} is empty.`;
+				if (!description) return no(`Not proposed: step ${i + 1} is empty.`);
 				steps.push({ kind: "other", description, status: "pending" });
 			}
 		}
+		// Only the owner's own proposal in the local web chat; never Iyye's, wherever the owner said it.
 		const ownWebChat = p.principal === "owner" && p.route.channel === "web";
 		const typed = steps.every((s) => s.kind !== "other");
 		const auto = ownWebChat && typed;
@@ -183,7 +207,18 @@ export class PlanRunner {
 		const list = steps.map((s, i) => `  ${i + 1}. ${stepText(s)}`).join("\n");
 		if (auto) {
 			queueMicrotask(() => void this.tick());
-			return `Plan ${id.slice(0, 8)} is authorized and starts now. Reminders go out at their times; the other steps run one at a time, in order:\n${list}\nEach step is done only with its evidence (a grounded answer, a delivered reminder); tell the person exactly these steps and times.`;
+			return {
+				id,
+				text: `Plan ${id.slice(0, 8)} is authorized and starts now. Reminders go out at their times; the other steps run one at a time, in order:\n${list}\nEach step is done only with its evidence (a grounded answer, a delivered reminder); tell the person exactly these steps and times.`,
+			};
+		}
+		if (p.principal === "iyye") {
+			const days = Math.round(this.d.ownProposalTtlMs / 86_400_000);
+			this.notify(
+				`plan-proposed:${id}`,
+				`From what you said, I could keep this as a plan: ${quote(intent)}\n${list}\n/plan approve ${id.slice(0, 8)} to let it run, /plan cancel ${id.slice(0, 8)} if not. Unless you approve it, I drop it in ${days} day(s).`,
+			);
+			return { id, text: `Plan ${id.slice(0, 8)} proposed to the owner.` };
 		}
 		this.notify(
 			`plan-proposed:${id}`,
@@ -192,7 +227,10 @@ export class PlanRunner {
 		const why = typed
 			? "it reaches beyond the owner's web chat"
 			: "a step has no tool that can do it (it would stay blocked)";
-		return `Plan ${id.slice(0, 8)} is only proposed: it waits for the owner's approval because ${why}. Nothing is arranged yet; tell the person that, not that it will happen. Steps:\n${list}`;
+		return {
+			id,
+			text: `Plan ${id.slice(0, 8)} is only proposed: it waits for the owner's approval because ${why}. Nothing is arranged yet; tell the person that, not that it will happen. Steps:\n${list}`,
+		};
 	}
 
 	/** `/plan approve <id>`: owner surfaces only (commands never come from Telegram). */
@@ -226,7 +264,7 @@ export class PlanRunner {
 		const line = (p: PlanRow) => {
 			const s = stepsOf(p);
 			const done = s.filter((x) => x.status === "done").length;
-			return `  ${p.id.slice(0, 8)} ${p.state} · ${done}/${s.length} steps · ${proposerName(this.d.db, p.proposer_contact_id)} · ${quote(p.intent, 100)}${p.reason ? ` (${p.reason})` : ""}`;
+			return `  ${p.id.slice(0, 8)} ${p.state} · ${done}/${s.length} steps · ${proposedBy(this.d.db, p)} · ${quote(p.intent, 100)}${p.reason ? ` (${p.reason})` : ""}`;
 		};
 		return [
 			...(open.length ? ["open plans:", ...open.map(line)] : ["no open plans"]),
@@ -242,7 +280,7 @@ export class PlanRunner {
 		const route = JSON.parse(p.route_json) as Route;
 		return [
 			`plan ${p.id.slice(0, 8)}: ${quote(p.intent)}`,
-			`  ${p.state}${p.reason ? ` (${p.reason})` : ""} · proposed by ${proposerName(this.d.db, p.proposer_contact_id)} via ${p.proposed_via}, ${describeAt(new Date(p.created_at))}`,
+			`  ${p.state}${p.reason ? ` (${p.reason})` : ""} · proposed by ${proposedBy(this.d.db, p)}${p.proposed_via === IYYE_PROPOSED_VIA ? " (from your words)" : ` via ${p.proposed_via}`}, ${describeAt(new Date(p.created_at))}`,
 			`  outward steps go to ${route.channel === "web" ? "the web chat" : `Telegram chat ${route.chatId}`}`,
 			`  authorization: ${p.authorization ?? "none yet"}`,
 			...stepsOf(p).map(
@@ -308,6 +346,7 @@ export class PlanRunner {
 
 	private async advanceAll(): Promise<void> {
 		await Promise.resolve(); // so a tick asked for while advancing joins this one
+		this.dropStaleOwnProposals();
 		for (const { id } of plansIn(this.d.db, ["authorized", "active", "suspended"])) {
 			try {
 				// Step by step until nothing changes: a step done now lets the next one start in the same tick.
@@ -402,6 +441,16 @@ export class PlanRunner {
 			}
 			updatePlan(this.d.db, p.id, this.iso(), { state: "active", steps }, ["authorized"]);
 		})();
+	}
+
+	/** Iyye's own proposals the owner left unapproved are dropped after their time (plan 0.010 M3). */
+	private dropStaleOwnProposals(): void {
+		const before = new Date(this.d.now().getTime() - this.d.ownProposalTtlMs).toISOString();
+		for (const p of plansIn(this.d.db, ["proposed"])) {
+			if (p.proposed_via !== IYYE_PROPOSED_VIA || p.created_at >= before) continue;
+			if (updatePlan(this.d.db, p.id, this.iso(), { state: "abandoned", reason: "not approved" }, ["proposed"]))
+				this.d.log.info("plans: own proposal dropped", { id: p.id });
+		}
 	}
 
 	private complete(p: PlanRow, steps: PlanStep[]): void {
@@ -555,6 +604,11 @@ function stepText(s: PlanStep): string {
 /** Words a person or the model wrote: quoted and clipped, so they read as data. */
 function quote(text: string, max = 300): string {
 	return JSON.stringify(text.replace(/\s+/g, " ").slice(0, max));
+}
+
+/** Who proposed a plan, as the owner reads it: Iyye for its own proposals. */
+function proposedBy(db: Db, p: PlanRow): string {
+	return p.proposed_via === IYYE_PROPOSED_VIA ? "Iyye" : proposerName(db, p.proposer_contact_id);
 }
 
 function proposerName(db: Db, id: string): string {

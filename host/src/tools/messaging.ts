@@ -61,8 +61,18 @@ interface Requester {
 	eventId: string | null;
 }
 
-export function messagingToolkit(deps: MessagingDeps): Toolkit {
-	const d = {
+/** What a send did: the text for the model (or the caller), and the record when one was made. */
+export interface SendOutcome {
+	text: string;
+	sentId: string | null;
+	/** The action's state, when it was sent. */
+	state: string | null;
+}
+
+type Resolved = Required<MessagingDeps>;
+
+function withDefaults(deps: MessagingDeps): Resolved {
+	return {
 		now: () => new Date(),
 		newId: () => crypto.randomUUID(),
 		maxPerDay: 20,
@@ -70,6 +80,35 @@ export function messagingToolkit(deps: MessagingDeps): Toolkit {
 		iyyeMaxPerDay: 5,
 		...deps,
 	};
+}
+
+/**
+ * Iyye writes to a person on its own, outside any session (plan 0.010 M3: a
+ * social follow-up). Exactly what `telegram_send` does in Iyye's own work:
+ * the same label, the same caps (one message per person per day on Iyye's
+ * own), the same notice to the owner.
+ */
+export function iyyeMessenger(
+	deps: MessagingDeps,
+): (personId: string, text: string, via: string) => Promise<SendOutcome> {
+	const d = withDefaults(deps);
+	return async (personId, text, via) => {
+		const person = getContact(d.db, personId);
+		if (!person) return { text: "Not sent: that person is gone.", sentId: null, state: null };
+		const who: Requester = {
+			kind: "iyye",
+			contactId: null,
+			name: "Iyye",
+			scope: via,
+			via: "background",
+			eventId: null,
+		};
+		return sendTo(d, who, resolvePerson(d.db, person), text);
+	};
+}
+
+export function messagingToolkit(deps: MessagingDeps): Toolkit {
+	const d = withDefaults(deps);
 
 	const send: IyyeTool = {
 		name: "telegram_send",
@@ -84,94 +123,12 @@ export function messagingToolkit(deps: MessagingDeps): Toolkit {
 		run: async (p: { to: string; text: string }, ctx: ToolContext) => {
 			const who = requester(d.db, ctx);
 			if (typeof who === "string") return who;
-			const text = p.text.trim();
-			if (!text) return "Not sent: the message is empty.";
+			if (!p.text.trim()) return "Not sent: the message is empty.";
 			const person = resolveRecipient(d.db, p.to);
 			if (typeof person === "string") return person;
 			if (who.kind === "contact" && person.id === who.contactId)
 				return "Not sent: that is the person you are talking with; answer them here.";
-			const route = telegramRoute(d.db, person);
-			if (!route)
-				return `Not sent: ${person.kind === "owner" ? "the owner" : person.display_name} has no Telegram chat with Iyye (they must write to Iyye first).`;
-			const recipient = person.kind === "owner" ? "the owner" : person.display_name;
-			const now = d.now();
-			const day = localDay(now);
-			// Iyye on its own: at most one message per person per day; a person's request: one per person.
-			const dedupKey = who.kind === "iyye" ? `iyye:${person.id}:${day}` : `${who.eventId ?? d.newId()}:${person.id}`;
-			const earlier = sentByKey(d.db, dedupKey);
-			if (earlier) {
-				const action = d.db
-					.prepare("SELECT state FROM actions WHERE idempotency_key = ?")
-					.get(`notice:${sendKey(earlier.id)}`) as { state: string } | undefined;
-				return who.kind === "iyye"
-					? `Not sent: Iyye already wrote to ${recipient} on its own today (${action?.state ?? "not sent"}).`
-					: `Already sent to ${recipient} for this request (${action?.state ?? "not sent"}); one message per person per request.`;
-			}
-			const since = startOfDay(now);
-			const count = (where: string, ...args: unknown[]) =>
-				(
-					d.db
-						.prepare(`SELECT count(*) AS n FROM sent_messages WHERE created_at >= ?${where}`)
-						.get(since, ...args) as { n: number }
-				).n;
-			if (count("") >= d.maxPerDay)
-				return `Not sent: ${d.maxPerDay} messages were already sent today, the daily limit.`;
-			if (who.kind === "contact" && count(" AND requester_contact_id = ?", who.contactId) >= d.contactMaxPerDay)
-				return `Not sent: ${who.name} already asked for ${d.contactMaxPerDay} messages today, the limit.`;
-			if (who.kind === "iyye" && count(" AND requested_by = 'iyye'") >= d.iyyeMaxPerDay)
-				return `Not sent: Iyye already sent ${d.iyyeMaxPerDay} messages on its own today, the limit.`;
-			const id = d.newId();
-			insertSentMessage(d.db, {
-				id,
-				dedup_key: dedupKey,
-				recipient_contact_id: person.id,
-				scope: scopeFor(person),
-				route_json: JSON.stringify(route),
-				text,
-				requested_event_id: who.eventId,
-				requested_via: who.via,
-				requested_by: who.kind,
-				requester_contact_id: who.contactId,
-				requester_scope: who.scope,
-				created_at: now.toISOString(),
-			});
-			const header = who.kind === "iyye" ? "✉️ From Iyye:" : `✉️ From Iyye, on behalf of ${who.name.slice(0, 64)}:`;
-			const content = `${header}\n\n${text}`;
-			const row = await d.outbox.sendOwn({ key: sendKey(id), route, content });
-			setSentAction(d.db, id, row.id);
-			const outcome =
-				row.state === "delivered"
-					? "delivered"
-					: row.state === "unknown"
-						? "may not have arrived"
-						: row.state === "terminal_failure"
-							? "could not be delivered"
-							: "not delivered yet";
-			// What others caused, the owner sees (the owner's own requests they see in their chat).
-			if (who.kind !== "owner" && person.kind !== "owner") {
-				const by =
-					who.kind === "iyye"
-						? `Iyye wrote to ${JSON.stringify(recipient.slice(0, 64))} on its own`
-						: `${JSON.stringify(who.name.slice(0, 64))} asked Iyye to write to ${JSON.stringify(recipient.slice(0, 64))}`;
-				void d.outbox
-					.notifyOwner({
-						key: `sent-by:${id}`,
-						content: `${by} (${outcome}): ${JSON.stringify(text.replace(/\s+/g, " ").slice(0, 300))}`,
-					})
-					.catch(() => undefined);
-			}
-			switch (row.state) {
-				case "delivered":
-					return `Sent to ${recipient} on Telegram and delivered: ${JSON.stringify(content)}`;
-				case "unknown":
-					return `Sent to ${recipient}, but Telegram did not confirm it: it may or may not have arrived, and it will not be sent again. Say exactly that.`;
-				case "terminal_failure":
-					return `Could not be delivered to ${recipient}: ${row.last_error ?? "failed"}. Say it was not sent.`;
-				case "failed":
-					return `Not delivered yet (${row.last_error ?? "failed"}); it will be retried, and the owner is told if it fails for good. Say it is not delivered yet.`;
-				default:
-					return `Queued for ${recipient}; it goes out when Iyye is awake. Say it is not delivered yet.`;
-			}
+			return (await sendTo(d, who, person, p.text)).text;
 		},
 	};
 
@@ -181,6 +138,104 @@ export function messagingToolkit(deps: MessagingDeps): Toolkit {
 		effect: "reach",
 		tools: [send] as IyyeTool[],
 	};
+}
+
+/** Send `text` to `person` for `who`: the caps, the record, the outbox, the owner's notice. */
+async function sendTo(d: Resolved, who: Requester, person: Contact, raw: string): Promise<SendOutcome> {
+	const no = (text: string): SendOutcome => ({ text, sentId: null, state: null });
+	const text = raw.trim();
+	if (!text) return no("Not sent: the message is empty.");
+	const route = telegramRoute(d.db, person);
+	if (!route)
+		return no(
+			`Not sent: ${person.kind === "owner" ? "the owner" : person.display_name} has no Telegram chat with Iyye (they must write to Iyye first).`,
+		);
+	const recipient = person.kind === "owner" ? "the owner" : person.display_name;
+	const now = d.now();
+	const day = localDay(now);
+	// Iyye on its own: at most one message per person per day; a person's request: one per person.
+	const dedupKey = who.kind === "iyye" ? `iyye:${person.id}:${day}` : `${who.eventId ?? d.newId()}:${person.id}`;
+	const earlier = sentByKey(d.db, dedupKey);
+	if (earlier) {
+		const action = d.db
+			.prepare("SELECT state FROM actions WHERE idempotency_key = ?")
+			.get(`notice:${sendKey(earlier.id)}`) as { state: string } | undefined;
+		return no(
+			who.kind === "iyye"
+				? `Not sent: Iyye already wrote to ${recipient} on its own today (${action?.state ?? "not sent"}).`
+				: `Already sent to ${recipient} for this request (${action?.state ?? "not sent"}); one message per person per request.`,
+		);
+	}
+	const since = startOfDay(now);
+	const count = (where: string, ...args: unknown[]) =>
+		(
+			d.db.prepare(`SELECT count(*) AS n FROM sent_messages WHERE created_at >= ?${where}`).get(since, ...args) as {
+				n: number;
+			}
+		).n;
+	if (count("") >= d.maxPerDay)
+		return no(`Not sent: ${d.maxPerDay} messages were already sent today, the daily limit.`);
+	if (who.kind === "contact" && count(" AND requester_contact_id = ?", who.contactId) >= d.contactMaxPerDay)
+		return no(`Not sent: ${who.name} already asked for ${d.contactMaxPerDay} messages today, the limit.`);
+	if (who.kind === "iyye" && count(" AND requested_by = 'iyye'") >= d.iyyeMaxPerDay)
+		return no(`Not sent: Iyye already sent ${d.iyyeMaxPerDay} messages on its own today, the limit.`);
+	const id = d.newId();
+	insertSentMessage(d.db, {
+		id,
+		dedup_key: dedupKey,
+		recipient_contact_id: person.id,
+		scope: scopeFor(person),
+		route_json: JSON.stringify(route),
+		text,
+		requested_event_id: who.eventId,
+		requested_via: who.via,
+		requested_by: who.kind,
+		requester_contact_id: who.contactId,
+		requester_scope: who.scope,
+		created_at: now.toISOString(),
+	});
+	const header = who.kind === "iyye" ? "✉️ From Iyye:" : `✉️ From Iyye, on behalf of ${who.name.slice(0, 64)}:`;
+	const content = `${header}\n\n${text}`;
+	const row = await d.outbox.sendOwn({ key: sendKey(id), route, content });
+	setSentAction(d.db, id, row.id);
+	const outcome =
+		row.state === "delivered"
+			? "delivered"
+			: row.state === "unknown"
+				? "may not have arrived"
+				: row.state === "terminal_failure"
+					? "could not be delivered"
+					: "not delivered yet";
+	// What others caused, the owner sees (the owner's own requests they see in their chat).
+	if (who.kind !== "owner" && person.kind !== "owner") {
+		const by =
+			who.kind === "iyye"
+				? `Iyye wrote to ${JSON.stringify(recipient.slice(0, 64))} on its own`
+				: `${JSON.stringify(who.name.slice(0, 64))} asked Iyye to write to ${JSON.stringify(recipient.slice(0, 64))}`;
+		void d.outbox
+			.notifyOwner({
+				key: `sent-by:${id}`,
+				content: `${by} (${outcome}): ${JSON.stringify(text.replace(/\s+/g, " ").slice(0, 300))}`,
+			})
+			.catch(() => undefined);
+	}
+	const said = (text: string): SendOutcome => ({ text, sentId: id, state: row.state });
+	switch (row.state) {
+		case "delivered":
+			return said(`Sent to ${recipient} on Telegram and delivered: ${JSON.stringify(content)}`);
+		case "unknown":
+			return said(
+				`Sent to ${recipient}, but Telegram did not confirm it: it may or may not have arrived, and it will not be sent again. Say exactly that.`,
+			);
+		case "terminal_failure":
+			return said(`Could not be delivered to ${recipient}: ${row.last_error ?? "failed"}. Say it was not sent.`);
+		case "failed":
+			return said(
+				`Not delivered yet (${row.last_error ?? "failed"}); it will be retried, and the owner is told if it fails for good. Say it is not delivered yet.`,
+			);
+		default:
+			return said(`Queued for ${recipient}; it goes out when Iyye is awake. Say it is not delivered yet.`);
+	}
 }
 
 /** Who is asking, from the kernel's context; trust is read again now (it may have been revoked mid-turn). */

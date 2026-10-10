@@ -27,6 +27,7 @@
  * and no argument that can widen what a tool reads.
  */
 
+import { createHash } from "node:crypto";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 import type { Logger } from "../log.ts";
@@ -34,11 +35,38 @@ import type { Route } from "../outbox/outbox.ts";
 import type { Db } from "../state/db.ts";
 import { recordToolCall } from "../state/tool-calls.ts";
 
+/**
+ * An over-long text argument, shortened at a word boundary, with the note
+ * the tool puts first in its result (2026-10-05 incident: a schema
+ * `maxLength` made the model retry the same 400-character query 125 times,
+ * each rejected before the tool ran). Arguments are cut, never refused.
+ */
+export function shorten(text: string, max: number): { text: string; note: string } {
+	const t = text.trim().replace(/\s+/g, " ");
+	if (t.length <= max) return { text: t, note: "" };
+	const cut = t.slice(0, max);
+	const at = cut.lastIndexOf(" ");
+	const short = (at > max / 2 ? cut.slice(0, at) : cut).trim();
+	return {
+		text: short,
+		note: `(Your ${t.length}-character query was shortened to its first ${short.length} characters. Use a few words.)\n`,
+	};
+}
+
 /** `iyye`: Iyye's own background work (plan 0.007): `read` toolkits, and `reach` (plan 0.008, owner decision). */
 export type PrincipalKind = "owner" | "contact" | "iyye";
 
 /** Background sessions of plan steps (`kernel/plans.ts`): read-only, whatever Iyye's own work may do. */
 export const PLAN_STEP_SCOPE = "iyye:plan:";
+/** Investigations' sessions (plan 0.007 S5, 0.010 M2): they never get `reach`. */
+export const INVESTIGATION_SCOPE = "iyye:inv:";
+/**
+ * The only background sessions that may read the web (plan 0.010 M2): investigations of the owner's recurring
+ * questions. Plan steps (a contact may have written the question) and repository investigations (only records
+ * are evidence) never browse.
+ */
+export const WEB_INVESTIGATION_SCOPE = `${INVESTIGATION_SCOPE}web:`;
+export const WEB_TOOLKIT = "web";
 
 /**
  * Who asked in this turn and where a reply to them goes (plan 0.006): set by
@@ -82,8 +110,12 @@ export interface Toolkit {
 	 * never Iyye's background work. "reach": messages to other people (plan
 	 * 0.008), for the owner, contacts the owner trusts and Iyye's own work
 	 * (owner decision). "act": other effects, owner-only until grants exist.
+	 * "private": observes only, but what it reads is the owner's (Iyye's own code repositories): the owner and
+	 * Iyye's own work, never contacts.
+	 * "trusted": observes only what the asker sent in this conversation (images, 2026-10-09), but costs a
+	 * model call on the owner's machine: the owner and contacts the owner trusts, never Iyye's own work.
 	 */
-	effect: "read" | "self" | "reach" | "act";
+	effect: "read" | "self" | "reach" | "act" | "private" | "trusted";
 	tools: IyyeTool[];
 }
 
@@ -145,12 +177,23 @@ export class ToolBroker {
 	}
 
 	/** Who may use a toolkit. Never decided by the model or by a selection pass. */
-	static allowed(kit: Pick<Toolkit, "effect">, principal: PrincipalKind, trusted = false, scope = ""): boolean {
+	static allowed(
+		kit: Pick<Toolkit, "effect"> & { name?: string },
+		principal: PrincipalKind,
+		trusted = false,
+		scope = "",
+	): boolean {
+		if (kit.name === WEB_TOOLKIT && principal === "iyye") return scope.startsWith(WEB_INVESTIGATION_SCOPE);
 		if (kit.effect === "read") return true;
+		if (kit.effect === "private") return principal === "owner" || principal === "iyye";
 		if (kit.effect === "self") return principal === "owner" || principal === "contact";
+		if (kit.effect === "trusted") return principal === "owner" || (principal === "contact" && trusted);
 		// A plan step runs a question a contact may have written, approved as a read-only look (0.006 C4): never `reach`.
 		if (kit.effect === "reach")
-			return principal === "iyye" ? !scope.startsWith(PLAN_STEP_SCOPE) : principal === "owner" || trusted;
+			// …nor an investigation: it reads web pages, and a page must never be able to make Iyye write to someone.
+			return principal === "iyye"
+				? !scope.startsWith(PLAN_STEP_SCOPE) && !scope.startsWith(INVESTIGATION_SCOPE)
+				: principal === "owner" || trusted;
 		return principal === "owner";
 	}
 
@@ -211,6 +254,9 @@ export class ToolBroker {
 						result: result.slice(0, 2000),
 						started_at: startedAt,
 						finished_at: this.d.now().toISOString(),
+						// Plan 0.013 E3: the turn this result belongs to, from the host, and what the model saw.
+						event_id: budget.turn?.eventId ?? null,
+						result_hash: createHash("sha256").update(result).digest("hex"),
 					});
 					if (outcome !== "ok") this.d.log.warn(`tools: ${tool.name} ${outcome}`, { scope: ctx.scope, result });
 					return outcome === "ok"

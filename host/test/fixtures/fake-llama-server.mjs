@@ -14,6 +14,7 @@
 //   [[history]] lists every user message in the request ·
 //   [[tool:NAME]] calls tool NAME once, then replies "tool result: <results>" ·
 //   [[call:NAME|{json}]] the same, with those arguments ·
+//   [[callloop:NAME|{json}]] calls it with those arguments on every request, forever (a tool-call loop) ·
 //   [[toolloop:NAME]] keeps calling NAME until a result mentions a limit ·
 //   otherwise "echo: <text>".
 // Every chat request body is appended to fake-router-requests.jsonl next to the preset.
@@ -109,15 +110,19 @@ const server = createServer(async (req, res) => {
 		const last = users.at(-1) ?? "";
 		const lastUserIndex = messages.findLastIndex((m) => m.role === "user");
 		const toolResults = messages.slice(lastUserIndex + 1).filter((m) => m.role === "tool").map(text);
-		const callMarker = /\[\[call:([a-z_]+)\|(\{.*?\})\]\]/s.exec(last);
+		const callMarker = /\[\[(call|callloop):([a-z_]+)\|(\{.*?\})\]\]/s.exec(last);
 		const toolMarker = callMarker
-			? [callMarker[0], "tool", callMarker[1]]
+			? [callMarker[0], callMarker[1] === "call" ? "tool" : "forever", callMarker[2]]
 			: /\[\[(tool|toolloop):([a-z_]+)\]\]/.exec(last);
-		const toolArgs = callMarker ? callMarker[2] : "{}";
+		const toolArgs = callMarker ? callMarker[3] : "{}";
 		let toolCall = null;
 		if (toolMarker) {
 			const done =
-				toolMarker[1] === "tool" ? toolResults.length > 0 : toolResults.some((r) => /limit/.test(r));
+				toolMarker[1] === "forever"
+					? false
+					: toolMarker[1] === "tool"
+						? toolResults.length > 0
+						: toolResults.some((r) => /limit/.test(r));
 			if (!done) toolCall = toolMarker[2];
 		}
 		if (last.includes("[[fail]]")) return err(res, 500, "scripted failure");

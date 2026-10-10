@@ -66,6 +66,22 @@ describe("decision service", () => {
 		assert.equal(s.status.state, "needs provisioning");
 	});
 
+	test("a state dir moved from another machine finds its snapshot in its own model cache", async () => {
+		const { s, stateDir } = await service();
+		provision(stateDir);
+		const record = JSON.parse(readFileSync(join(stateDir, "provisioned.json"), "utf8"));
+		const moved = {
+			...record,
+			path: "/Users/someone/.iyye2/decisions/hf/hub/models--jaredpalmer--kev-4b/snapshots/6cfce5c",
+		};
+		writeFileSync(join(stateDir, "provisioned.json"), JSON.stringify(moved));
+		assert.equal(s.provisioned()?.path, record.path);
+		// A snapshot this machine does not have is still "needs provisioning".
+		writeFileSync(join(stateDir, "provisioned.json"), JSON.stringify({ ...moved, path: `${moved.path}x` }));
+		s.start();
+		assert.equal(s.status.state, "needs provisioning");
+	});
+
 	test("starts Kev with exactly Iyye's environment: pinned checkpoint, offline, key, no inherited secrets", async () => {
 		process.env.HF_TOKEN = "hf_must_not_leak";
 		try {

@@ -40,6 +40,7 @@ import { type RouterClient, type RouterModelStatus, RouterUnreachable } from "./
 import type { MemoryProbe } from "./memory.ts";
 import { renderPreset } from "./preset.ts";
 import { findModel, type ModelSpec, type Registry } from "./registry.ts";
+import type { RemoteModels } from "./remote.ts";
 
 /** The parts of RouterProcess the manager uses (a fake in tests). */
 export interface RouterHandle {
@@ -63,6 +64,10 @@ export interface ModelManagerDeps {
 	defaultMemoryModel?: string;
 	/** Initial model for background work (0.007); loaded by day like the chat models. */
 	defaultBackgroundModel?: string;
+	/** llama.cpp `--load-mode` for every model (IYYE2_LLAMA_LOAD_MODE). */
+	loadMode?: string | null;
+	/** A model another of the owner's machines serves (plan 0.012), for background work only. */
+	remote?: Pick<RemoteModels, "has" | "acquire" | "status" | "endpoint"> | null;
 	log: Logger;
 	now?: () => Date;
 	newId?: () => string;
@@ -159,6 +164,8 @@ export class ModelManager {
 			defaultMemoryModel: "",
 			defaultBackgroundModel: "",
 			...deps,
+			loadMode: deps.loadMode ?? null,
+			remote: deps.remote ?? null,
 		};
 	}
 
@@ -194,7 +201,7 @@ export class ModelManager {
 			this.d.log.warn("models: default model is not in the registry", { model: this.d.defaultModel });
 		}
 		const presetPath = join(this.d.stateDir, "models.ini");
-		const preset = renderPreset(this.d.registry);
+		const preset = renderPreset(this.d.registry, { loadMode: this.d.loadMode });
 		let previous: string | null = null;
 		try {
 			previous = readFileSync(presetPath, "utf8");
@@ -289,6 +296,20 @@ export class ModelManager {
 		if (!SELECTION_KEYS.includes(channel)) return { ok: false, message: `unknown channel ${channel}` };
 		const spec = findModel(this.d.registry, name);
 		if (!spec) return { ok: false, message: `unknown model ${name}` };
+		if (spec.remote) {
+			// Plan 0.012, owner decision 1: another machine's model takes background work only.
+			if (channel !== "background")
+				return {
+					ok: false,
+					message: `${name} runs on ${spec.remote.endpoint}: it can be used for background work only`,
+				};
+			setSelectedModel(this.d.db, channel, name, setBy, this.iso());
+			const s = this.d.remote?.status;
+			return {
+				ok: true,
+				message: `background work now uses ${name}${s && s.state !== "up" ? ` (${spec.remote.endpoint} is ${s.state}: it waits until it is up)` : ""}`,
+			};
+		}
 		if (channel === "memory") {
 			if (!spec.available) return { ok: false, message: `${name}: GGUF file missing` };
 			setSelectedModel(this.d.db, "memory", name, setBy, this.iso());
@@ -312,6 +333,11 @@ export class ModelManager {
 	 * waits or fails the job; it never substitutes another model.
 	 */
 	async acquire(name: string): Promise<ModelLease | OpResult> {
+		// Another machine's model: its own availability, untouched by this router, its loads and its health.
+		if (this.isRemote(name))
+			return (
+				this.d.remote?.acquire(name) ?? { ok: false, busy: true, message: `${name}: its machine is not configured` }
+			);
 		if (this.routerState !== "up") return { ok: false, message: "the model router is not running" };
 		if (this.loading.size > 0) return this.busyLoading();
 		if (this.changing.has(name)) return { ok: false, message: `${name} is being loaded or unloaded` };
@@ -347,6 +373,29 @@ export class ModelManager {
 		};
 	}
 
+	/**
+	 * Self-preservation's maintenance (plan 0.010 M1): after self-healing gave
+	 * up on a selected model, start its attempts afresh. Never for a model the
+	 * owner unloaded or while asleep; the actor allows it once a day per model.
+	 */
+	retryHeal(name: string): boolean {
+		const h = this.healingState(name);
+		if (!h || h.retrying) return false;
+		this.heal.delete(name);
+		this.healSelected();
+		return true;
+	}
+
+	/** Self-healing as it stands (read-only, plan 0.010 signals): each model being brought back, and whether Iyye gave up. */
+	healingReport(): { model: string; attempts: number; gaveUp: boolean; lastError: string }[] {
+		return [...this.heal].map(([model, h]) => ({
+			model,
+			attempts: h.attempts,
+			gaveUp: h.attempts >= this.d.healBackoffMs.length,
+			lastError: h.lastError,
+		}));
+	}
+
 	private busyLoading(): OpResult {
 		return { ok: false, busy: true, message: `waiting for ${[...this.loading].join(", ")} to finish loading` };
 	}
@@ -374,7 +423,13 @@ export class ModelManager {
 				return {
 					name: m.name,
 					available: m.available,
-					status: !m.available ? "unavailable" : this.routerState !== "up" ? "unknown" : (s?.value ?? "unknown"),
+					status: m.remote
+						? `on ${m.remote.endpoint}: ${this.d.remote?.status.state ?? "not configured"}`
+						: !m.available
+							? "unavailable"
+							: this.routerState !== "up"
+								? "unknown"
+								: (s?.value ?? "unknown"),
 					failed: s?.failed ?? false,
 					inUse: this.inUse.get(m.name) ?? 0,
 					ramRequiredGb: m.ramRequiredGb,
@@ -391,6 +446,13 @@ export class ModelManager {
 	private async doLoad(name: string, requestedBy: string): Promise<OpResult> {
 		const spec = findModel(this.d.registry, name);
 		if (!spec) return this.refuse("load", name, requestedBy, `unknown model ${name}`);
+		if (spec.remote)
+			return this.refuse(
+				"load",
+				name,
+				requestedBy,
+				`${name} is served by ${spec.remote.endpoint}; Iyye never loads it`,
+			);
 		if (!spec.available) return this.refuse("load", name, requestedBy, `${name}: GGUF file missing (${spec.path})`);
 		if (this.routerState !== "up") return this.refuse("load", name, requestedBy, "the model router is not running");
 		if (!(await this.refresh())) return this.refuse("load", name, requestedBy, "the model router is not responding");
@@ -487,6 +549,8 @@ export class ModelManager {
 
 	private async doUnload(name: string, requestedBy: string): Promise<OpResult> {
 		if (!findModel(this.d.registry, name)) return this.refuse("unload", name, requestedBy, `unknown model ${name}`);
+		if (this.isRemote(name))
+			return this.refuse("unload", name, requestedBy, `${name} is served by another machine; Iyye never unloads it`);
 		const busy = this.inUse.get(name) ?? 0;
 		if (busy > 0) return this.refuse("unload", name, requestedBy, `${name} is in use by ${busy} running job(s)`);
 		if (this.routerState !== "up") return this.refuse("unload", name, requestedBy, "the model router is not running");
@@ -558,7 +622,7 @@ export class ModelManager {
 			this.ownerUnloaded.clear();
 			this.heal.clear();
 			await this.refresh();
-			const chat = new Set(DAY_KEYS.map((c) => getSelectedModel(this.d.db, c)).filter((m) => m !== null));
+			const chat = new Set(this.daySelected());
 			for (const name of this.loadedModels()) {
 				if (!chat.has(name)) await this.doUnload(name, requestedBy);
 			}
@@ -576,11 +640,7 @@ export class ModelManager {
 
 	/** Load each day selection's model once (chat channels, background); failures are recorded, not thrown. */
 	private async loadSelectedLocked(requestedBy: string): Promise<void> {
-		const wanted = new Set<string>();
-		for (const channel of DAY_KEYS) {
-			const m = getSelectedModel(this.d.db, channel);
-			if (m) wanted.add(m);
-		}
+		const wanted = new Set(this.daySelected());
 		if (this.nightKeep) {
 			// Asleep: the chat models come back at waking; the memory model is loaded on demand by the gate.
 			this.d.log.info("models: asleep, not reloading chat models", { wanted: [...wanted] });
@@ -625,6 +685,9 @@ export class ModelManager {
 				if (this.stopping || this.nightKeep) return;
 				await this.refresh();
 				if (LOADED_LIKE.has(this.statuses.get(name)?.value ?? "") || this.changing.has(name)) continue;
+				// Decided before the queue reached this step: the owner may have unloaded it meanwhile, or the
+				// selection changed. Ask again now.
+				if (!this.healingState(name)?.retrying) continue;
 				this.d.log.warn("models: a selected model is not loaded; loading it again", {
 					model: name,
 					attempt: (this.heal.get(name)?.attempts ?? 0) + 1,
@@ -650,9 +713,23 @@ export class ModelManager {
 		this.heal.set(name, { attempts, nextAt: this.d.monotonicMs() + delay, lastError: message });
 	}
 
-	/** The models the day needs loaded: the chat channels' and background work's selections. */
+	/**
+	 * The models the day needs loaded on this machine: the chat channels' and background work's selections.
+	 * Another machine's model is not among them: never loaded, unloaded at night or healed here.
+	 */
 	private daySelected(): string[] {
-		return [...new Set(DAY_KEYS.map((c) => getSelectedModel(this.d.db, c)).filter((m): m is string => m !== null))];
+		return [
+			...new Set(
+				DAY_KEYS.map((c) => getSelectedModel(this.d.db, c)).filter(
+					(m): m is string => m !== null && !this.isRemote(m),
+				),
+			),
+		];
+	}
+
+	/** Whether a model is served by another of the owner's machines (plan 0.012). */
+	isRemote(name: string): boolean {
+		return findModel(this.d.registry, name)?.remote !== undefined;
 	}
 
 	/**

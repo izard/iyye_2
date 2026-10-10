@@ -105,6 +105,33 @@ describe("Pi integration", () => {
 		await conv.disposeAll();
 	});
 
+	test("with clockNote every turn tells the model the time, background included, never stored in the transcript", async () => {
+		const at = new Date("2026-10-09T12:34:00Z");
+		const conv = new PiConversations({
+			db: openDb(":memory:"),
+			runtime,
+			stateDir: sb.stateDir,
+			identity: IDENTITY,
+			log: silentLogger,
+			now: () => at,
+			clockNote: true,
+		});
+		for (const [scope, view] of [
+			["owner-clock", OWNER],
+			["background:clock", { kind: "background" }],
+		] as const) {
+			await conv.turn({ scope, view: view as ScopeView, model: "small", text: "what day is it?" });
+			const notes = requests()
+				.at(-1)!
+				.messages.map(text)
+				.filter((t) => t.startsWith("<now>"));
+			assert.equal(notes.length, 1, `${scope}: one time note in the request`);
+			assert.match(notes[0]!, /2026.*ISO: 2026-10-09T12:34:00\.000Z\. No need to call current_time/);
+			assert.ok(!readFileSync(conv.sessionFile(scope)!, "utf8").includes("<now>"), "never in the transcript");
+		}
+		await conv.disposeAll();
+	});
+
 	test("A1 (session part): a restarted host reopens the same scope's transcript", async () => {
 		const db = openDb(":memory:");
 		const first = conversations(db);

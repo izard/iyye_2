@@ -36,6 +36,12 @@ export interface EnergyCharges {
 	backgroundPerMin: number;
 	chatPerMin: number;
 	backgroundStep: number;
+	/**
+	 * The most device time can cost in one turn or step (2026-10-05: one
+	 * runaway 1.5-hour turn cost 0.48 at once and forced a nap). Long turns
+	 * still cost, and stay visible in `/energy`; one cannot empty the day.
+	 */
+	devicePerTurnMax: number;
 }
 
 /**
@@ -55,6 +61,7 @@ export const DEFAULT_CHARGES: EnergyCharges = {
 	backgroundPerMin: 0.02,
 	chatPerMin: 0.005,
 	backgroundStep: 0.01,
+	devicePerTurnMax: 0.15,
 };
 
 export type ChargeKind =
@@ -199,7 +206,11 @@ export class Adenosine {
 	/** Device time used by a chat turn or a background step (reported by the scheduler and the worker). */
 	deviceTime(kind: "chat" | "background", ms: number, ref: string): void {
 		const perMin = kind === "chat" ? this.d.charges.chatPerMin : this.d.charges.backgroundPerMin;
-		this.charge(kind === "chat" ? "device_chat" : "device_background", (ms / 60_000) * perMin, ref);
+		this.charge(
+			kind === "chat" ? "device_chat" : "device_background",
+			Math.min((ms / 60_000) * perMin, this.d.charges.devicePerTurnMax),
+			ref,
+		);
 	}
 
 	/** When the level would reach `windDown` at the recent rate, or null. */

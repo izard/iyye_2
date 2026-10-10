@@ -79,7 +79,7 @@ export class WebSessions {
 	}
 
 	static cookie(id: string): string {
-		// No Secure flag: this is plain HTTP on 127.0.0.1.
+		// No Secure flag: this is plain HTTP (127.0.0.1, or the LAN when IYYE2_WEB_LISTEN says so).
 		return `${SESSION_COOKIE}=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`;
 	}
 

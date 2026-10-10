@@ -56,15 +56,20 @@ export async function createLocalModelRuntime(opts: LocalRuntimeOptions): Promis
 			.map((m) => ({
 				id: m.name,
 				name: m.name,
+				// A remote model (plan 0.012) goes through the host's own pass-through on 127.0.0.1, never to
+				// the other machine directly: the provider, and so this runtime's guard, are the same.
+				...(m.remote ? { baseUrl: `${m.remote.proxyUrl.replace(/\/$/, "")}/v1` } : {}),
 				input: ["text" as const],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				// Declared as a reasoning model only so Pi sends the switch: `enable_thinking` goes out
-				// explicitly on every request, off unless the registry says "on". Some templates (Qwen's)
-				// think by default; left unsaid, a reply can spend its whole output budget thinking.
+				// explicitly on every request. Some templates (Qwen's) think by default; left unsaid, a reply
+				// can spend its whole output budget thinking. It follows the session's thinking level
+				// (`thinkingLevelFor`: "medium" for a registry "on", else "off"), so Pi's own summaries
+				// (compaction) can go out with thinking off (2026-10-05: an 11-minute thinking summary).
 				reasoning: true,
 				compat: {
 					thinkingFormat: "chat-template" as const,
-					chatTemplateKwargs: { enable_thinking: m.thinking === "on" },
+					chatTemplateKwargs: { enable_thinking: { $var: "thinking.enabled" as const } },
 					// A reasoning model would otherwise get its system prompt as role "developer",
 					// which llama.cpp chat templates may not know.
 					supportsDeveloperRole: false,
@@ -137,4 +142,9 @@ export function localModel(runtime: ModelRuntime, name: string) {
 	const model = runtime.getModel(IYYE_PROVIDER, name);
 	if (!model) throw new Error(`model ${name} is not registered with the local runtime`);
 	return model;
+}
+
+/** The session thinking level for a registry model: Pi turns it into `enable_thinking` on each request. */
+export function thinkingLevelFor(registry: Registry, model: string): "medium" | "off" {
+	return registry.models.find((m) => m.name === model)?.thinking === "on" ? "medium" : "off";
 }

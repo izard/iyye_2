@@ -4,14 +4,19 @@
 /**
  * The owner's local web chat (plan M4).
  *
- * Every request:  Host must be 127.0.0.1:<port> or localhost:<port> (blocks
- *                 DNS rebinding). No CORS headers are ever sent.
- * Every POST:     Origin must be present and exactly http://127.0.0.1:<port>
- *                 or http://localhost:<port>; outside /api/login it also
- *                 needs the session cookie and the session's X-CSRF-Token.
+ * Every request:  Host must be 127.0.0.1:<port> or localhost:<port>, or name
+ *                 the address the request arrived on; when it listens beyond
+ *                 loopback (IYYE2_WEB_LISTEN, owner decision 2026-10-09: the
+ *                 LAN), also this machine's hostname or <hostname>.local.
+ *                 Any other name is refused (blocks DNS rebinding). No CORS
+ *                 headers are ever sent.
+ * Every POST:     Origin must be present and exactly http://<an allowed Host>;
+ *                 outside /api/login it also needs the session cookie and the
+ *                 session's X-CSRF-Token.
  * /api/* reads:   need the session cookie (401 otherwise).
  *
- * Login: the host prints http://127.0.0.1:<port>/login#<token>. The token sits
+ * Login: the host prints http://127.0.0.1:<port>/login#<token> (and the LAN
+ * addresses' URLs when it listens beyond loopback). The token sits
  * in the URL fragment, which browsers never send, so it never appears in a
  * request line, log or Referer; the page posts it to /api/login.
  *
@@ -22,6 +27,7 @@
 
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { hostname, networkInterfaces } from "node:os";
 import type { AdmissionDeps } from "../../kernel/admission.ts";
 import { admitOwnerWebMessage } from "../../kernel/admission.ts";
 import { type CommandExtras, handleOwnerCommand, isKnownCommand } from "../../kernel/commands.ts";
@@ -66,7 +72,35 @@ export interface WebServerDeps {
 	remindersStatus?: () => string;
 	/** /sleep, /wake and /memory (plan 0.002). */
 	commandExtras?: CommandExtras;
+	/** The address to listen on (IYYE2_WEB_LISTEN): 127.0.0.1 by default, "0.0.0.0" or one address for the LAN. */
 	host?: string;
+	/** This machine's hostname (tests). */
+	hostname?: string;
+}
+
+const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/** "::ffff:192.168.1.5" → "192.168.1.5"; an IPv6 address in brackets, as a Host header writes it. */
+function hostForm(address: string): string {
+	const a = address.startsWith("::ffff:") ? address.slice(7) : address;
+	return a.includes(":") ? `[${a}]` : a;
+}
+
+/**
+ * Whether a Host header (or an Origin's host) may reach the web chat: the loopback names, the address the
+ * request arrived on (a name only the connection's own address can match, so DNS rebinding cannot), and,
+ * when listening beyond loopback, this machine's hostname. Exported for tests.
+ */
+export function hostAllowed(
+	host: string,
+	o: { port: number; listen: string; localAddress?: string | undefined; hostname: string },
+): boolean {
+	const h = host.toLowerCase();
+	if (h === `127.0.0.1:${o.port}` || h === `localhost:${o.port}`) return true;
+	if (o.localAddress && h === `${hostForm(o.localAddress)}:${o.port}`.toLowerCase()) return true;
+	if (LOOPBACK.has(o.listen)) return false;
+	const name = o.hostname.toLowerCase();
+	return !!name && (h === `${name}:${o.port}` || h === `${name.replace(/\.local$/, "")}.local:${o.port}`);
 }
 
 class HttpError extends Error {
@@ -80,18 +114,40 @@ class HttpError extends Error {
 export class WebServer {
 	private readonly d: WebServerDeps;
 	private server: Server | null = null;
-	private readonly allowedHosts: Set<string>;
-	private readonly allowedOrigins: Set<string>;
 	private readonly running = new Set<Promise<unknown>>();
 
 	constructor(deps: WebServerDeps) {
 		this.d = deps;
-		this.allowedHosts = new Set([`127.0.0.1:${deps.port}`, `localhost:${deps.port}`]);
-		this.allowedOrigins = new Set([...this.allowedHosts].map((h) => `http://${h}`));
 	}
 
 	get loginUrl(): string {
 		return `http://127.0.0.1:${this.d.port}/login#${this.d.ownerToken}`;
+	}
+
+	/** The login URLs on the LAN addresses the chat listens on (none on loopback). */
+	get lanLoginUrls(): string[] {
+		const listen = this.d.host ?? "127.0.0.1";
+		if (LOOPBACK.has(listen)) return [];
+		const addresses =
+			listen === "0.0.0.0" || listen === "::"
+				? Object.values(networkInterfaces())
+						.flat()
+						.filter((a) => a && !a.internal && a.family === "IPv4")
+						.map((a) => a!.address)
+				: [listen];
+		return addresses.map((a) => `http://${hostForm(a)}:${this.d.port}/login#${this.d.ownerToken}`);
+	}
+
+	private allowed(host: string | undefined, req: IncomingMessage): boolean {
+		return (
+			!!host &&
+			hostAllowed(host, {
+				port: this.d.port,
+				listen: this.d.host ?? "127.0.0.1",
+				localAddress: req.socket.localAddress,
+				hostname: this.d.hostname ?? hostname(),
+			})
+		);
 	}
 
 	start(): Promise<void> {
@@ -107,7 +163,7 @@ export class WebServer {
 		return new Promise((resolve, reject) => {
 			this.server!.once("error", reject);
 			this.server!.listen(this.d.port, this.d.host ?? "127.0.0.1", () => {
-				this.d.log.info("web: listening", { url: `http://127.0.0.1:${this.d.port}/` });
+				this.d.log.info("web: listening", { address: this.d.host ?? "127.0.0.1", port: this.d.port });
 				resolve();
 			});
 		});
@@ -125,7 +181,7 @@ export class WebServer {
 
 	private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		securityHeaders(res);
-		if (!this.allowedHosts.has(req.headers.host ?? "")) throw new HttpError(403, "unexpected Host header");
+		if (!this.allowed(req.headers.host, req)) throw new HttpError(403, "unexpected Host header");
 		const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
 		const path = url.pathname;
 		const method = req.method ?? "GET";
@@ -136,7 +192,8 @@ export class WebServer {
 
 		if (method === "POST") {
 			const origin = req.headers.origin;
-			if (!origin || !this.allowedOrigins.has(origin)) throw new HttpError(403, "cross-origin request refused");
+			if (!origin?.startsWith("http://") || !this.allowed(origin.slice(7), req))
+				throw new HttpError(403, "cross-origin request refused");
 		}
 		if (method === "POST" && path === "/api/login") return this.login(req, res);
 

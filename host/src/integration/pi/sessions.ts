@@ -53,6 +53,7 @@ import {
 	touchSession,
 } from "../../state/sessions.ts";
 import type { SessionTools, ToolBroker, ToolkitSummary, TurnContext } from "../../tools/broker.ts";
+import { describeTime } from "../../tools/probes.ts";
 import { currentTurnStart, HOST_NOTE_PREFIX, trimEarlierToolResults } from "./context.ts";
 import { composeSystemPrompt, type ScopeView } from "./prompt.ts";
 import { IyyeResourceLoader, loadInlineExtensions } from "./resources.ts";
@@ -80,6 +81,10 @@ export interface ConversationsDeps {
 	 * (plan 0.006, owner choice), so it knows what "done, thanks" answers.
 	 */
 	turnNotes?: ((scope: string) => string | null) | null;
+	/** Add the current time to every turn's notes, background steps included (`nowNote`). Off in tests. */
+	clockNote?: boolean;
+	/** The thinking level for a model: "medium" for a registry `thinking: on`, else "off". */
+	thinkingLevel?: (model: string) => "medium" | "off";
 	/**
 	 * Toolkit selection, acting (plan 0.004 §3.4). Without it every permitted
 	 * toolkit is declared, as before. With it a person's session starts with the
@@ -138,7 +143,9 @@ export class PiConversations {
 			memory: null,
 			afterTurn: null,
 			turnNotes: null,
+			clockNote: false,
 			toolkitSelection: null,
+			thinkingLevel: () => "off",
 			...deps,
 		};
 		this.cwd = "/";
@@ -232,16 +239,26 @@ export class PiConversations {
 				// Recorded in the transcript as a model change; persist: false keeps global defaults untouched.
 				await session.setModel(localModel(this.d.runtime, req.model), { persist: false });
 			}
+			// The model's thinking (registry `thinking`), as the session level Pi turns into `enable_thinking`.
+			const level = this.d.thinkingLevel(req.model);
+			if (session.thinkingLevel !== level) session.setThinkingLevel(level);
 		} catch (err) {
 			return { ok: false, reason: "error", message: (err as Error).message };
 		}
 		const notes = req.view.kind === "background" ? null : (this.d.turnNotes?.(req.scope) ?? null);
-		live.recall.block = [await this.recallFor(req), notes].filter(Boolean).join("\n\n") || null;
+		live.recall.block =
+			[await this.recallFor(req), notes, this.d.clockNote ? nowNote(this.d.now()) : null]
+				.filter(Boolean)
+				.join("\n\n") || null;
 		const startedAt = this.d.now().toISOString();
 		let result: TurnResult;
 		try {
 			result = await runTurn(session, req.text, req.signal);
-			if (!result.ok && (result.reason === "truncated" || result.reason === "empty") && !req.signal?.aborted) {
+			if (
+				!result.ok &&
+				(result.reason === "truncated" || result.reason === "empty" || result.reason === "tool_loop") &&
+				!req.signal?.aborted
+			) {
 				// The reply ended without an answer: cut off at the output limit after research, or a reasoning
 				// model that thought and stopped with no text (2026-10-03). One recovery step, with thinking
 				// off for that request so it cannot loop again. After a cut-off the tools are closed (answer
@@ -250,7 +267,8 @@ export class PiConversations {
 					scope: req.scope,
 					reason: result.reason,
 				});
-				if (result.reason === "truncated") live.tools?.closeTurn();
+				// After a cut-off or a tool loop the tools are closed: answer from what was found.
+				if (result.reason === "truncated" || result.reason === "tool_loop") live.tools?.closeTurn();
 				else if (this.d.toolkitSelection && live.tools && req.view.kind !== "background") {
 					// The recovery says "look it up with your tools": every permitted toolkit is declared for it
 					// (one reprocessing, on a failure path; the 2026-10-03 incident needed web).
@@ -260,7 +278,11 @@ export class PiConversations {
 				live.recall.noThinking = true;
 				const recovered = await runTurn(
 					session,
-					result.reason === "truncated" ? RECOVERY_NOTE : RECOVERY_NOTE_EMPTY,
+					result.reason === "truncated"
+						? RECOVERY_NOTE
+						: result.reason === "tool_loop"
+							? RECOVERY_NOTE_TOOL_LOOP
+							: RECOVERY_NOTE_EMPTY,
 					req.signal,
 				);
 				if (recovered.ok) result = recovered;
@@ -454,6 +476,17 @@ interface TurnState {
 export const RECOVERY_NOTE = `${HOST_NOTE_PREFIX} Your previous reply was cut off at the length limit before you answered. Answer the person's last message now, briefly, using only what you have already found. Do not call tools. If you could not find the answer, say so plainly.`;
 
 /** Sent when the model finished without any answer text (2026-10-03: it reasoned for 9 minutes and stopped). */
+/**
+ * The current time on every turn, background steps included (2026-10-09: with no clock in the prompt a
+ * reasoning model kept calling `current_time`, again and again within one turn). Request-local, like the
+ * other notes: never stored in the transcript, so earlier turns keep their cached prefix.
+ */
+export function nowNote(d: Date): string {
+	return `<now>It is ${describeTime(d)}. No need to call current_time for this.</now>`;
+}
+
+export const RECOVERY_NOTE_TOOL_LOOP = `${HOST_NOTE_PREFIX} Your tool calls were stopped: they kept failing or repeating. Answer the person's last message now, briefly, from what the tools already returned. Do not call tools. If you could not find the answer, say so plainly and say what went wrong.`;
+
 export const RECOVERY_NOTE_EMPTY = `${HOST_NOTE_PREFIX} Your previous reply ended without an answer. Answer the person's last message now, directly. If you are not sure of a fact, look it up with your tools first; if you still cannot find it, say so plainly.`;
 
 /**
@@ -466,6 +499,23 @@ export const RECOVERY_NOTE_EMPTY = `${HOST_NOTE_PREFIX} Your previous reply ende
  */
 function contextHook(recall: TurnState): ExtensionFactory {
 	return (pi) => {
+		// Pi's own summaries (compaction) use the session's thinking level and bypass the request hook below:
+		// they go out with thinking off, and the level is restored afterwards (2026-10-05 incident).
+		let restore: string | null = null;
+		pi.on("session_before_compact", () => {
+			const level = pi.getThinkingLevel();
+			if (level !== "off") {
+				restore = level;
+				pi.setThinkingLevel("off");
+			}
+			return undefined;
+		});
+		const back = () => {
+			if (restore) pi.setThinkingLevel(restore as Parameters<typeof pi.setThinkingLevel>[0]);
+			restore = null;
+		};
+		pi.on("session_compact", back);
+		pi.on("session_compact_failed", back);
 		pi.on("before_provider_request", (event) => {
 			if (!recall.noThinking || typeof event.payload !== "object" || event.payload === null) return undefined;
 			const payload = event.payload as { chat_template_kwargs?: Record<string, unknown> };

@@ -85,6 +85,18 @@ test("one writer: a referenced charge is written once, the level is clamped, and
 	db.close();
 });
 
+test("one runaway turn costs at most devicePerTurnMax, however long it ran (2026-10-05: 1.5 h cost 0.48)", () => {
+	const db = openDb(":memory:");
+	const clock = { now: new Date(2026, 9, 5, 19, 0) };
+	const a = energy(db, clock);
+	a.deviceTime("chat", 90 * 60_000, "job-runaway:1");
+	assert.equal(Math.round((1 - a.level()) * 1000), Math.round(DEFAULT_CHARGES.devicePerTurnMax * 1000));
+	assert.ok(a.level() > 0.15 + 0.5, "one turn cannot bring a fresh day near the nap level");
+	a.deviceTime("chat", 4 * 60_000, "job-normal:1");
+	assert.equal(Math.round((1 - a.level()) * 1000), 150 + 20, "a normal turn is charged as before");
+	db.close();
+});
+
 test("the sweep charges answered turns and model operations once, never history; awake time only while awake, never the downtime", () => {
 	const db = openDb(":memory:");
 	const clock = { now: new Date(2026, 9, 4, 12, 0) };

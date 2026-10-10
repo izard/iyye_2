@@ -6,7 +6,7 @@ import { TelegramSender } from "../src/channels/telegram/sender.ts";
 import { WebChatAdapter } from "../src/channels/web/adapter.ts";
 import { WebSessions } from "../src/channels/web/auth.ts";
 import { WebServer } from "../src/channels/web/server.ts";
-import { createLocalModelRuntime } from "../src/integration/pi/runtime.ts";
+import { createLocalModelRuntime, thinkingLevelFor } from "../src/integration/pi/runtime.ts";
 import { PiConversations } from "../src/integration/pi/sessions.ts";
 import { Scheduler, type SchedulerDeps } from "../src/kernel/scheduler.ts";
 import { silentLogger } from "../src/log.ts";
@@ -49,6 +49,8 @@ export interface StackOptions {
 	toolkits?: (db: Db) => Toolkit[];
 	/** The outbox's sleep hold (plan 0.002 L4). */
 	outboxHeld?: () => boolean;
+	/** The web chat's listen address (IYYE2_WEB_LISTEN). */
+	webHost?: string;
 }
 
 export async function startStack(
@@ -70,6 +72,7 @@ export async function startStack(
 	const conversations = new PiConversations({
 		db,
 		runtime: await createLocalModelRuntime({ routerUrl: rig.router.url, registry: sb.registry }),
+		thinkingLevel: (m) => thinkingLevelFor(sb.registry, m),
 		stateDir: sb.stateDir,
 		identity: "You are Iyye.",
 		log: silentLogger,
@@ -121,6 +124,7 @@ export async function startStack(
 		outbox,
 		scheduler,
 		telegramStatus: () => "disabled (no TELEGRAM_BOT_TOKEN)",
+		...(opts.webHost ? { host: opts.webHost } : {}),
 		...(opts.remindersStatus ? { remindersStatus: opts.remindersStatus(db) } : {}),
 	});
 	await web.start();
@@ -159,7 +163,16 @@ export function http(
 	port: number,
 	method: string,
 	path: string,
-	opts: { host?: string; origin?: string | null; cookie?: string; csrf?: string; body?: unknown; raw?: string } = {},
+	opts: {
+		host?: string;
+		origin?: string | null;
+		cookie?: string;
+		csrf?: string;
+		body?: unknown;
+		raw?: string;
+		/** The address to connect to (default 127.0.0.1). */
+		address?: string;
+	} = {},
 ): Promise<HttpResult> {
 	const headers: Record<string, string> = { host: opts.host ?? `127.0.0.1:${port}` };
 	if (opts.origin !== null && method !== "GET") headers.origin = opts.origin ?? `http://127.0.0.1:${port}`;
@@ -168,7 +181,7 @@ export function http(
 	const payload = opts.raw ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body));
 	if (payload !== undefined) headers["content-type"] = "application/json";
 	return new Promise((resolve, reject) => {
-		const req = request({ host: "127.0.0.1", port, method, path, headers }, (res) => {
+		const req = request({ host: opts.address ?? "127.0.0.1", port, method, path, headers }, (res) => {
 			let text = "";
 			res.setEncoding("utf8");
 			res.on("data", (c) => {

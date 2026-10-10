@@ -323,6 +323,12 @@ describe("sessions with acting selection", () => {
 		assert.ok(
 			(await conv.turn({ scope: "iyye:bg:1", view: { kind: "background" }, model: "small", text: "look" })).ok,
 		);
+		// …and no web (plan 0.010 M2): only investigations of the owner's recurring questions browse.
+		assert.deepEqual(declared(requests().at(-1)!), ["current_time", "system_status"]);
+		assert.ok(
+			(await conv.turn({ scope: "iyye:inv:web:q:1", view: { kind: "background" }, model: "small", text: "look" }))
+				.ok,
+		);
 		assert.deepEqual(declared(requests().at(-1)!), ["current_time", "system_status", "web_search", "web_fetch"]);
 		assert.equal(kev.requests.length, m);
 		await conv.disposeAll();

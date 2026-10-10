@@ -25,7 +25,7 @@ import { type AdmissionDeps, admitTelegramUpdate, TELEGRAM_CURSOR } from "../../
 import type { Logger } from "../../log.ts";
 import { getCursor } from "../../state/cursors.ts";
 import { initKv } from "../../state/kv.ts";
-import type { TelegramInbound } from "../types.ts";
+import type { TelegramImage, TelegramInbound } from "../types.ts";
 
 export type PollerState =
 	| { state: "disabled"; detail: string }
@@ -41,6 +41,8 @@ export interface TelegramPollerDeps {
 	log: Logger;
 	/** Called after updates were admitted, so the scheduler starts at once. */
 	wake: () => void;
+	/** A Telegram account wrote for the first time (plan 0.005 Stage 2: the owner is told). Must not throw. */
+	newContact?: ((contactId: string) => void) | null;
 	apiBase?: string;
 	/** Long-poll wait Telegram holds a getUpdates open for, in seconds. */
 	longPollS?: number;
@@ -59,10 +61,33 @@ interface RawUpdate {
 		from?: { id: number; is_bot?: boolean; username?: string; first_name?: string };
 		text?: string;
 		caption?: string;
+		photo?: { file_id: string; width?: number; height?: number; file_size?: number }[];
+		document?: { file_id: string; mime_type?: string; file_size?: number };
 	};
 }
 
-/** Raw Bot API update → the admission envelope. Text falls back to the caption. */
+/** The largest image Iyye downloads (Telegram's own getFile limit is 20 MB). */
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+/** The photo's largest size that fits, or an image document; nothing else is an image. */
+function imageOf(m: NonNullable<RawUpdate["message"]>): TelegramImage | undefined {
+	const sizes = (m.photo ?? []).filter((p) => typeof p.file_id === "string" && (p.file_size ?? 0) <= MAX_IMAGE_BYTES);
+	const area = (p: (typeof sizes)[number]) => (p.width ?? 0) * (p.height ?? 0) || (p.file_size ?? 0);
+	const best = sizes.sort((a, b) => area(b) - area(a))[0];
+	if (best) return { fileId: best.file_id, size: best.file_size ?? null, kind: "photo" };
+	const d = m.document;
+	if (
+		d &&
+		typeof d.file_id === "string" &&
+		IMAGE_TYPES.has(d.mime_type ?? "") &&
+		(d.file_size ?? 0) <= MAX_IMAGE_BYTES
+	)
+		return { fileId: d.file_id, size: d.file_size ?? null, kind: d.mime_type as TelegramImage["kind"] };
+	return undefined;
+}
+
+/** Raw Bot API update → the admission envelope. Text falls back to the caption; an image is kept by its file id. */
 export function normalizeUpdate(raw: RawUpdate): TelegramInbound {
 	const m = raw.message;
 	if (!m) return { updateId: raw.update_id, message: null };
@@ -78,6 +103,7 @@ export function normalizeUpdate(raw: RawUpdate): TelegramInbound {
 			firstName: m.from?.first_name ?? null,
 			text: m.text ?? m.caption ?? "",
 			dateUnix: m.date ?? null,
+			...(imageOf(m) ? { image: imageOf(m) } : {}),
 		},
 	};
 }
@@ -106,6 +132,7 @@ export class TelegramPoller {
 			minBackoffMs: 1000,
 			maxBackoffMs: 60_000,
 			failedRetryMs: 300_000,
+			newContact: null,
 			...deps,
 		};
 	}
@@ -148,6 +175,13 @@ export class TelegramPoller {
 					inbound,
 				);
 				if (r.outcome === "admitted") admitted++;
+				if (r.outcome === "admitted" && r.newContactId) {
+					try {
+						this.d.newContact?.(r.newContactId);
+					} catch (err) {
+						this.d.log.warn("telegram: new-contact notice failed", { error: this.scrub((err as Error).message) });
+					}
+				}
 				if (r.outcome === "dropped")
 					this.d.log.info("telegram: update dropped", { updateId: raw.update_id, reason: r.reason });
 			} catch (err) {

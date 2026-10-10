@@ -27,7 +27,7 @@ import { silentLogger } from "../src/log.ts";
 import { MemoryControl } from "../src/memory/control.ts";
 import type { GateResult } from "../src/memory/gate.ts";
 import { MemoryGateway } from "../src/memory/gateway.ts";
-import { VERBATIM_STRATEGY } from "../src/memory/hindsight.ts";
+import { REPLY_STRATEGY } from "../src/memory/hindsight.ts";
 import { NightWork } from "../src/memory/night.ts";
 import { memoryReport } from "../src/memory/report.ts";
 import { linkAccount, OWNER_CONTACT_ID } from "../src/state/contacts.ts";
@@ -186,7 +186,7 @@ describe("memory acceptance (HLD §15)", () => {
 		assert.doesNotMatch(req, /\[today[^\]]*\] Owner said: I prefer green tea/, "short-term memory is today only");
 	});
 
-	test("#2 correction: both statements stay with their dates; Iyye's repetitions are stored verbatim and never offered as evidence", async () => {
+	test("#2 correction: both statements stay with their dates; Iyye's repetitions are never offered as the person's words or as evidence", async () => {
 		sb = sandbox();
 		s = await startStack(sb, {}, { memory: { ltm: ltm.client(), bankCacheMs: 0 } });
 		const first = fromOwner(s.db, "My dentist appointment is on Monday");
@@ -206,8 +206,13 @@ describe("memory acceptance (HLD §15)", () => {
 		const replies = [...ltm.docs.values()].filter((d) => d.tags.includes("speaker:iyye"));
 		assert.equal(replies.length, 2);
 		assert.ok(
-			replies.every((d) => d.strategy === VERBATIM_STRATEGY),
-			"Iyye's echoes are not extracted: they cannot add a fact or raise its confidence",
+			replies.every((d) => d.strategy === REPLY_STRATEGY && d.tags.includes("speaker:iyye")),
+			"Iyye's replies are extracted only as what Iyye told them, tagged as Iyye's: never a fact about the person",
+		);
+		assert.deepEqual(
+			ltm.banks.get("iyye-owner")!.consolidation,
+			[{ scopes: [{ tags: ["speaker:iyye"] }, { tags: ["speaker:probe"] }], max_observations_per_scope: 0 }],
+			"and they never become observations, so an echo cannot raise a fact's weight",
 		);
 
 		const q = fromOwner(s.db, "When is my dentist appointment?");
@@ -216,7 +221,10 @@ describe("memory acceptance (HLD §15)", () => {
 
 		assert.match(block, /stated by the person\] Correction: the dentist appointment moved to Thursday/);
 		assert.match(block, /stated by the person\] My dentist appointment is on Monday/);
-		assert.doesNotMatch(block, /echo: My dentist/, "Iyye's own words are not in the evidence");
+		// Iyye's own words may be offered as what it said, never as the person's statement or as evidence.
+		assert.doesNotMatch(block, /stated by the person\] echo:/, "Iyye's own words are never shown as the person's");
+		for (const line of block.split("\n").filter((l) => l.includes("echo:")))
+			assert.match(line, /your own earlier words, not evidence\]/);
 	});
 
 	test("#3 isolation: Julia reaches none of Alex's memory, by recall, memory_search or a forged name", async () => {
@@ -287,9 +295,10 @@ describe("memory acceptance (HLD §15)", () => {
 
 		// The default 60 s bank cache: it still lists the bank after the deletion.
 		const ownerGateway = new MemoryGateway({ db: s.db, ltm: ltm.client(), log: silentLogger });
-		assert.equal(
-			(await ownerGateway.recall({ scope: "owner", principal: "owner" }, "passport number")).items.length,
-			1,
+		assert.ok(
+			(await ownerGateway.recall({ scope: "owner", principal: "owner" }, "passport number")).items.some(
+				(i) => i.said === "person" && i.text.includes("X1234567"),
+			),
 		);
 		// The owner's conversation today quoted Alex: Iyye's reply must not reach the owner's bank tonight.
 		setKv(s.db, "decisions.reply_review.since", "2000-01-01T00:00:00.000Z", new Date().toISOString());
@@ -381,8 +390,8 @@ describe("memory acceptance (HLD §15)", () => {
 		await night();
 		assert.deepEqual(
 			ltm.retains.slice(retainsBefore),
-			[`${ownerTurn.eventId}:said`, `${pending.eventId}:said`, "summary:10:summary"],
-			"only the owner's own words; Iyye's reply that may quote Alex was dropped",
+			[`${ownerTurn.eventId}:said`, `${pending.eventId}:said`],
+			"only the owner's own words; Iyye's reply that may quote Alex was dropped (and day summaries stay in short-term memory)",
 		);
 		assert.equal(ltm.docs.get(`iyye-owner/${ownerTurn.eventId}:said`)!.content, "What is Alex's passport number?");
 		assert.equal(s.conversations.sessionFile("owner"), null, "the owner's conversation starts afresh");

@@ -92,7 +92,7 @@ export function buildDigest(db: Db, w: DayWindow): string {
 	}
 	const inv = db
 		.prepare(
-			"SELECT count(*) FILTER (WHERE status = 'settled') AS settled, count(*) FILTER (WHERE status != 'settled') AS other FROM opportunities WHERE updated_at >= ? AND updated_at < ? AND attempts > 0",
+			"SELECT count(*) FILTER (WHERE status = 'settled') AS settled, count(*) FILTER (WHERE status != 'settled') AS other FROM opportunities WHERE updated_at >= ? AND updated_at < ? AND attempts > 0 AND action_kind = 'investigate'",
 		)
 		.get(w.from, w.to) as { settled: number; other: number };
 	if (inv.settled || inv.other) {

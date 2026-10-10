@@ -44,7 +44,15 @@ export interface AdmissionDeps {
 }
 
 export type AdmissionResult =
-	| { outcome: "admitted"; eventId: string; jobId: string; contactId: string; scope: string }
+	| {
+			outcome: "admitted";
+			eventId: string;
+			jobId: string;
+			contactId: string;
+			scope: string;
+			/** The Telegram account was seen for the first time and created now (plan 0.005 Stage 2: the owner is told). */
+			newContactId?: string;
+	  }
 	| { outcome: "dropped"; eventId: string; reason: DropReason }
 	| { outcome: "duplicate"; eventId: string };
 
@@ -110,7 +118,8 @@ export function admitTelegramUpdate(deps: AdmissionDeps, update: TelegramInbound
 		}
 		const dropReason = telegramDropReason(update, deps.telegramAllowedUserIds, deps.telegramAcceptAfter);
 		// The account that wrote, then the person it belongs to (plan 0.005): an owner link makes it the owner.
-		const principal = dropReason ? null : resolvePerson(db, resolveTelegramContact(deps, update));
+		const account = dropReason ? null : resolveTelegramContact(deps, update);
+		const principal = account ? resolvePerson(db, account.contact) : null;
 		const result = record(deps, {
 			channel: "telegram",
 			dedupKey,
@@ -121,7 +130,9 @@ export function admitTelegramUpdate(deps: AdmissionDeps, update: TelegramInbound
 			dropReason,
 		});
 		advanceCursor(db, TELEGRAM_CURSOR, update.updateId, at);
-		return result;
+		return result.outcome === "admitted" && account?.created
+			? { ...result, newContactId: account.contact.id }
+			: result;
 	})();
 }
 
@@ -140,7 +151,7 @@ function telegramDropReason(
 	if (m.fromUserId == null) return "no_sender";
 	if (m.fromIsBot) return "bot_sender";
 	if (allowed && allowed.size > 0 && !allowed.has(m.fromUserId)) return "sender_not_allowed";
-	if (m.text.trim() === "") return "no_text";
+	if (m.text.trim() === "" && !m.image) return "no_text";
 	return null;
 }
 
@@ -149,12 +160,12 @@ function telegramDropReason(
  * ordinary untrusted contact. Display names are never used to match: two
  * users both called "Alex" are two contacts.
  */
-function resolveTelegramContact(deps: AdmissionDeps, update: TelegramInbound): Contact {
+function resolveTelegramContact(deps: AdmissionDeps, update: TelegramInbound): { contact: Contact; created: boolean } {
 	const m = update.message!;
 	const externalId = String(m.fromUserId);
 	const existing = findContactByBinding(deps.db, "telegram", externalId);
-	if (existing) return existing;
-	return createContactWithBinding(deps.db, {
+	if (existing) return { contact: existing, created: false };
+	const contact = createContactWithBinding(deps.db, {
 		id: deps.newId(),
 		displayName: m.firstName || (m.username ? `@${m.username}` : `telegram:${externalId}`),
 		channel: "telegram",
@@ -162,6 +173,7 @@ function resolveTelegramContact(deps: AdmissionDeps, update: TelegramInbound): C
 		verifiedBy: "first_contact",
 		at: deps.now().toISOString(),
 	});
+	return { contact, created: true };
 }
 
 /**

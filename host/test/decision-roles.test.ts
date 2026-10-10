@@ -27,6 +27,8 @@ import { DeviceSlot } from "../src/kernel/device.ts";
 import { silentLogger } from "../src/log.ts";
 import type { GateResult } from "../src/memory/gate.ts";
 import { NightWork } from "../src/memory/night.ts";
+import { collectSignals } from "../src/motivation/signals.ts";
+import { JOURNAL_ONLY } from "../src/motivation/tracker.ts";
 import { type Db, openDb } from "../src/state/db.ts";
 import { getEvent } from "../src/state/events.ts";
 import { setKv } from "../src/state/kv.ts";
@@ -403,10 +405,10 @@ describe("decisions: contract, roles, owner view (plan 0.003 K2–K4)", () => {
 		assert.match(await cmd(`/decisions label ${toolkitRow.id.slice(0, 8)} yes`), /labelled automatically/);
 
 		const roleView = await cmd("/decisions reply_review");
-		assert.match(roleView, /^reply_review \(schema 2, unsure between 0\.35 and 0\.65; shadow — none:/);
+		assert.match(roleView, /^reply_review \(schema 3, unsure between 0\.35 and 0\.65; shadow — none:/);
 		assert.match(
 			roleView,
-			/promises_future_action=0\.85 yes, claims_arranged=0\.85 yes → \{"claims_arranged":true\} \(owner_web, owner\) · state [0-9a-f]{8}: \{"message":"remind me"/,
+			/promises_future_action=0\.85 yes, claims_arranged=0\.85 yes, admits_unknown=0\.85 yes, owner_intention=0\.85 yes, dated_event=0\.85 yes → \{"claims_arranged":true\} \(owner_web, owner\) · state [0-9a-f]{8}: \{"message":"remind me"/,
 		);
 		assert.match(
 			await cmd("/decisions nonsense"),
@@ -424,6 +426,9 @@ describe("decisions: contract, roles, owner view (plan 0.003 K2–K4)", () => {
 			kev.answer = () => p;
 			for (const t of ["My son Jacob is 12", "thanks", "We moved to Lisbon"])
 				turn(db, "contact:c1", t, `noted: ${t}`);
+			// Plan 0.010 M2: the reply review's new questions (admits_unknown, owner_intention, dated_event).
+			turn(db, "owner", "I want to learn Rust. Which book is best for it?", "I don't know which book is best.");
+			turn(db, "contact:c1", "I have an exam tomorrow", "Good luck!");
 			setKv(db, "decisions.reply_review.since", "2000-01-01T00:00:00.000Z", "t");
 			const before = JSON.stringify(db.prepare("SELECT id, state, content FROM actions ORDER BY id").all());
 			await new ReplyReviewShadow({ db, client, device, chatPending: () => false, log: silentLogger }).drainOnce();
@@ -442,6 +447,16 @@ describe("decisions: contract, roles, owner view (plan 0.003 K2–K4)", () => {
 					retained: ltm.retains.map((id) => id.replace(/^e\d+/, "e")),
 					stm: db.prepare("SELECT state FROM stm_episodes ORDER BY said_at, rowid").all(),
 					events: db.prepare("SELECT status FROM events ORDER BY id").all(),
+					// …and the motivations' signals are the deterministic detectors' alone (§15 #16).
+					signals: collectSignals({
+						db,
+						now: new Date(Date.now() + 2 * 86_400_000),
+						selfGaps: () => [],
+						healing: () => [],
+						sleep: () => null,
+					})
+						.filter((x) => !JOURNAL_ONLY.has(x.kind)) // recorded-only kinds (some read Kev) are never counted
+						.map((x) => `${x.kind}:${x.cluster.replace(/e\d+/, "e")}`),
 				}),
 			);
 		}

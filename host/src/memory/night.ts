@@ -21,18 +21,19 @@
  *   The list survives a restart, so an interrupted night still consolidates.
  */
 
+import { docsFor, MAX_ATTEMPTS } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
 import { getContact } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
 import { getEvent } from "../state/events.ts";
 import { getKv, setKv } from "../state/kv.ts";
 import { isInvestigationEntry } from "../state/observations.ts";
-import { dropEpisode, leaveStm, pendingEpisodes, type StmEpisode, transferFailed } from "../state/stm.ts";
+import { dropEpisode, IYYE_SCOPE, leaveStm, pendingEpisodes, type StmEpisode, transferFailed } from "../state/stm.ts";
 import { isForgotten } from "../state/tombstones.ts";
 import { banksBeingForgotten, PENDING_BANKS_KEY, retryBankDeletions } from "./forget.ts";
 import type { GateResult } from "./gate.ts";
 import { bankFor } from "./gateway.ts";
-import { type HindsightClient, HindsightError, VERBATIM_STRATEGY } from "./hindsight.ts";
+import { type HindsightClient, HindsightError, REPLY_STRATEGY, VERBATIM_STRATEGY } from "./hindsight.ts";
 import {
 	observedDocId,
 	repliedDocId,
@@ -56,6 +57,25 @@ export const RETAIN_MISSION = [
 	"Write every fact in English.",
 ].join(" ");
 
+/**
+ * What is extracted from Iyye's own replies (2026-10-06, owner decision: no
+ * verbatim replies, but the important things they told someone, with their
+ * time and provenance). These facts are Iyye's statements, tagged
+ * `speaker:iyye`; consolidation never turns them into observations.
+ */
+export const REPLY_MISSION = [
+	"Each document is one reply Iyye, a personal assistant, gave to a person; its context names the person, the date and what they had asked.",
+	"Extract only what later conversations may depend on: facts Iyye told them, with the source when the reply names one (for example a web search or a measurement); things Iyye confirmed it did or set up (a reminder, a plan, a message sent); answers to their questions.",
+	'Write each fact as what Iyye told that person on that date, for example "On 2026-10-05 Iyye told the owner that Ivan Bunin won the Nobel Prize in Literature in 1933 (from a web search)".',
+	"Never record anything about the person from this document: it holds only Iyye's words.",
+	"Ignore greetings, thanks, apologies, offers, questions, small talk and statements about Iyye's own feelings. If nothing qualifies, extract nothing.",
+	"Write every fact in English.",
+].join(" ");
+
+/** Observations in a person's bank (a backstop: Iyye's words never reach consolidation, see NO_OBSERVATIONS_FROM). */
+export const OBSERVATIONS_MISSION =
+	"Observations are durable knowledge about this person and their world (people, places, plans, preferences, dates), drawn only from what they said themselves. Never make observations about Iyye, its computer, network, tools or abilities.";
+
 export interface NightGate {
 	run<T>(label: string, fn: (model: string) => Promise<T>, opts?: { thinking?: boolean }): Promise<GateResult<T>>;
 	readonly problem: string | null;
@@ -77,6 +97,20 @@ export interface NightDeps {
 	} | null;
 	/** Hindsight's stored model traces of a bank, purged after a forgotten bank is deleted. */
 	purgeTraces?: ((bank: string) => Promise<unknown>) | null;
+	/**
+	 * The fact ledger's night (plan 0.011 F2): leftover extraction, the merge into beliefs and the structured
+	 * facts' storage, run before the episodes' own transfer (kept in parallel during the comparison week).
+	 */
+	facts?: {
+		run(shouldStop: () => boolean): Promise<{ stopped: string | null; merged: number; stored: number }>;
+	} | null;
+	/**
+	 * Plan 0.011 F5: who extracts facts from people's turns. `hindsight` (the default, and the comparison
+	 * week's): Hindsight's own extraction, as before, alongside the fact ledger. `ledger`: the fact ledger
+	 * only; a turn leaves short-term memory once all its documents were extracted, and Hindsight stores the
+	 * structured facts (and consolidates them), never the turn itself. The owner switches after the comparison.
+	 */
+	turnExtraction?: "hindsight" | "ledger";
 	/** Wait before retrying when the device is still busy (winding down). */
 	busyRetryMs?: number;
 	consolidatePollMs?: number;
@@ -100,6 +134,8 @@ export class NightWork {
 			thinking: true,
 			purgeTraces: null,
 			salience: null,
+			facts: null,
+			turnExtraction: "hindsight",
 			maxAttempts: 3,
 			busyRetryMs: 2000,
 			consolidatePollMs: 2000,
@@ -123,6 +159,17 @@ export class NightWork {
 			purgeTraces: this.d.purgeTraces,
 		});
 		for (const bank of left) this.banksReady.delete(bank);
+		if (this.d.facts) {
+			try {
+				const f = await this.d.facts.run(shouldStop);
+				this.d.log.info("memory: facts merged", { merged: f.merged, stored: f.stored, stopped: f.stopped });
+				if (f.stopped === "stopped") return { kind: "stopped", ...n };
+				if (f.stopped) return { kind: "blocked", reason: f.stopped, ...n };
+			} catch (err) {
+				// A fault in the fact ledger never costs the night: the episodes' own transfer still runs.
+				this.d.log.warn("memory: the fact ledger failed; the night goes on", { error: (err as Error).message });
+			}
+		}
 		for (;;) {
 			const forgetting = banksBeingForgotten(this.d.db);
 			const episode = pendingEpisodes(this.d.db, 200).find(
@@ -188,6 +235,13 @@ export class NightWork {
 			return "completed_empty";
 		}
 		try {
+			if (!this.worthKeeping(e)) {
+				// Transient states and day summaries stay in short-term memory only (2026-10-06): not knowledge.
+				leaveStm(this.d.db, e.event_id, "completed_empty", this.iso());
+				return "completed_empty";
+			}
+			if (this.d.turnExtraction === "ledger" && (e.kind === "turn" || e.kind === "remember"))
+				return this.byLedger(e);
 			try {
 				await this.retainEpisode(bank, e);
 			} catch (err) {
@@ -220,9 +274,34 @@ export class NightWork {
 		}
 	}
 
+	/**
+	 * Iyye's own entries worth long-term memory (2026-10-06): the self model's
+	 * stable changes, repository findings and investigation answers. Machine
+	 * findings (models loaded, a service reconnected, disk figures) are
+	 * passing states, and the day summary is bookkeeping: both stay in that
+	 * day's short-term memory only. People's turns are always transferred.
+	 */
+	private worthKeeping(e: StmEpisode): boolean {
+		if (e.kind === "summary") return false;
+		if (e.kind !== "observation") return true;
+		if (e.event_id.startsWith("self:") || isInvestigationEntry(this.d.db, e.event_id)) return true;
+		const id = e.event_id.startsWith("obs:") ? e.event_id.slice(4) : e.event_id;
+		const row = this.d.db.prepare("SELECT domain FROM observations WHERE id = ?").get(id) as
+			| { domain: string }
+			| undefined;
+		return row !== undefined && row.domain !== "machine";
+	}
+
 	private async retainEpisode(bank: string, e: StmEpisode): Promise<void> {
 		if (!this.banksReady.has(bank)) {
-			await this.d.ltm.ensureBank(bank, { retainMission: RETAIN_MISSION });
+			// Iyye's own bank holds measurements and its own words: nothing there to make observations of.
+			const own = e.scope === IYYE_SCOPE;
+			await this.d.ltm.ensureBank(bank, {
+				retainMission: RETAIN_MISSION,
+				replyMission: REPLY_MISSION,
+				observations: !own,
+				...(own ? {} : { observationsMission: OBSERVATIONS_MISSION }),
+			});
 			this.banksReady.add(bank);
 		}
 		const who = this.speaker(e);
@@ -276,18 +355,49 @@ export class NightWork {
 			tags: [...base, SPEAKER_PERSON],
 			metadata: { event_id: e.event_id, speaker: who },
 		});
-		// Iyye's reply is stored verbatim, with no model call: searchable as what Iyye said, never rephrased into a fact.
+		// Iyye's reply: not verbatim, but the important things it told them, dated and attributed to Iyye
+		// (owner decision, 2026-10-06). Its own document and strategy; consolidation never uses these facts.
 		if (e.reply_text.trim()) {
+			const date = (e.answered_at ?? e.said_at).slice(0, 10);
+			const asked = e.user_text.replace(/\s+/g, " ").slice(0, 300);
 			await this.d.ltm.retain(bank, {
 				documentId: repliedDocId(e.event_id),
 				content: e.reply_text,
-				context: `Iyye's own reply to ${who}. Iyye's words, not evidence about ${who} or the world.`,
+				context: `Iyye's own reply to ${who} on ${date} (${e.channel === "web" ? "local web chat" : "Telegram"}). ${who} had written: ${JSON.stringify(asked)}. These are Iyye's words: not evidence about ${who}.`,
 				timestamp: e.answered_at,
 				tags: [...base, SPEAKER_IYYE],
 				metadata: { event_id: e.event_id, action_id: e.action_id ?? "", speaker: "Iyye" },
-				strategy: VERBATIM_STRATEGY,
+				strategy: REPLY_STRATEGY,
 			});
 		}
+	}
+
+	/**
+	 * F5, `ledger`: the fact ledger already stored this turn's facts (it runs first). The turn leaves short-term
+	 * memory only when every one of its documents was extracted (or gave up after its attempts); until then it
+	 * waits, and the backlog keeps it for a later night's extraction.
+	 */
+	private byLedger(e: StmEpisode): Transfer {
+		const docs = docsFor(this.d.db, e);
+		const open = docs.filter((d) => {
+			const r = this.d.db.prepare("SELECT status, attempts FROM fact_extractions WHERE doc_id = ?").get(d.docId) as
+				| { status: string; attempts: number }
+				| undefined;
+			return !r || (r.status === "failed" && r.attempts < MAX_ATTEMPTS);
+		});
+		if (open.length) return "retry";
+		const unstored = this.d.db
+			.prepare(
+				"SELECT count(*) AS n FROM stm_facts WHERE event_id = ? AND state IN ('day', 'merged') AND stored_at IS NULL",
+			)
+			.get(e.event_id) as { n: number };
+		if (unstored.n > 0) return "retry";
+		const kept = this.d.db
+			.prepare("SELECT count(*) AS n FROM stm_facts WHERE event_id = ? AND state = 'merged'")
+			.get(e.event_id) as { n: number };
+		const state = kept.n > 0 ? "completed" : "completed_empty";
+		leaveStm(this.d.db, e.event_id, state, this.iso());
+		return state;
 	}
 
 	private async consolidate(

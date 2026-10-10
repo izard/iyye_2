@@ -71,7 +71,7 @@ export interface DecisionServiceOptions {
 	healthIntervalMs?: number;
 	startTimeoutMs?: number;
 	restartBackoffMs?: number[];
-	/** Tests: a fake server; defaults to `<installDir>/.venv/bin/python -m kev.serve`. */
+	/** Defaults to `<installDir>/.venv/bin/python -m kev.serve`; another Python (IYYE2_DECISIONS_PYTHON), or a test fake. */
 	command?: string[];
 }
 
@@ -103,8 +103,9 @@ export class DecisionService {
 			stateDir: opts.stateDir,
 			healthUrl: `${this.baseUrl}/v1/models`,
 			healthHeaders: () => ({ authorization: `Bearer ${this.apiKey()}` }),
-			// "-m kev.serve" for the real server; the script path for a test fake.
-			identity: [prefix.join(" ") || command!, `--port ${opts.port}`],
+			// "-m kev.serve" for the real server; the script path for a test fake. The Python too: a Kev left
+			// running by another build (IYYE2_DECISIONS_PYTHON changed) is not adopted.
+			identity: [command!, prefix.join(" ") || command!, `--port ${opts.port}`],
 			startTimeoutMs: this.o.startTimeoutMs,
 			stopGraceMs: 10_000,
 			log: opts.log,
@@ -139,11 +140,19 @@ export class DecisionService {
 		return readFileSync(file, "utf8").trim();
 	}
 
-	/** What `provision-decisions.ts` downloaded, if it matches the configured model. */
+	/**
+	 * What `provision-decisions.ts` downloaded, if it matches the configured model. A state dir moved from
+	 * another machine (2026-10-09, Mac → DGX Spark) records that machine's absolute path: the same snapshot
+	 * is then looked for in this state dir's own model cache.
+	 */
 	provisioned(): Provisioned | null {
 		try {
 			const p = JSON.parse(readFileSync(join(this.o.stateDir, "provisioned.json"), "utf8")) as Provisioned;
-			return p.run === this.o.model && existsSync(p.path) ? p : null;
+			if (p.run !== this.o.model) return null;
+			if (existsSync(p.path)) return p;
+			const i = p.path.lastIndexOf("/hf/");
+			const here = i >= 0 ? join(this.modelCacheDir, p.path.slice(i + 4)) : null;
+			return here && existsSync(here) ? { ...p, path: here } : null;
 		} catch {
 			return null;
 		}

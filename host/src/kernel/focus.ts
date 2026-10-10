@@ -14,7 +14,8 @@ export interface FocusState {
 	deviceHolder: string | null;
 	/** Reply jobs waiting. */
 	queuedReplies: number;
-	backgroundModel: { name: string | null; loaded: boolean };
+	/** `remote`: the state of another machine's model (plan 0.012), e.g. "on mbp: up"; it is never "loaded" here. */
+	backgroundModel: { name: string | null; loaded: boolean; remote?: string | null };
 	quietS: number;
 	gapS: number;
 }
@@ -29,7 +30,7 @@ export function focusReport(s: FocusState): string {
 	if (s.queuedReplies) lines.push(`people waiting: ${s.queuedReplies} message(s)`);
 	lines.push(
 		`initiative: ${s.worker.initiativePaused() ? "PAUSED (/resume initiative)" : "on (/pause initiative)"}`,
-		`background model: ${s.backgroundModel.name ?? "none selected (/use <model> background)"}${s.backgroundModel.name ? (s.backgroundModel.loaded ? " (loaded)" : " (not loaded)") : ""}`,
+		`background model: ${s.backgroundModel.name ?? "none selected (/use <model> background)"}${s.backgroundModel.name ? (s.backgroundModel.remote ? ` (${s.backgroundModel.remote}; a conversation here does not hold it back)` : s.backgroundModel.loaded ? " (loaded)" : " (not loaded)") : ""}`,
 	);
 	if (!st.running) lines.push(`background: waiting: ${st.waiting}`);
 	const queue = backgroundJobsIn(s.db, ["running", "paused", "queued"]).reverse();

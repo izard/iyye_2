@@ -54,7 +54,11 @@ export interface BackgroundDeps {
 	models: {
 		selected(key: "background"): string | null;
 		acquire(name: string): Promise<ModelLease | OpResult>;
+		/** Served by another of the owner's machines (plan 0.012). */
+		isRemote?(name: string): boolean;
 	};
+	/** The device slot of the machine a model runs on (plan 0.012); `device` when absent. */
+	deviceFor?: ((model: string) => DeviceSlot) | null;
 	/** A separate PiConversations for background work (its own sessions, read-only toolkits). */
 	conversations: { turn(req: TurnRequest): Promise<TurnResult>; sessionFile(scope: string): string | null };
 	/** A person is waiting: a reply job is queued or running. */
@@ -71,6 +75,20 @@ export interface BackgroundDeps {
 	} | null;
 	/** Called once a step settles, with its result (the origin decides what it means). */
 	onSettled?: ((job: BackgroundJob) => void) | null;
+	/**
+	 * Plan 0.010 M4: initiative's allowances. A queued step whose origin's allowance is used up waits (the next
+	 * runnable one goes), and every attempt's device time is charged to its origin's motivation, kept or not.
+	 */
+	initiative?: {
+		stepAllowed(origin: string): boolean;
+		chargeStep(
+			job: { id: string; origin: string },
+			attempt: number,
+			ms: number,
+			remote: boolean,
+			kept: boolean,
+		): void;
+	} | null;
 	now?: () => Date;
 	newId?: () => string;
 	quietMs?: number;
@@ -95,6 +113,8 @@ export class BackgroundWorker {
 			rhythm: null,
 			energy: null,
 			onSettled: null,
+			initiative: null,
+			deviceFor: null,
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
 			quietMs: 180_000,
@@ -165,17 +185,19 @@ export class BackgroundWorker {
 	/** Run one step if one may run now (exposed for tests). Returns true if a step ran. */
 	async drainOnce(): Promise<boolean> {
 		if (this.current || this.stopping) return false;
-		const blocked = this.blockedReason();
+		const model = this.d.models.selected("background");
+		const remote = model !== null && this.d.models.isRemote?.(model) === true;
+		const blocked = this.blockedReason({ remote });
 		if (blocked) {
 			this.lastReason = blocked;
 			return false;
 		}
-		const job = runnableBackgroundJobs(this.d.db)[0];
+		const runnable = runnableBackgroundJobs(this.d.db);
+		const job = runnable.find((j) => this.d.initiative?.stepAllowed(j.origin) ?? true);
 		if (!job) {
-			this.lastReason = "nothing to do";
+			this.lastReason = runnable.length ? "initiative's allowance is used up for today" : "nothing to do";
 			return false;
 		}
-		const model = this.d.models.selected("background");
 		if (!model) {
 			this.lastReason = "no background model is selected (/use <model> background)";
 			return false;
@@ -186,7 +208,7 @@ export class BackgroundWorker {
 			this.lastReason = `the background model is not available: ${lease.message}`;
 			return false;
 		}
-		const again = this.blockedReason(); // a person may have arrived during the await
+		const again = this.blockedReason({ remote }); // a person may have arrived during the await
 		if (again) {
 			lease.release();
 			this.lastReason = again;
@@ -198,12 +220,14 @@ export class BackgroundWorker {
 			gaveWay ??= why;
 			abort.abort();
 		};
-		const releaseDevice = this.d.device.tryAcquire(`background:${job.id}`, {
+		// The device of the machine the model runs on: work on another machine never holds this one's.
+		const device = this.d.deviceFor?.(model) ?? this.d.device;
+		const releaseDevice = device.tryAcquire(`background:${job.id}`, {
 			onPreempt: () => giveWay("a person needs the device"),
 		});
 		if (!releaseDevice) {
 			lease.release();
-			this.lastReason = `the device is busy (${this.d.device.holder})`;
+			this.lastReason = `the device is busy (${device.holder})`;
 			return false;
 		}
 		// A paused step continues in its session; if the session is gone (retired at night), it starts again.
@@ -211,7 +235,7 @@ export class BackgroundWorker {
 		markBackgroundRunning(this.d.db, job.id, model, this.iso());
 		this.current = { job: getBackgroundJob(this.d.db, job.id)!, abort, giveWay };
 		const watch = setInterval(() => {
-			const why = this.yieldReason();
+			const why = this.yieldReason({ remote });
 			if (why) giveWay(why);
 		}, this.d.watchMs);
 		watch.unref();
@@ -238,6 +262,14 @@ export class BackgroundWorker {
 			this.lastStepEnd = this.d.now().getTime();
 			// Device time is paid for whatever happened to the step: once per attempt.
 			this.d.energy?.deviceTime("background", this.lastStepEnd - startedMs, `${job.id}:${attempt}`);
+			// M4: and charged to its motivation's allowance, kept only if nothing discarded it.
+			this.d.initiative?.chargeStep(
+				job,
+				attempt,
+				this.lastStepEnd - startedMs,
+				remote,
+				!gaveWay && !this.stopping && (modelHeld || !remote),
+			);
 		}
 		if (this.stopping) {
 			pauseBackgroundJob(this.d.db, job.id, false); // shutdown: resumable, not counted
@@ -256,6 +288,12 @@ export class BackgroundWorker {
 					this.d.energy?.charge("focus_switch", this.d.energy.charges.focusSwitch, `${job.id}:pause:${attempt}`);
 				this.d.log.info("background: step paused", { id: job.id, why: gaveWay });
 			}
+			return true;
+		}
+		if (!modelHeld && remote) {
+			// The connection to the other machine was lost (plan 0.012): the step waits for it, it did not fail.
+			pauseBackgroundJob(this.d.db, job.id, false);
+			this.d.log.info("background: step paused", { id: job.id, why: "the remote model's machine was lost" });
 			return true;
 		}
 		if (!modelHeld) {
@@ -277,25 +315,29 @@ export class BackgroundWorker {
 		return true;
 	}
 
-	/** Why a step may not start now, or null. */
-	private blockedReason(): string | null {
-		const why = this.yieldReason() ?? this.lowEnergy();
+	/**
+	 * Why a step may not start now, or null. Other background work (fact extraction, plan 0.011) obeys it too.
+	 * Work on another machine's model (`remote`, plan 0.012) needs nothing of this machine's device, so a
+	 * conversation here does not hold it back.
+	 */
+	blockedReason(opts: { remote?: boolean } = {}): string | null {
+		const why = this.yieldReason(opts) ?? this.lowEnergy();
 		if (why) return why;
 		const now = this.d.now().getTime();
 		const last = this.lastChatActivity();
-		if (last !== null && now - last < this.d.quietMs) {
+		if (!opts.remote && last !== null && now - last < this.d.quietMs) {
 			return `a conversation was active; background work may start at ${hhmm(new Date(last + this.d.quietMs))}`;
 		}
 		if (now - this.lastStepEnd < this.d.gapMs) return "spacing steps";
 		return null;
 	}
 
-	/** Why a running step must give way now, or null. */
-	private yieldReason(): string | null {
+	/** Why a running step must give way now, or null (fact extraction gives way on the same rules). */
+	yieldReason(opts: { remote?: boolean } = {}): string | null {
 		if (this.initiativePaused()) return "initiative is paused (/resume initiative)";
 		const mode = this.d.rhythm?.mode() ?? "awake";
 		if (mode !== "awake") return mode === "asleep" ? "Iyye is asleep" : "Iyye is going to sleep";
-		if (this.d.chatPending()) return "a person is waiting";
+		if (!opts.remote && this.d.chatPending()) return "a person is waiting";
 		return null;
 	}
 

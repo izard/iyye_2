@@ -346,7 +346,7 @@ describe("C2: the ledger labels Kev's reply review", () => {
 			commitment_created: false,
 			commitments: [],
 		});
-		assert.ok(rows.every((r) => r.outcome_source === "commitments_ledger" && r.schema_version === 2));
+		assert.ok(rows.every((r) => r.outcome_source === "commitments_ledger" && r.schema_version === 3));
 
 		const report = decisionsReport(s.db, { state: "up", detail: "kev" });
 		assert.match(report, /claims something is set up: 2 yes/);

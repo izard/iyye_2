@@ -15,7 +15,7 @@
  */
 
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -163,6 +163,9 @@ function alive(pid: number): boolean {
 
 async function main() {
 	if (await portBusy(port)) throw new Error(`port ${port} is in use; pick another with --port`);
+	// A missing file never loads: every wait would run to its timeout (minutes, with no output).
+	const missing = [SMALL_A, SMALL_B].map((m) => m.file).filter((f) => !existsSync(f));
+	if (missing.length) throw new Error(`the probe needs these models: ${missing.join(", ")}`);
 	writeFileSync(join(dir, "bogus.gguf"), Buffer.alloc(1_000_000, 7));
 	// llama-server prints its version on stderr.
 	const v = spawnSync(binary!, ["--version"], { encoding: "utf8" });

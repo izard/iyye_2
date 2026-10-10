@@ -405,8 +405,10 @@ describe("findings and day summaries in memory", () => {
 		);
 		assert.match(doc.context, /Iyye's own investigation/);
 		const gw = new MemoryGateway({ db, ltm: ltm.client(), log: silentLogger, bankCacheMs: 0 });
-		const perTurn = await gw.recall({ scope: "owner", principal: "owner" }, "draft unfinished TODO");
-		assert.deepEqual(perTurn.items, [], "not in the per-turn evidence");
+		const perTurn = await gw.recall({ scope: "owner", principal: "owner" }, "draft unfinished TODO", {
+			includeIyye: false,
+		});
+		assert.deepEqual(perTurn.items, [], "never a measurement: left out with the people's evidence");
 		const search = await gw.recall({ scope: "owner", principal: "owner" }, "draft unfinished TODO", {
 			includeIyye: true,
 		});
@@ -418,7 +420,7 @@ describe("findings and day summaries in memory", () => {
 		db.close();
 	});
 
-	test("the owner recalls them labelled as Iyye's own; contacts never; the night stores them verbatim in iyye-self", async () => {
+	test("the owner recalls them labelled as Iyye's own; contacts never; the night keeps only durable ones, verbatim in iyye-self", async () => {
 		const db = openDb(":memory:");
 		db.prepare(
 			"INSERT INTO contacts (id, display_name, kind, created_at) VALUES ('c1', 'Julia', 'contact', 't')",
@@ -453,26 +455,41 @@ describe("findings and day summaries in memory", () => {
 			/^Day 4\./,
 		);
 
+		// A repository finding is knowledge; the machine finding and the day summary are not (2026-10-06).
+		db.prepare(
+			"INSERT INTO observations (id, domain, at, result_json, result_hash, severity, change_text, decided_by, finding) VALUES ('1', 'machine', ?, '{}', 'h', 'threshold', 'x', 'kev', 1), ('2', 'workspace', ?, '{}', 'h2', 'threshold', 'y', 'kev', 1)",
+		).run(new Date().toISOString(), new Date().toISOString());
+		recordIyyeEntry(db, {
+			id: "obs:2",
+			kind: "observation",
+			text: 'workspace: 1 new commit(s): "add the free disk space probe below 10%"',
+			at: new Date().toISOString(),
+		});
 		const out = await new NightWork({ db, ltm: ltm.client(), gate: openGate, log: silentLogger }).run(() => false);
 		assert.equal(out.kind, "done");
-		const obs = ltm.docs.get("iyye-self/obs:1:observed")!;
+		assert.equal(ltm.docs.get("iyye-self/obs:1:observed"), undefined, "a machine state is not kept");
+		assert.equal(ltm.docs.get("iyye-self/summary:4:summary"), undefined, "nor the day summary");
+		const obs = ltm.docs.get("iyye-self/obs:2:observed")!;
+		assert.deepEqual([obs.strategy, obs.tags.includes("speaker:probe")], [VERBATIM_STRATEGY, true]);
 		assert.deepEqual(
-			[obs.strategy, obs.tags.includes("speaker:probe"), obs.content],
-			[VERBATIM_STRATEGY, true, "machine: free disk space is 9% (90 GB), below 10%"],
+			Object.fromEntries(
+				(db.prepare("SELECT event_id, state FROM stm_episodes").all() as { event_id: string; state: string }[]).map(
+					(r) => [r.event_id, r.state],
+				),
+			),
+			{ "obs:1": "completed_empty", "summary:4": "completed_empty", "obs:2": "completed" },
+			"all leave short-term memory",
 		);
-		const sum = ltm.docs.get("iyye-self/summary:4:summary")!;
-		assert.ok(sum.tags.includes("speaker:iyye") && sum.strategy === VERBATIM_STRATEGY);
-		assert.deepEqual(db.prepare("SELECT DISTINCT state FROM stm_episodes").all(), [{ state: "completed" }]);
+		assert.equal(ltm.banks.get("iyye-self")!.observations, false, "Iyye's own bank builds no observations");
 
-		// Recalled from long-term memory: a measurement is evidence, labelled as such; Iyye's summary is not.
+		// Recalled from long-term memory: a measurement is evidence, labelled as such.
 		const gw2 = new MemoryGateway({ db, ltm: ltm.client(), log: silentLogger, bankCacheMs: 0 });
-		const r = await gw2.recall({ scope: "owner", principal: "owner" }, "free disk space below");
+		const r = await gw2.recall({ scope: "owner", principal: "owner" }, "free disk space probe below");
 		assert.ok(
 			r.items.some((i) => i.said === "probe"),
 			"the probe's finding is in the per-turn evidence",
 		);
-		assert.ok(!r.items.some((i) => i.said === "iyye"), "Iyye's own summary is not evidence");
-		assert.match(formatRecalled(r), /measured by your own probe\] machine: free disk space is 9%/);
+		assert.match(formatRecalled(r), /measured by your own probe\] workspace: 1 new commit/);
 		const asJulia = await gw2.recall({ scope: "contact:c1", principal: "contact" }, "free disk space below");
 		assert.deepEqual(asJulia.items, []);
 		db.close();
