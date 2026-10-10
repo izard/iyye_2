@@ -1,0 +1,482 @@
+[
+ {
+  "original": "The forecast for Lisbon tomorrow is 22°C and sunny, with no rain expected.",
+  "rephrased": "Tomorrow in Lisbon: sunny and 22°C, and no rain is expected.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The forecast for Lisbon tomorrow is 22°C and sunny, with no rain expected.",
+  "rephrased": "It should be sunny in Lisbon tomorrow, around 22°C, with no rain expected.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The forecast for Lisbon tomorrow is 22°C and sunny, with no rain expected.",
+  "rephrased": "The forecast for Lisbon tomorrow is 24°C and sunny, with no rain expected.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "The forecast for Lisbon tomorrow is 22°C and sunny, with no rain expected.",
+  "rephrased": "The forecast for Lisbon tomorrow is 22°C and sunny, with rain expected.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I set a reminder for 18:00 to water the plants.",
+  "rephrased": "Done: I set a reminder to water the plants at 18:00.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I set a reminder for 18:00 to water the plants.",
+  "rephrased": "I set your reminder to water the plants for 18:00.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I set a reminder for 18:00 to water the plants.",
+  "rephrased": "I set a reminder for 19:00 to water the plants.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I set a reminder for 18:00 to water the plants.",
+  "rephrased": "I'll set a reminder for 18:00 to water the plants.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I couldn't reach the weather service, so I don't know if it will rain in Oslo.",
+  "rephrased": "The weather service didn't answer, so I can't tell whether it will rain in Oslo.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I couldn't reach the weather service, so I don't know if it will rain in Oslo.",
+  "rephrased": "I could not reach the weather service, so I don't know whether Oslo will get rain.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I couldn't reach the weather service, so I don't know if it will rain in Oslo.",
+  "rephrased": "The weather service says it will rain in Oslo.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I couldn't reach the weather service, so I don't know if it will rain in Oslo.",
+  "rephrased": "I reached the weather service: no rain in Oslo.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Jacob asked me to tell you the meeting moved to 3 pm on Friday.",
+  "rephrased": "Jacob wanted you to know the meeting moved to 3 pm on Friday.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Jacob asked me to tell you the meeting moved to 3 pm on Friday.",
+  "rephrased": "A message from Jacob: the meeting moved to Friday at 3 pm.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Jacob asked me to tell you the meeting moved to 3 pm on Friday.",
+  "rephrased": "Jacob asked me to tell you the meeting moved to 4 pm on Friday.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Jacob asked me to tell you the meeting moved to 3 pm on Friday.",
+  "rephrased": "Julia asked me to tell you the meeting moved to 3 pm on Friday.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "The disk has 120 GB free; the backup finished at 02:10 without errors.",
+  "rephrased": "The backup finished at 02:10 without errors, and the disk has 120 GB free.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The disk has 120 GB free; the backup finished at 02:10 without errors.",
+  "rephrased": "There are 120 GB free on the disk, and the backup finished at 02:10 without errors.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The disk has 120 GB free; the backup finished at 02:10 without errors.",
+  "rephrased": "The disk has 120 GB free; the backup failed at 02:10.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "The disk has 120 GB free; the backup finished at 02:10 without errors.",
+  "rephrased": "The disk has 12 GB free; the backup finished at 02:10 without errors.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Your message to Julia may not have arrived: Telegram did not confirm it.",
+  "rephrased": "Telegram did not confirm it, so your message to Julia may not have arrived.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Your message to Julia may not have arrived: Telegram did not confirm it.",
+  "rephrased": "I'm not sure your message to Julia arrived; Telegram did not confirm it.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Your message to Julia may not have arrived: Telegram did not confirm it.",
+  "rephrased": "Your message to Julia arrived.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Your message to Julia may not have arrived: Telegram did not confirm it.",
+  "rephrased": "Your message to Julia was delivered and Telegram confirmed it.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "The latest commit is 3f2a9c1, which changed host/src/main.ts.",
+  "rephrased": "Commit 3f2a9c1 is the latest; it changed host/src/main.ts.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The latest commit is 3f2a9c1, which changed host/src/main.ts.",
+  "rephrased": "host/src/main.ts was changed in the latest commit, 3f2a9c1.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The latest commit is 3f2a9c1, which changed host/src/main.ts.",
+  "rephrased": "The latest commit is 3f2a9c2, which changed host/src/main.ts.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "The latest commit is 3f2a9c1, which changed host/src/main.ts.",
+  "rephrased": "The latest commit is 3f2a9c1, which changed host/src/config.ts.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Sure! The capital of Australia is Canberra, not Sydney.",
+  "rephrased": "Sure: Canberra is the capital of Australia, not Sydney.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Sure! The capital of Australia is Canberra, not Sydney.",
+  "rephrased": "The capital of Australia is Canberra, not Sydney!",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Sure! The capital of Australia is Canberra, not Sydney.",
+  "rephrased": "Sure! The capital of Australia is Sydney.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Sure! The capital of Australia is Canberra, not Sydney.",
+  "rephrased": "Sure! The capital of Australia is Canberra, and Sydney too.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I found the article here: https://example.org/news/42. It says the train runs every 20 minutes.",
+  "rephrased": "It says the train runs every 20 minutes; the article is here: https://example.org/news/42.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I found the article here: https://example.org/news/42. It says the train runs every 20 minutes.",
+  "rephrased": "Here's the article: https://example.org/news/42. According to it, the train runs every 20 minutes.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I found the article here: https://example.org/news/42. It says the train runs every 20 minutes.",
+  "rephrased": "I found the article. It says the train runs every 20 minutes.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I found the article here: https://example.org/news/42. It says the train runs every 20 minutes.",
+  "rephrased": "I found the article here: https://example.org/news/42. It says the train runs every 30 minutes.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Good morning! I'm here if you need anything.",
+  "rephrased": "Good morning! Let me know if you need anything.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Good morning! I'm here if you need anything.",
+  "rephrased": "Morning! I'm around if you need anything.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Good morning! I'm here if you need anything.",
+  "rephrased": "Good morning! I'll send you the news at 9.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Good morning! I'm here if you need anything.",
+  "rephrased": "Good morning! I'm busy today.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Thanks, I saved the note.",
+  "rephrased": "Thank you, the note is saved.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Thanks, I saved the note.",
+  "rephrased": "Thanks, I saved that note.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Thanks, I saved the note.",
+  "rephrased": "Thanks, I couldn't save the note.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Thanks, I saved the note.",
+  "rephrased": "Thanks, I'll save the note later.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "He said \"see you at noon\" and left.",
+  "rephrased": "He left after saying \"see you at noon\".",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "He said \"see you at noon\" and left.",
+  "rephrased": "He said \"see you at noon\", then left.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "He said \"see you at noon\" and left.",
+  "rephrased": "He said \"see you at one\" and left.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "He said \"see you at noon\" and left.",
+  "rephrased": "He said he'd see you and left.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Прогноз на завтра для Лиссабона: 22°C, солнечно, дождя не ожидается.",
+  "rephrased": "Завтра в Лиссабоне солнечно, 22°C, дождя не ожидается.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Прогноз на завтра для Лиссабона: 22°C, солнечно, дождя не ожидается.",
+  "rephrased": "Для Лиссабона на завтра: солнечно и 22°C, дождя не ожидается.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Прогноз на завтра для Лиссабона: 22°C, солнечно, дождя не ожидается.",
+  "rephrased": "Прогноз на завтра для Лиссабона: 25°C, солнечно, дождя не ожидается.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Прогноз на завтра для Лиссабона: 22°C, солнечно, дождя не ожидается.",
+  "rephrased": "Прогноз на завтра для Лиссабона: 22°C, ожидается дождь.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Готово: напоминание на 18:00 записано.",
+  "rephrased": "Напоминание на 18:00 записано, готово.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Готово: напоминание на 18:00 записано.",
+  "rephrased": "Записала напоминание на 18:00 — готово.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Готово: напоминание на 18:00 записано.",
+  "rephrased": "Готово: напоминание на 19:00 записано.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Готово: напоминание на 18:00 записано.",
+  "rephrased": "Не удалось записать напоминание на 18:00.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Не удалось связаться с сервисом погоды, поэтому я не знаю, будет ли дождь в Осло.",
+  "rephrased": "Сервис погоды не ответил, поэтому не знаю, будет ли в Осло дождь.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Не удалось связаться с сервисом погоды, поэтому я не знаю, будет ли дождь в Осло.",
+  "rephrased": "Я не смогла связаться с сервисом погоды и не знаю, будет ли дождь в Осло.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Не удалось связаться с сервисом погоды, поэтому я не знаю, будет ли дождь в Осло.",
+  "rephrased": "Сервис погоды сообщает, что в Осло будет дождь.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Не удалось связаться с сервисом погоды, поэтому я не знаю, будет ли дождь в Осло.",
+  "rephrased": "Связалась с сервисом погоды: дождя в Осло не будет.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Юля просила передать, что встреча перенесена на пятницу, 15:00.",
+  "rephrased": "Юля просила передать: встречу перенесли на пятницу, 15:00.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Юля просила передать, что встреча перенесена на пятницу, 15:00.",
+  "rephrased": "Передаю от Юля: встреча теперь в пятницу в 15:00.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Юля просила передать, что встреча перенесена на пятницу, 15:00.",
+  "rephrased": "Юля просила передать, что встреча перенесена на пятницу, 16:00.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Юля просила передать, что встреча перенесена на пятницу, 15:00.",
+  "rephrased": "Юля просила передать, что встреча отменена.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Свободно 120 ГБ, резервная копия завершилась в 02:10 без ошибок.",
+  "rephrased": "Резервная копия завершилась в 02:10 без ошибок, свободно 120 ГБ.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Свободно 120 ГБ, резервная копия завершилась в 02:10 без ошибок.",
+  "rephrased": "Без ошибок: копия готова в 02:10, на диске свободно 120 ГБ.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Свободно 120 ГБ, резервная копия завершилась в 02:10 без ошибок.",
+  "rephrased": "Свободно 120 ГБ, резервная копия завершилась в 02:10 с ошибкой.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Свободно 120 ГБ, резервная копия завершилась в 02:10 без ошибок.",
+  "rephrased": "Свободно 12 ГБ, резервная копия завершилась в 02:10 без ошибок.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Возможно, твоё сообщение не дошло: Telegram не подтвердил доставку.",
+  "rephrased": "Telegram не подтвердил доставку, так что, возможно, сообщение не дошло.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Возможно, твоё сообщение не дошло: Telegram не подтвердил доставку.",
+  "rephrased": "Похоже, сообщение могло не дойти: Telegram не подтвердил доставку.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Возможно, твоё сообщение не дошло: Telegram не подтвердил доставку.",
+  "rephrased": "Твоё сообщение дошло.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Возможно, твоё сообщение не дошло: Telegram не подтвердил доставку.",
+  "rephrased": "Telegram подтвердил доставку твоего сообщения.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Спасибо, заметку сохранила.",
+  "rephrased": "Спасибо, заметка сохранена.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Спасибо, заметку сохранила.",
+  "rephrased": "Спасибо! Заметку сохранила.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Спасибо, заметку сохранила.",
+  "rephrased": "Спасибо, заметку сохраню позже.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Спасибо, заметку сохранила.",
+  "rephrased": "Спасибо, но заметку сохранить не удалось.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Доброе утро! Я на связи, если что-то понадобится.",
+  "rephrased": "Доброе утро! Пиши, если что-то понадобится.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Доброе утро! Я на связи, если что-то понадобится.",
+  "rephrased": "Привет и доброе утро! Если что-то нужно — я на связи.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Доброе утро! Я на связи, если что-то понадобится.",
+  "rephrased": "Доброе утро! Я пришлю новости в 9.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Доброе утро! Я на связи, если что-то понадобится.",
+  "rephrased": "Доброе утро! Сегодня я занята и не на связи.",
+  "same": false,
+  "lang": "ru"
+ }
+]

@@ -1,7 +1,7 @@
 # Iyye 2.0.009 — Stage 3, Developing Character: Rough Plan
 
 - Entry condition (plan 0.013 E6, 2026-10-10): `test/integrity-gate.test.ts` passes and `/facts report` shows no key with two current values and no untraced citation.
-- Status (2026-10-05): **rough draft; owner decisions on the voice in §6; nothing built. Comes after plan 0.010 (motivations), which it builds on (owner decision, 2026-10-05).** Starts after M8 has produced a few real days of records (the evidence character learns from). Owner requirement: one part is **a separate, tunable small model that only rephrases outputs according to character and mood**.
+- Status (2026-10-10): **CH0 done (`host/SPIKE-0.009.md`), and CH6's environments and round trip (infrastructure only, `decision-worker/TRAINING.md`); nothing else built.** Before (2026-10-05): **rough draft; owner decisions on the voice in §6. Comes after plan 0.010 (motivations), which it builds on (owner decision, 2026-10-05).** Starts after M8 has produced a few real days of records (the evidence character learns from). Owner requirement: one part is **a separate, tunable small model that only rephrases outputs according to character and mood**.
 - Design source: [`iyye_2_0_hld.md`](iyye_2_0_hld.md) §4 (stable identity, developing character, prompt composition), §5.2 (motivations), §6.4 (relationship context), §8.2 (adenosine), §9.3 (models are replaceable, character persists), §10 (learning), §11 (a recognizable day, reinforcement with damping), §14 Stage 3, §15 #12, #13, #15.
 - Builds on: adenosine (0.007 S2), the day summary and night (0.002, 0.007 S3), Kev and the decision journal (0.003), outcome records (receipts, commitments, findings, plans, `/sent`), `/forget` and tombstones.
 
@@ -81,12 +81,13 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
 ## 3. Milestones (rough)
 
 - **CH0 — Spike:** pick the voice model (latency, meaning preservation on ~200 real replies from the M8 journal, English and Russian); measure the meaning check's false-reject rate; verify llama.cpp per-request LoRA in router mode; measure a small mlx/llama LoRA training run's time and memory on this machine (owner approval needed before any training).
+  - **As built (2026-10-10):** `host/src/voice/check.ts` (the meaning check, `maskFixed`/`unmask`; `test/voice-check.test.ts` with labelled pairs, a held-out set never used to tune it: 12.5 % false rejects, 21 % false accepts) and `scripts/voice-spike.ts` (94 real replies, all English, and 32 synthetic, 14 Russian; three candidates, masked and plain). Usable rephrasings (accepted and actually changed): gemma-4-E4B 47 % (41 tok/s; it keeps Russian only when the instructions are in Russian, then 19 of 28 synthetic Russian rephrasings usable), qwen35-4b-tak 42 % (91 tok/s), minicpm5-2b 19 % (mostly copies). llama.cpp applies a per-request LoRA scale through the router; a changed scale re-evaluates the prompt. A MiniCPM5 voice LoRA trains at 0.47 s/step in 6 GB and converts in 3 s. qwen35-4b-tak cannot carry a trained voice (no known source checkpoint). Figures and recommendations in the spike; the model is the owner's A/B choice in CH3.
 - **CH1 — Character state:** migration, revisions, `character.json`, `/character …`, prompt composition reads style (HLD §4.3); no learning yet; temperament wired into the kernel's dials at 1.0 (no behaviour change).
 - **CH2 — Mood:** deterministic mood from records, `/mood`, journal; the valence Kev role in shadow.
 - **CH3 — Voice, shadow, and A/B:** the voice runs on every Telegram message to a contact and the meaning check judges it, but the **original is delivered**; `/voice` shows both; `/voice compare` and the live split collect the A/B figures; the owner picks the model and when to let it act.
 - **CH4 — Voice, acting:** on contacts' Telegram messages only; one strength dial; fixed segments; the bounded mood remark; fallback to the original; owner feedback commands collecting masked pairs.
 - **CH5 — Nightly character review:** bounded deltas from evidence, interests/habits, undo/freeze/reset, forgetting.
-- **CH6 — Voice in the nightly tuning:** the voice LoRA becomes one tunable of the Stage 4 nightly job (built with it, or this stage builds the job's generic part first: candidate registry, held-out sets, promotion and rollback, preemption by owner input). Character review (CH5) and the temperament tuning stay deterministic and bounded; only the voice and Kev adapters are trained weights.
+- **CH6 — Voice in the nightly tuning** (environments and the round trip built 2026-10-10: `voice_provision.py`, `voice_train.py`, the converter venv, `scripts/voice-lora-smoke.ts`; no data path, evaluation, registry or schedule yet): the voice LoRA becomes one tunable of the Stage 4 nightly job (built with it, or this stage builds the job's generic part first: candidate registry, held-out sets, promotion and rollback, preemption by owner input). Character review (CH5) and the temperament tuning stay deterministic and bounded; only the voice and Kev adapters are trained weights.
 - **CH7 — Evaluation (exit gate):** two scratch installations fed different evidence for several simulated days develop different, repeatable habits and voices; the same installation keeps them across restart and a chat-model change; reset removes them; generated self-praise moves nothing.
 
 ## 4. Risks
@@ -101,6 +102,7 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
 ## 5. Still open
 
 - When Stage 4's nightly job is built relative to CH6, since the voice depends on it.
+- The source of `qwen35-4b-tak` (decision 7), without which it cannot carry a trained voice; whether gemma-4-E4B's GGUF LoRA converts and applies (not yet tried).
 
 ## 6. Owner decisions (2026-10-04)
 
@@ -110,5 +112,6 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
 4. **One voice** for all contacts.
 5. **Tuning:** the voice is one of the nightly tunables, trained with the others.
 6. **The owner's linked Telegram accounts get the voice too**, like every contact (2026-10-04, later).
+7. **The voice model for now: `qwen35-4b-tak`** (2026-10-10, after CH0). CH3 starts with it; the A/B (decision 3) can still replace it. Known from CH0: it cannot carry a trained voice LoRA until its source checkpoint is known (an adapter trained on Qwen3.5-4B would be applied to other weights), so CH6 needs that source or another model; its Russian needs the instructions in Russian.
 
-Next: collect two days of M8 data (until about 2026-10-06), then CH0 on it.
+Next: CH1 (character state), after plan 0.010 M4's trial.

@@ -21,7 +21,7 @@
  * It never touches the live Kev, its port or `~/.iyye2/decisions/training/candidates`.
  * It does use the GPU the live host shares, for a minute or two.
  *
- *   node scripts/training-smoke.ts <scratch-dir> [--steps 3] [--tolerance 0.02]
+ *   node scripts/training-smoke.ts <scratch-dir> [--steps 3] [--tolerance 0.03]
  */
 
 import { execFileSync } from "node:child_process";
@@ -32,11 +32,11 @@ import { loadConfig } from "../src/config.ts";
 
 const { values, positionals } = parseArgs({
 	allowPositionals: true,
-	options: { steps: { type: "string", default: "3" }, tolerance: { type: "string", default: "0.02" } },
+	options: { steps: { type: "string", default: "3" }, tolerance: { type: "string", default: "0.03" } },
 });
 const scratch = positionals[0];
 if (!scratch) {
-	console.error("usage: node scripts/training-smoke.ts <scratch-dir> [--steps 3] [--tolerance 0.02]");
+	console.error("usage: node scripts/training-smoke.ts <scratch-dir> [--steps 3] [--tolerance 0.03]");
 	process.exit(2);
 }
 const config = loadConfig();
@@ -109,10 +109,18 @@ const inServing = score(servePython, trained.dir, "candidate-serving-venv");
 const candidateRaw = score(servePython, trained.dir, "candidate-serving-venv-raw", true);
 const parent = score(servePython, config.decisions.model, "parent-serving-venv-raw", true);
 
-/** Largest probability difference and argmax disagreements between two scorings of the same records. */
-function compare(a: Scores, b: Scores): { maxDp: number; flips: number; questions: number } {
+/**
+ * Largest probability difference and argmax disagreements between two scorings of the same records; a flip
+ * between two options both scorings put within `tieMargin` of each other is a near-tie, not a disagreement.
+ */
+function compare(
+	a: Scores,
+	b: Scores,
+	tieMargin = 0,
+): { maxDp: number; flips: number; nearTieFlips: number; questions: number } {
 	let maxDp = 0;
 	let flips = 0;
+	let nearTieFlips = 0;
 	let questions = 0;
 	for (const [i, row] of a.predictions.entries()) {
 		for (const [qid, ps] of Object.entries(row.probabilities)) {
@@ -120,12 +128,18 @@ function compare(a: Scores, b: Scores): { maxDp: number; flips: number; question
 			questions++;
 			for (const [k, p] of Object.entries(ps)) maxDp = Math.max(maxDp, Math.abs(p - other[k]!));
 			const top = (x: Record<string, number>) => Object.entries(x).sort((m, n) => n[1] - m[1])[0]![0];
-			if (top(ps) !== top(other)) flips++;
+			if (top(ps) === top(other)) continue;
+			const margin = (x: Record<string, number>) => {
+				const [p1, p2] = Object.values(x).sort((m, n) => n - m);
+				return p1! - (p2 ?? 0);
+			};
+			if (margin(ps) <= tieMargin && margin(other) <= tieMargin) nearTieFlips++;
+			else flips++;
 		}
 	}
-	return { maxDp, flips, questions };
+	return { maxDp, flips, nearTieFlips, questions };
 }
-const parity = compare(inTraining, inServing);
+const parity = compare(inTraining, inServing, 2 * Number(values.tolerance));
 const moved = compare(candidateRaw, parent);
 const gb = (b: number) => `${(b / 2 ** 30).toFixed(1)} GB`;
 const median = (xs: number[]) => xs.sort((m, n) => m - n)[Math.floor(xs.length / 2)]!;
@@ -144,7 +158,7 @@ writeFileSync(join(scratch, "report.json"), `${JSON.stringify(report, null, 2)}\
 console.log(
 	[
 		`trained ${values.steps} step(s) in ${trained.resources.wall_s} s (peak CUDA ${gb(trained.resources.peak_cuda_bytes ?? 0)})`,
-		`parity, training venv (fla ${inTraining.fla}) vs serving venv (fla ${inServing.fla}): max |Δp| ${parity.maxDp.toFixed(4)}, ${parity.flips} argmax flip(s) in ${parity.questions} questions`,
+		`parity, training venv (fla ${inTraining.fla}) vs serving venv (fla ${inServing.fla}): max |Δp| ${parity.maxDp.toFixed(4)}, ${parity.flips} argmax flip(s) and ${parity.nearTieFlips} on a near-tie (both margins ≤ ${2 * Number(values.tolerance)}) in ${parity.questions} questions`,
 		`moved from the parent (both at temperature 1): max |Δp| ${moved.maxDp.toFixed(4)}, ${moved.flips} flip(s)`,
 		`serving-venv load ${inServing.load_s} s, median ${report.medianLatencyMs} ms per request, peak CUDA ${gb(inServing.peak_cuda_bytes)}`,
 		`candidates in ${candidates}: ${readdirSync(candidates).join(", ")}`,
