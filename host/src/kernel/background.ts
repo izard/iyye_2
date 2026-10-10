@@ -75,6 +75,20 @@ export interface BackgroundDeps {
 	} | null;
 	/** Called once a step settles, with its result (the origin decides what it means). */
 	onSettled?: ((job: BackgroundJob) => void) | null;
+	/**
+	 * Plan 0.010 M4: initiative's allowances. A queued step whose origin's allowance is used up waits (the next
+	 * runnable one goes), and every attempt's device time is charged to its origin's motivation, kept or not.
+	 */
+	initiative?: {
+		stepAllowed(origin: string): boolean;
+		chargeStep(
+			job: { id: string; origin: string },
+			attempt: number,
+			ms: number,
+			remote: boolean,
+			kept: boolean,
+		): void;
+	} | null;
 	now?: () => Date;
 	newId?: () => string;
 	quietMs?: number;
@@ -99,6 +113,7 @@ export class BackgroundWorker {
 			rhythm: null,
 			energy: null,
 			onSettled: null,
+			initiative: null,
 			deviceFor: null,
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
@@ -177,9 +192,10 @@ export class BackgroundWorker {
 			this.lastReason = blocked;
 			return false;
 		}
-		const job = runnableBackgroundJobs(this.d.db)[0];
+		const runnable = runnableBackgroundJobs(this.d.db);
+		const job = runnable.find((j) => this.d.initiative?.stepAllowed(j.origin) ?? true);
 		if (!job) {
-			this.lastReason = "nothing to do";
+			this.lastReason = runnable.length ? "initiative's allowance is used up for today" : "nothing to do";
 			return false;
 		}
 		if (!model) {
@@ -246,6 +262,14 @@ export class BackgroundWorker {
 			this.lastStepEnd = this.d.now().getTime();
 			// Device time is paid for whatever happened to the step: once per attempt.
 			this.d.energy?.deviceTime("background", this.lastStepEnd - startedMs, `${job.id}:${attempt}`);
+			// M4: and charged to its motivation's allowance, kept only if nothing discarded it.
+			this.d.initiative?.chargeStep(
+				job,
+				attempt,
+				this.lastStepEnd - startedMs,
+				remote,
+				!gaveWay && !this.stopping && (modelHeld || !remote),
+			);
 		}
 		if (this.stopping) {
 			pauseBackgroundJob(this.d.db, job.id, false); // shutdown: resumable, not counted

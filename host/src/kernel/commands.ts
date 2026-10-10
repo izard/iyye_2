@@ -67,7 +67,8 @@ export interface CommandContext {
 		accept(ref: string, text: string, by: string): string;
 		dismiss(ref: string): string;
 	} | null;
-	motivationReport?: (() => string) | null;
+	/** /motivation [report [days] | trace <id> | useful <id> yes|no] (plan 0.010 M0, M4). */
+	motivationReport?: ((args?: string[]) => string) | null;
 	/** /facts [<query> | compare | correct <id> <text> | wrong <id>] (plan 0.011). */
 	facts?: { command(args: string[], by: string): string | Promise<string> } | null;
 	/** /opportunities: findings that raised a question and their investigations (plan 0.007 S5). */
@@ -124,7 +125,8 @@ const HELP = [
 	"/plans — plans and their states; /plan <id> — its steps and evidence",
 	"/sent — messages Iyye sent to people for you, with their delivery",
 	"/self — what Iyye knows about itself (hardware, power, sleep, versions, place, people) and its gaps; /self set place|expected-hardware <text>, /self relation <contact> <text>",
-	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened (shadow)",
+	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened",
+	"/motivation report [days] — what each motivation opened, tried, resolved and was held back from (the trial period by default); /motivation trace <id>; /motivation useful <id> yes|no",
 	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts confirm <id>, /facts correct <id> <text>, /facts wrong <id>; /facts private|share <id>",
 	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps",
 	"/pause initiative, /resume initiative — stop or allow background work",
@@ -283,7 +285,7 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 		case "/motivation":
 			return {
 				handled: true,
-				reply: ctx.motivationReport ? ctx.motivationReport() : "motivations are not available here",
+				reply: ctx.motivationReport ? ctx.motivationReport(args) : "motivations are not available here",
 			};
 		case "/facts":
 			return {

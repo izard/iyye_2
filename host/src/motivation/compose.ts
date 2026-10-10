@@ -22,6 +22,8 @@
 
 import type { Complete } from "../facts/extractor.ts";
 import type { ModelLease, OpResult } from "../models/manager.ts";
+import type { InitiativeLedger } from "./budget.ts";
+import type { Motivation } from "./signals.ts";
 
 export type Composed = { ok: true; text: string } | { ok: false; notNow: string } | { ok: false; error: string };
 
@@ -42,14 +44,28 @@ export interface ComposerDeps {
 	};
 	complete: Complete;
 	energy?: { deviceTime(kind: "background", ms: number, ref: string): void } | null;
+	/** M4: initiative's ledger: one job at a time, and each call's device time charged to its motivation. */
+	ledger?: Pick<InitiativeLedger, "charge" | "whileComposing"> | null;
 	now?: () => Date;
 	watchMs?: number;
 }
 
 /** Make one completion under background work's rules: the text, "not now" (try later), or an error. */
-export function makeComposer(deps: ComposerDeps): (label: string, system: string, user: string) => Promise<Composed> {
+export function makeComposer(
+	deps: ComposerDeps,
+): (label: string, system: string, user: string, motivation?: Motivation, opportunityId?: string) => Promise<Composed> {
 	const now = deps.now ?? (() => new Date());
-	return async (label, system, user) => {
+	return (label, system, user, motivation, opportunityId) =>
+		deps.ledger && opportunityId
+			? deps.ledger.whileComposing(opportunityId, () => run(label, system, user, motivation, opportunityId))
+			: run(label, system, user, motivation, opportunityId);
+	async function run(
+		label: string,
+		system: string,
+		user: string,
+		motivation: Motivation | undefined,
+		opportunityId: string | undefined,
+	): Promise<Composed> {
 		const model = deps.models.selected("background");
 		const remote = model !== null && deps.models.isRemote?.(model) === true;
 		const blocked = deps.background.blockedReason({ remote });
@@ -88,9 +104,22 @@ export function makeComposer(deps: ComposerDeps): (label: string, system: string
 			return { ok: false, error: (err as Error).message };
 		} finally {
 			clearInterval(watch);
+			const kept = !gaveWay && (!remote || lease.valid());
 			release();
 			lease.release();
-			deps.energy?.deviceTime("background", now().getTime() - t0, `motivation:${label}`);
+			const ms = now().getTime() - t0;
+			deps.energy?.deviceTime("background", ms, `motivation:${label}`);
+			// M4: the call ran, so its time counts against its motivation, kept or discarded.
+			if (motivation && deps.ledger)
+				deps.ledger.charge({
+					motivation,
+					opportunityId: opportunityId ?? null,
+					source: "compose",
+					machine: remote ? "remote" : "local",
+					ms,
+					kept,
+					ref: `compose:${label}:${t0}`,
+				});
 		}
-	};
+	}
 }

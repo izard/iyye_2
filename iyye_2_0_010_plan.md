@@ -1,6 +1,6 @@
 # Iyye 2.0.010 — Motivations: Four Needs That Drive Initiative (Plan)
 
-- Status (2026-10-05): **accepted; M0, M0b, M1, M2 and M3 built (2026-10-07: the motivations notify, ask the owner and maintain; M2: detectors, web investigations of the owner's recurring questions, questions about uncertain beliefs; 2026-10-08, M3: Iyye proposes plans from the owner's intentions and follows up on dated events); M4 (evaluation) next.** Comes **before Stage 3** (owner decision, §13). Owner direction: curiosity's top priority is a current model of Iyye's extended self (§3.1). Whether it comes before or alongside Stage 3 (plan 0.009) is an owner decision (§9). It gives Stage 3's temperament something real to scale.
+- Status (2026-10-05): **accepted; M0, M0b, M1, M2 and M3 built (2026-10-07: the motivations notify, ask the owner and maintain; M2: detectors, web investigations of the owner's recurring questions, questions about uncertain beliefs; 2026-10-08, M3: Iyye proposes plans from the owner's intentions and follows up on dated events); M4's records, budget, replay and report built (2026-10-10); M4 stays open until the owner's live trial is reviewed.** Comes **before Stage 3** (owner decision, §13). Owner direction: curiosity's top priority is a current model of Iyye's extended self (§3.1). Whether it comes before or alongside Stage 3 (plan 0.009) is an owner decision (§9). It gives Stage 3's temperament something real to scale.
 - Design source: [`iyye_2_0_hld.md`](iyye_2_0_hld.md) §5.1 (one focus, precedence), §5.2 (the four motivations, need and service evidence), §5.3 (initiative with a reason), §6.4 (relationship context), §8.2 (adenosine), §11.2 (reinforcement with damping), §15 #9, #10, #12, #16.
 - Builds on: observation domains and findings (0.007 S4), opportunities and investigations (S5), adenosine (S2), background jobs (S1), plans and commitments (0.006), messaging (0.008), the self-healing model manager, Kev's initiative role (shadow), the decision journal (0.003).
 - Lessons from 1.x (its alignment stream and need EMA): keyword-scored "service" saturated and masked real need; narration counted as evidence and spawned plans about plans; completed work re-proposed itself until a fruitless bound existed. Every rule below is shaped against those.
@@ -147,6 +147,7 @@ Settled evidence lowers need at the next sweep. Fruitless attempts count against
 - **Gaps** (the first curiosity signals): a facet never probed or older than twice its window (a failing probe, with its error), the stated place missing, people who wrote in 30 days without a stated relation, the network's city or timezone contradicting the owner's statement or the computer.
 - **Motivations in shadow** (`host/src/motivation/`, `motivation_samples`): `collectSignals` reads records only (never Iyye's own text, tested): self-preservation (disk or memory low, services down, a model being reloaded or given up, the memory backlog, a night cut short, unconfirmed deliveries, sleeping on battery), curiosity (self-model gaps, open opportunities), agency (suspended, stalled or long-waiting plans; failed or unconfirmed reminders), social (unanswered messages, claims without a record). Each signal names its evidence. Raw need combines signals as independent pressures, `1 − Π(1 − strength)` (a deviation from the plan's clamped sum: it stays in [0, 1] and one strong signal is enough), strength fading with age. Smoothed with α 0.3; `would_open` names the strongest cluster after 3 sweeps ≥ 0.6. Smoothing and sustain counts are restored from the last sample after a restart. Samples are pruned after 14 days. `/motivation`.
 - **Tests:** `self-model.test.ts` (10) and `motivation.test.ts` (5). The suite has 378 tests. Migration 025 applies at the next host restart.
+- **On Linux (2026-10-10, the DGX Spark):** hardware from DMI or the device tree (product, vendor, family only: never the serial, board serial or UUID), `lscpu` core types, the memory size, `nvidia-smi` GPU names and os-release; power from `/sys/class/power_supply` (no supply at all: mains, no battery) and the ACPI lid; sleep from the kernel journal (`journalctl -k -o short-iso`, "PM: suspend entry/exit", times only, the host name never kept; no dark wakes on Linux); the network from `ip route` and `ip neigh` (the same opaque id). On other platforms these facets are still not probed and never a gap. Measured on the Spark: "NVIDIA DGX Spark (DGX Spark), Cortex-X925 + Cortex-A725; GPU NVIDIA GB10, 20 (10 Cortex-X925, 10 Cortex-A725) cores, 122 GB memory, Ubuntu 24.04.5 LTS"; mains, lid open; no suspend in the last day; network on `wlP9s9`.
 
 *(M0 tuning from live samples, 2026-10-06)* 128 sweeps over 24 hours: curiosity sat at 0.97 for 126 sweeps (the stated place and one "relation unknown" per person who wrote, all combined as independent pressures), social at 0.74–0.94 for 126 (messages that failed during the runaway turn and the restart, though the owner was answered right after); self-preservation rose to 0.75 for 19 sweeps on real causes (a night cut short, a model that would not load, the memory backlog); agency stayed at 0. Changes: signals of one kind count about once (the strongest, at most +0.1 for more); a missing statement only the owner can give weighs 0.4 (a relation 0.3), a contradiction still 0.8; a person is no longer waiting once a later message of theirs was answered. Replayed on the recorded sweeps: curiosity settles at 0.52 (only a contradiction or another reason crosses 0.6), social at 0, self-preservation unchanged (17 would-be openings, all real). Tests in `motivation.test.ts` (6).
 
@@ -193,7 +194,69 @@ Settled evidence lowers need at the next sweep. Fruitless attempts count against
 - **Review fixes:** the tracker queues every signal whose action the actor bounds itself (`ask`, `propose`, `follow_up`), not only the strongest: an urgent plan (0.8) or a failed reply (0.7, no action) on top would otherwise keep an intention or a past event from ever opening. A plan Iyye proposed is no `plan_awaiting_approval` signal: the owner was told once and it lapses by itself (else a second notice came ten minutes after the first, for any reminder due within a day). The `/remind` suggestions count toward the proposals' daily cap. A follow-up is not composed when Iyye already wrote to that person on its own today.
 - **Tests:** `test/motivation-m3.test.ts` (18); `motivation-m2.test.ts` updated. Migration 031 applies at the next restart (checked on a copy of the live database).
 - **Not in M3:** Kev's initiative role per motivation (shadow); per-motivation device-time allowances; the day summary's line per motivation; contacts' unanswered questions.
-- **M4 — Evaluation:** a multi-day run (real, plus a replayed scratch installation with injected records) checks the exit gate.
+- **M4 — Evaluation:** a multi-day run (real, plus a replayed scratch installation with injected records) checks the exit gate. Planned in detail below (2026-10-10).
+
+### M4 in detail (2026-10-10)
+
+M4 establishes whether initiative stays useful, quiet and recoverable over several days. It first closes §7's budget promises, which M1–M3 left to action caps and the shared energy budget.
+
+**Four outcome levels**, never conflated, recorded per opportunity:
+1. **Attempted:** Iyye took the action (a notice queued, a model call made, a step started). No credit.
+2. **Delivered:** the action reached its person (the outbox's receipt; a follow-up's sent message). No credit.
+3. **Resolved:** the opportunity's condition closed, with a structured `outcome` and whether Iyye's action produced it (`credited`).
+4. **Useful:** later evidence the action helped: the owner's `/motivation useful <id> yes|no`, or a curiosity finding used in a later turn (the recall journal). Kept apart from resolution; Stage 3 and Stage 4 may read only levels 3 and 4.
+
+| Motivation | Resolved (credited) | Resolved (not credited) | Not resolved |
+| --- | --- | --- | --- |
+| Self-preservation | — (a notice earns no credit) | the failing condition cleared; a reloaded model loaded | capped, covered |
+| Curiosity | a grounded finding (cited answer); an asked question accepted | the field became known another way | fruitless → suspended (3), expired, dismissed |
+| Agency | the proposed plan completed | — | declined (not approved, cancelled), failed, nothing to plan |
+| Social | the person replied (closes the waiting state; reply volume is no reinforcement) | — | no reply (expired), covered, held |
+
+Outcomes (`opportunities.outcome`, migration 036): `resolved`, `declined`, `expired`, `failed`, `capped`, `covered`, `nothing`, `gone`, `suspended`. Every settled or suspended row has one (an invariant test). Events (`motivation_events`): `opened`, `attempted`, `withheld` (with its reason: paused, quiet hours, a cap, the allowance, energy, the model unavailable, another job running; at most one row per opportunity, reason and day), `preempted`, `settled`, `useful`.
+
+**Budget and scheduling (§7), as decided** (owner decisions 7–10):
+- An absolute daily initiative budget, `IYYE2_INITIATIVE_BUDGET_MIN` (120 min), split curiosity 40 %, agency 30 %, social 30 %; self-preservation only notifies and reloads (no inference) and is uncapped within the energy reserve. Curiosity and agency may use each other's unused share; social never borrows and is never borrowed from.
+- **Charged:** actual inference time of initiative work (`initiative_device`, milliseconds per motivation and machine): the composer's calls and the background steps of investigations, including work discarded after a preemption; waiting for a model that is not available charges nothing. The MBP's time counts like the Spark's. Steps of a plan Iyye proposed count against no share once the owner approved it (the owner's authorized work). Fact extraction is not initiative.
+- **Eligibility:** a call or step starts only if its estimated cost (the recent median of its kind, a default before there is one) fits what is left; one already running may finish (the overshoot is at most one step). The worker checks it per job origin, so a queued step never runs past the budget.
+- **One initiative job at a time:** one initiative opportunity in progress across the actor and the investigations loop (an investigation's steps are one job).
+- **Priority, deterministic:** among ready initiative opportunities, `need × urgency(age) ÷ cost`, from durable rows only (the latest smoothed need, the opportunity's age, the kind's estimated cost); ties favour self-preservation, then the older opportunity, then its id. A component starts its row only if no higher-ranked ready row exists, so the loops' timing never decides.
+- **Deferred:** temperament (fixed at 1 until plan 0.009 CH5), Kev's initiative role acting (stays shadow until its own gate).
+
+**Acceptance matrix** (requirement → records → test, `test/motivation-m4.test.ts` unless noted):
+
+| Requirement | Records | Test |
+| --- | --- | --- |
+| A sustained outage opens one opportunity; recovery settles it (not credited); need decays | samples, opportunities.outcome, events | outage scenario |
+| A recurring question gives one investigation; three fruitless attempts suspend it, across a restart | opportunities.fruitless/outcome | investigation scenario |
+| An intention gives one unapproved proposal; approval→completion, rejection, expiry have distinct outcomes | plans, outcome | proposal scenario |
+| A follow-up respects quiet hours, caps, an uncertain delivery and the no-reply hold | events (withheld), outcome | follow-up scenario |
+| Owner input preempts; discarded output gives nothing, is charged, the opportunity survives | background_jobs, initiative_device, events | preemption scenario |
+| Self-authored text (replies, summaries, step answers) gives no need and no service | samples | injection scenario (also m1–m3) |
+| Changing every shadow Kev answer changes no action | opportunities, events | shadow scenario |
+| `/forget` during pending work: the forgotten evidence never returns | opportunities, events | forget scenario |
+| Allowances and borrowing hold; one job at a time; priority is deterministic | initiative_device, events | budget scenarios |
+| Restarts preserve cooldowns, attempts and pending work | all of the above | restart steps in each scenario |
+| Every settled row has an outcome | opportunities | invariant |
+| The self model stays current; private facets never reach contacts | self_facts | `self-model.test.ts` |
+
+**Visibility:** `/motivation report [days]`: per motivation, opportunities opened, attempted, resolved (credited), declined, expired, failed, suspended, withheld by reason, device minutes against the allowance, preemptions, unconfirmed deliveries, and repeat actions on one evidence cluster; `/motivation trace <id>`: one opportunity's evidence, events and outcome; `/motivation useful <id> yes|no`.
+
+*(M4 as built, 2026-10-10: everything but the live trial)*
+- **Outcomes** (migration `036_motivation_outcomes.sql`, `motivation/outcomes.ts`): `opportunities.outcome` and `credited`, set at every settling site in the actor and the investigations loop (`settleOpportunity`); legacy rows mapped from their recorded phrases (on a copy of the Spark's database: all 12 settled rows got one). `motivation_events`: opened, attempted (with the notice's key as ref), withheld (deduplicated per opportunity, reason and day), preempted, fruitless, settled, useful/not_useful.
+- **Budget and scheduling** (`motivation/budget.ts`, `InitiativeLedger`): `initiative_device` (milliseconds by motivation, machine, source, kept); the composer charges each call it ran (kept unless it gave way or the MBP was lost) and runs it as the one initiative job; the worker skips a queued investigation step its allowance cannot afford (the next runnable job goes) and charges every attempt to its motivation, kept or discarded; plan steps and fact extraction are never charged. `mayStart` (actor and investigations): another initiative job, the allowance, or a higher-ranked ready row (`rank`, `ready`) withholds, journaled. `IYYE2_INITIATIVE_BUDGET_MIN` (120).
+- **Visibility** (`motivation/report.ts`): `/motivation report [days]`, `/motivation trace <id>`, `/motivation useful <id> yes|no`; the trial period (`motivation.trial`) starts at host start when the behaviour fingerprint (`signals.ts`, `detectors.ts`, thresholds, caps, budget, shares) changed, and keeps the earlier periods.
+- **Review fixes before the trial:** an investigation whose remaining steps all wait for its allowance is not "in progress" (it would otherwise hold every motivation's work until midnight); a row the actor held for the day (a daily cap) is not "ready" (it would otherwise outrank lower work all day); a follow-up is marked running before it is sent, and a plan Iyye already proposed for the same message is adopted, so a restart between the effect and its record never repeats it; a composer call that lost the MBP mid-way is recorded as preempted (it ran, charged as discarded), not withheld; the behaviour fingerprint covers the tracker, actor, ledger and investigations code too; `/motivation report` shows settled rows without an outcome (0) and an allowance overshoot.
+- **Replay** (`test/motivation-m4.test.ts`, 18): the outage (one notice, resolved uncredited, need decays, a restart keeps the smoothing); the recurring question (three fruitless attempts → suspended, kept across a restart, nine steps on the MBP charged); proposals (completed credited, cancelled and not approved declined, lapsed expired, the daily cap); follow-ups (quiet hours withheld once a day, no reply expired, the next held); a preempted composer call (nothing used, charged as discarded, retried later); the allowances (the pool, social never borrowing, the next day); one job at a time both ways; deterministic priority; self-authored text; every shadow Kev answer changed with no change in actions; `/forget` during a pending follow-up; the worker (a preempted step charged discarded, a queued step held by the allowance); the report and the trial periods; and the review fixes (an allowance-held investigation does not block social, a capped follow-up does not outrank, no repeat after a restart for a follow-up or a proposal, the MBP lost mid-call). The shadow-Kev scenario proves the shadow answer was read (its signal recorded) and changed nothing; the self-authored-text scenario has a positive control. Every scenario ends with the invariant that each settled row has an outcome.
+
+**Live trial** (5–7 days, the owner's): starts only after the replay passes. A trial period (`motivation.trial`) records its start and a fingerprint of the thresholds, weights, caps and budget; a changed fingerprint starts a new period. Daily: `/motivation report` and two or three `/motivation trace`s. Injected failures only on scratch installations. Too few real opportunities is insufficient coverage, not success.
+
+Trial protocol (for the owner):
+1. Restart the host with the M4 build; the log says `motivation: trial period` with its start and behaviour fingerprint. Change nothing that decides behaviour during the trial (no `IYYE2_PROPOSALS_DAILY`, `IYYE2_SOCIAL_*`, `IYYE2_INITIATIVE_BUDGET_MIN` or motivation threshold changes, no new build of `signals.ts`/`detectors.ts`): any such change starts a new period.
+2. Use Iyye normally. Do not stage outages on the live installation; rare failures are the replay's job.
+3. Each day: `/motivation report` (the period so far) and `/motivation report 1` (the day); `/motivation trace <id>` for two or three opportunities, checking the chain from evidence to outcome; `/motivation useful <id> yes|no` for what Iyye did on its own.
+4. Note anything that felt like nagging, a missing follow-through, or a message at a wrong time, with its opportunity id.
+5. After 5–7 days, the review against the closing conditions above; with too few opportunities, extend the trial rather than close M4. M4 closes only after the owner's review of the trial: no duplicate effects, permission expansion, scope leaks or cap violations; restarts preserved cooldowns, attempts and pending work; every settlement had a reason; need fell after its condition cleared; self-authored text gave no credit; the budget held; and enough observations to judge usefulness.
 
 Exit gate (HLD §15 #9, #10, #12, #16):
 - a sustained, evidenced need creates exactly one opportunity; its service settles it and need falls; a fruitless cluster is suspended across restarts;
@@ -233,3 +296,10 @@ Exit gate (HLD §15 #9, #10, #12, #16):
 6. **Self-model questions** to the owner: more than one a day, limited (default 3, §3.1).
 
 Still to settle in M0: the default shares (§7) and the social cap (3/day), from M0's shadow figures.
+
+Owner decisions for M4 (2026-10-10), after the Spark's records showed almost no initiative device time so far (one composer call in four days; fact extraction 2–4 min a day, not initiative):
+
+7. **Initiative budget:** 120 min of device time a day, split 40/30/30 (curiosity, agency, social).
+8. **Borrowing:** curiosity and agency may use each other's unused share; social never borrows.
+9. **Approved plans:** steps of a plan Iyye proposed count against no share once the owner approved it.
+10. **The MBP:** its device time counts against the shares like the Spark's.

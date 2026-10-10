@@ -68,7 +68,15 @@ import { loadRegistry, RegistryError } from "./models/registry.ts";
 import { addRemoteModel, RemoteConfigError, RemoteModels, secretFile } from "./models/remote.ts";
 import { pidAlive, RouterProcess } from "./models/router.ts";
 import { MotivationActor, motivationNamed } from "./motivation/actor.ts";
+import { InitiativeLedger, SHARES } from "./motivation/budget.ts";
 import { makeComposer } from "./motivation/compose.ts";
+import {
+	behaviourFingerprint,
+	ensureTrial,
+	markUseful,
+	motivationReport,
+	traceOpportunity,
+} from "./motivation/report.ts";
 import { recordServices } from "./motivation/services.ts";
 import { MotivationTracker } from "./motivation/tracker.ts";
 import { gitDomain, machineDomain } from "./observe/domains.ts";
@@ -411,6 +419,32 @@ async function main(): Promise<number> {
 			],
 		}),
 	});
+	// Plan 0.010 M4: initiative's allowances, one initiative job at a time, and its priority (read durable rows).
+	const ledger = new InitiativeLedger({
+		db,
+		budgetMin: config.self.initiativeBudgetMin,
+		rules: {
+			socialHours: config.self.socialHours,
+			proposalsPerDay: config.self.proposalsDaily,
+			socialPerDay: config.self.socialDailyMax,
+		},
+	});
+	// M4's trial period: a new one whenever what decides behaviour changed.
+	const trial = ensureTrial(
+		db,
+		behaviourFingerprint({
+			threshold: config.self.motivationThreshold,
+			sustain: config.self.motivationSustain,
+			sweepS: config.self.motivationSweepS,
+			proposalsDaily: config.self.proposalsDaily,
+			socialDailyMax: config.self.socialDailyMax,
+			socialHours: config.self.socialHours,
+			budgetMin: config.self.initiativeBudgetMin,
+			shares: SHARES,
+		}),
+		new Date(),
+	);
+	log.info("motivation: trial period", { since: trial.start, behaviour: trial.fingerprint });
 	const background = new BackgroundWorker({
 		db,
 		device,
@@ -423,6 +457,7 @@ async function main(): Promise<number> {
 		quietMs: config.backgroundQuietS * 1000,
 		gapMs: config.backgroundGapS * 1000,
 		energy: adenosine,
+		initiative: ledger,
 		onSettled: (job) => {
 			log.info("background: step settled", { id: job.id, origin: job.origin });
 			investigations.onStepSettled(job);
@@ -685,8 +720,10 @@ async function main(): Promise<number> {
 			background,
 			complete: routerComplete(modelUrl, 600),
 			energy: adenosine,
+			ledger,
 		}),
 		proposePlan: (p) => plans.proposePlan(p),
+		ledger,
 		sendMessage: iyyeMessenger({
 			db,
 			outbox: { sendOwn: (req) => outbox.sendOwn(req), notifyOwner: (req) => outbox.notifyOwner(req) },
@@ -740,7 +777,15 @@ async function main(): Promise<number> {
 		plans,
 		sentReport: () => sentReport(db),
 		self: selfModel,
-		motivationReport: () => motivation.report(),
+		motivationReport: (args: string[] = []) => {
+			const [sub, a, b] = args;
+			if (sub === "report")
+				return motivationReport(db, ledger, { now: new Date(), days: a ? Number(a) || null : null });
+			if (sub === "trace" && a) return traceOpportunity(db, a);
+			if (sub === "useful" && a && b) return markUseful(db, a, b, new Date());
+			if (sub) return "usage: /motivation [report [days] | trace <id> | useful <id> yes|no]";
+			return motivation.report();
+		},
 		facts: new FactsCommand({
 			db,
 			log,
@@ -846,6 +891,7 @@ async function main(): Promise<number> {
 		energy: adenosine,
 		mode: () => rhythm.mode(),
 		initiative: new InitiativeShadow({ client: decisionClient, device }),
+		ledger,
 		log,
 		sweepMs: config.sweepS * 1000,
 		curiosityPaused: () => actor.paused("curiosity"),

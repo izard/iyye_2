@@ -27,6 +27,8 @@
 import type { InitiativeShadow } from "../decisions/initiative.ts";
 import { HOST_NOTE_PREFIX } from "../integration/pi/context.ts";
 import type { Logger } from "../log.ts";
+import type { InitiativeLedger } from "../motivation/budget.ts";
+import { type EventKind, recordEvent, settleOpportunity } from "../motivation/outcomes.ts";
 import type { BackgroundJob } from "../state/background.ts";
 import type { Db } from "../state/db.ts";
 import { INVESTIGATION_DOMAIN } from "../state/observations.ts";
@@ -76,6 +78,8 @@ export interface InvestigationDeps {
 		initiativePaused(): boolean;
 	};
 	energy?: { backgroundAllowed(): boolean } | null;
+	/** M4: initiative's ledger (one job at a time across the actor, allowances, priority). */
+	ledger?: Pick<InitiativeLedger, "mayStart"> | null;
 	/**
 	 * Plan 0.010 M2: what memory holds on a conversation's topic, recalled by the host for the asker (the owner)
 	 * and given to the step as evidence. Background work never searches memory itself.
@@ -107,6 +111,7 @@ export class Investigations {
 		this.d = {
 			energy: null,
 			initiative: null,
+			ledger: null,
 			recall: null,
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
@@ -221,21 +226,14 @@ export class Investigations {
 			const question = questionFor(f.domain, f.change_text ?? "");
 			if (!question) continue;
 			const at = this.iso();
-			this.d.db
+			const id = this.d.newId();
+			const inserted = this.d.db
 				.prepare(
 					`INSERT OR IGNORE INTO opportunities (id, cluster, domain, evidence_json, evidence_text, question, status, created_at, updated_at)
 					 VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
 				)
-				.run(
-					this.d.newId(),
-					`observation:${f.id}`,
-					f.domain,
-					JSON.stringify([f.id]),
-					f.change_text,
-					question,
-					at,
-					at,
-				);
+				.run(id, `observation:${f.id}`, f.domain, JSON.stringify([f.id]), f.change_text, question, at, at);
+			if (inserted.changes > 0) this.event({ id }, "opened", "finding");
 		}
 	}
 
@@ -272,6 +270,12 @@ export class Investigations {
 			)
 			.get(this.d.maxFruitless, this.iso()) as Opportunity | undefined;
 		if (!o) return;
+		// M4: one initiative job at a time across the actor too, the allowance, and priority.
+		const why = this.d.ledger?.mayStart(o.id, this.d.now()) ?? null;
+		if (why) {
+			this.event(o, "withheld", why);
+			return;
+		}
 		let decisionId: string | null = null;
 		try {
 			decisionId =
@@ -304,6 +308,7 @@ export class Investigations {
 			session,
 			prompt: this.firstPrompt(o),
 		});
+		this.event(o, "attempted", `attempt ${attempt}`);
 		this.d.log.info("investigations: attempt started", { id: o.id, attempt });
 	}
 
@@ -336,7 +341,9 @@ export class Investigations {
 					 VALUES (?, '${INVESTIGATION_DOMAIN}', ?, ?, ?, 'threshold', ?)`,
 				)
 				.run(obsId, at, json, o.id, `${o.evidence_text} → ${answer.replace(/\s+/g, " ").slice(0, 400)}`);
-			this.update(o.id, { status: "settled", answer, finding_id: obsId, session: null });
+			this.update(o.id, { answer, finding_id: obsId, session: null });
+			// A grounded finding closes the question: resolved, and Iyye's own work did it (M4).
+			settleOpportunity(this.d.db, o.id, { outcome: "resolved", credited: true, at: this.d.now() });
 		})();
 		if (o.decision_id) this.d.initiative?.outcome(o.decision_id, true);
 		this.d.log.info("investigations: settled", { id: o.id });
@@ -345,14 +352,27 @@ export class Investigations {
 	private fruitless(o: Opportunity, why: string): void {
 		const fruitless = o.fruitless + 1;
 		this.update(o.id, {
-			status: fruitless >= this.d.maxFruitless ? "suspended" : "open",
+			status: "open",
 			fruitless,
 			session: null,
 			cooldown_until: new Date(this.d.now().getTime() + this.d.cooldownMs).toISOString(),
 			answer: null,
 		});
+		this.event(o, "fruitless", `attempt ${fruitless}: ${why.slice(0, 120)}`);
+		if (fruitless >= this.d.maxFruitless)
+			settleOpportunity(this.d.db, o.id, { outcome: "suspended", at: this.d.now() });
 		if (o.decision_id) this.d.initiative?.outcome(o.decision_id, false);
 		this.d.log.info("investigations: fruitless attempt", { id: o.id, fruitless, why });
+	}
+
+	private event(o: Pick<Opportunity, "id">, kind: EventKind, reason: string): void {
+		recordEvent(this.d.db, {
+			opportunityId: o.id,
+			motivation: "curiosity",
+			kind,
+			reason,
+			at: this.d.now(),
+		});
 	}
 
 	private get(id: string): Opportunity | undefined {

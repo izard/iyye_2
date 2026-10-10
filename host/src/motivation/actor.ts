@@ -63,7 +63,9 @@ import { accountsOf, type Contact, getContact, OWNER_CONTACT_ID, resolvePerson, 
 import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
 import { getPlan } from "../state/plans.ts";
+import type { InitiativeLedger } from "./budget.ts";
 import type { Composed } from "./compose.ts";
+import { type EventKind, type Outcome, recordEvent, settleOpportunity, type WithheldReason } from "./outcomes.ts";
 import { MOTIVATIONS, type Motivation, type Signal } from "./signals.ts";
 
 const PAUSED_KEY = "motivation.paused";
@@ -95,7 +97,15 @@ export interface ActorDeps {
 	/** A field is not asked about again within this long. */
 	sameFieldMs?: number;
 	/** M3: one model call under background work's rules (drafting a plan, composing a follow-up). */
-	compose?: ((label: string, system: string, user: string) => Promise<Composed>) | null;
+	compose?:
+		| ((
+				label: string,
+				system: string,
+				user: string,
+				motivation?: Motivation,
+				opportunityId?: string,
+		  ) => Promise<Composed>)
+		| null;
 	/** M3: propose a plan for the owner (`PlanRunner.proposePlan`). */
 	proposePlan?: ((p: Proposal) => { id: string | null; text: string }) | null;
 	/** M3: send a follow-up to a contact as Iyye on its own (`iyyeMessenger`). */
@@ -118,6 +128,8 @@ export interface ActorDeps {
 	suppressMs?: number;
 	/** An opening not acted on in this long lapses (the moment has passed). */
 	initiativeTtlMs?: number;
+	/** M4: one initiative job at a time, the allowances, and priority across the actor and investigations. */
+	ledger?: Pick<InitiativeLedger, "mayStart"> | null;
 }
 
 export interface Opening {
@@ -192,6 +204,7 @@ export class MotivationActor {
 			followUpWaitMs: 3 * 86_400_000,
 			suppressMs: 14 * 86_400_000,
 			initiativeTtlMs: 2 * 86_400_000,
+			ledger: null,
 			...deps,
 		};
 	}
@@ -247,9 +260,10 @@ export class MotivationActor {
 			if (this.paused(row.motivation)) continue;
 			try {
 				if (row.action_kind === "maintain") this.maintain(row);
-				else if (this.ownerBusy(now))
+				else if (this.ownerBusy(now)) {
+					this.event(row, "withheld", "owner busy");
 					break; // held while the owner is in a conversation
-				else if (row.action_kind === "notify") await this.notify(row, now);
+				} else if (row.action_kind === "notify") await this.notify(row, now);
 				else await this.ask(row, now);
 			} catch (err) {
 				this.d.log.warn("motivation: action failed", { id: row.id, error: (err as Error).message });
@@ -303,16 +317,21 @@ export class MotivationActor {
 						at,
 						o.signal.cluster,
 					);
+			const reopened = this.d.db
+				.prepare("SELECT id, motivation, status FROM opportunities WHERE cluster = ?")
+				.get(o.signal.cluster) as { id: string; motivation: Motivation; status: string } | undefined;
+			if (reopened?.status === "open" && old.status === "settled") this.event(reopened, "opened", o.signal.kind);
 			return;
 		}
-		this.d.db
+		const id = this.d.newId();
+		const inserted = this.d.db
 			.prepare(
 				`INSERT OR IGNORE INTO opportunities (id, cluster, domain, evidence_json, evidence_text, question, status, created_at, updated_at,
 					motivation, signal_kind, action_kind)
 				 VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)`,
 			)
 			.run(
-				this.d.newId(),
+				id,
 				o.signal.cluster,
 				o.motivation,
 				JSON.stringify(o.signal.evidence),
@@ -324,6 +343,7 @@ export class MotivationActor {
 				o.signal.kind,
 				action,
 			);
+		if (inserted.changes > 0) this.event({ id, motivation: o.motivation }, "opened", o.signal.kind);
 	}
 
 	/**
@@ -340,22 +360,15 @@ export class MotivationActor {
 		if (n >= this.d.investigationsPerDay) return;
 		const at = now.toISOString();
 		const topic = o.signal.text.replace(/^.*?did not know: /, "");
-		this.d.db
+		const id = this.d.newId();
+		const inserted = this.d.db
 			.prepare(
 				`INSERT OR IGNORE INTO opportunities (id, cluster, domain, evidence_json, evidence_text, question, status, created_at, updated_at,
 					motivation, signal_kind, action_kind)
 				 VALUES (?, ?, 'conversation', ?, ?, ?, 'open', ?, ?, 'curiosity', ?, 'investigate')`,
 			)
-			.run(
-				this.d.newId(),
-				o.signal.cluster,
-				JSON.stringify(o.signal.evidence),
-				o.signal.text,
-				topic,
-				at,
-				at,
-				o.signal.kind,
-			);
+			.run(id, o.signal.cluster, JSON.stringify(o.signal.evidence), o.signal.text, topic, at, at, o.signal.kind);
+		if (inserted.changes > 0) this.event({ id, motivation: "curiosity" }, "opened", o.signal.kind);
 	}
 
 	/** The condition cleared: the cluster is no longer among the signals. */
@@ -366,7 +379,7 @@ export class MotivationActor {
 			)
 			.all() as ActingRow[]) {
 			if (current.has(row.cluster)) continue;
-			this.update(row.id, { status: "settled", answer: `cleared at ${now.toISOString()}` });
+			this.settle(row.id, "resolved", `cleared at ${now.toISOString()}`);
 			// A question whose condition cleared another way (/self set, a belief no longer in doubt) frees the
 			// one-at-a-time slot at once, instead of waiting out its day.
 			this.d.db
@@ -387,11 +400,12 @@ export class MotivationActor {
 				.get(row.motivation, today) as { n: number }
 		).n;
 		if (sent >= this.d.noticesPerDay) {
-			this.update(row.id, { status: "settled", answer: "over the daily cap" });
+			this.settle(row.id, "capped", "over the daily cap");
 			return;
 		}
 		// The opening time is in the key: the outbox sends a key once, and a reopened row is a new notice.
 		await this.d.notifyOwner({ key: `motivation:${row.id}:${row.created_at}`, content: row.question });
+		this.event(row, "attempted", "notice", `notice:motivation:${row.id}:${row.created_at}`);
 		this.update(row.id, { status: "running" });
 		this.d.log.info("motivation: notified", { id: row.id, motivation: row.motivation, kind: row.signal_kind });
 	}
@@ -399,6 +413,7 @@ export class MotivationActor {
 	private maintain(row: ActingRow): void {
 		const model = row.cluster.slice("model:".length).split("@")[0]!;
 		const ok = this.d.retryModel?.(model) ?? false;
+		this.event(row, "attempted", ok ? `reload ${model}` : `not reloaded: ${model}`);
 		this.update(row.id, {
 			status: "running",
 			answer: ok ? `loading ${model} again` : `not reloaded (${model} is the owner's choice now)`,
@@ -417,9 +432,18 @@ export class MotivationActor {
 			)
 			.all() as ActingRow[];
 		for (const row of rows) {
-			if (this.paused(row.motivation)) continue;
+			if (this.paused(row.motivation)) {
+				this.event(row, "withheld", "paused");
+				continue;
+			}
 			if (now.getTime() - Date.parse(row.created_at) > this.d.initiativeTtlMs) {
-				this.update(row.id, { status: "settled", answer: "lapsed: the moment passed" });
+				this.settle(row.id, "expired", "lapsed: the moment passed");
+				continue;
+			}
+			const why = this.d.ledger?.mayStart(row.id, now) ?? null;
+			if (why) {
+				this.event(row, "withheld", why);
+				if (why === "another initiative job") return;
 				continue;
 			}
 			try {
@@ -434,21 +458,35 @@ export class MotivationActor {
 
 	/** A composed text, or null when it may not run now (left open) or failed (counted; settled after 3). */
 	private async compose(row: ActingRow, system: string, user: string): Promise<string | null> {
-		const r = await this.d.compose!(row.id.slice(0, 8), system, user);
+		const r = await this.d.compose!(row.id.slice(0, 8), system, user, row.motivation, row.id);
+		if ("notNow" in r && !r.ok) {
+			// Gave way to a person: the call ran and was discarded; otherwise it never started.
+			// It ran and was discarded (a person needed the device, the other machine was lost) or never started.
+			const ran = /gave way|was lost/.test(r.notNow);
+			this.event(
+				row,
+				ran ? "preempted" : "withheld",
+				ran && /was lost/.test(r.notNow) ? "model lost" : notNowReason(r.notNow),
+			);
+			return null;
+		}
+		this.event(row, "attempted", r.ok ? "compose" : "compose failed");
 		if (r.ok) return r.text;
-		if ("notNow" in r) return null;
 		const attempts = row.attempts + 1;
 		this.d.db
 			.prepare("UPDATE opportunities SET attempts = ?, updated_at = ? WHERE id = ?")
 			.run(attempts, this.iso(), row.id);
-		if (attempts >= 3)
-			this.update(row.id, { status: "settled", answer: `could not compose: ${r.error.slice(0, 200)}` });
+		if (attempts >= 3) this.settle(row.id, "failed", `could not compose: ${r.error.slice(0, 200)}`);
 		return null;
 	}
 
 	/** Agency: a plan for the owner's stated intention, proposed for their approval. Returns true if a model call was made. */
 	private async propose(row: ActingRow, now: Date): Promise<boolean> {
-		if (!this.d.proposePlan || this.ownerBusy(now)) return false;
+		if (!this.d.proposePlan) return false;
+		if (this.ownerBusy(now)) {
+			this.event(row, "withheld", "owner busy");
+			return false;
+		}
 		const today = startOfDay(now);
 		const made = (
 			this.d.db
@@ -457,10 +495,24 @@ export class MotivationActor {
 				)
 				.get(today) as { n: number }
 		).n;
-		if (made >= this.d.proposalsPerDay) return false;
+		if (made >= this.d.proposalsPerDay) {
+			this.event(row, "withheld", "daily cap");
+			return false;
+		}
 		const ep = this.episode(row.cluster);
 		if (!ep) {
-			this.update(row.id, { status: "settled", answer: "its message is gone" });
+			this.settle(row.id, "gone", "its message is gone");
+			return false;
+		}
+		// A plan Iyye already proposed for this message (the process died between the plan and this row, M4):
+		// adopted, never proposed twice.
+		const earlier = this.d.db
+			.prepare("SELECT id FROM plans WHERE created_event_id = ? AND proposed_via = ? LIMIT 1")
+			.get(ep.event_id, IYYE_PROPOSED_VIA) as { id: string } | undefined;
+		if (earlier) {
+			this.d.db
+				.prepare("UPDATE opportunities SET status = 'running', ref = ?, answer = ?, updated_at = ? WHERE id = ?")
+				.run(earlier.id, `proposed plan ${earlier.id.slice(0, 8)}`, this.iso(), row.id);
 			return false;
 		}
 		const raw = await this.compose(row, DRAFT_SYSTEM, draftInput(ep));
@@ -471,7 +523,7 @@ export class MotivationActor {
 			return true;
 		}
 		if (!draft.concrete) {
-			this.update(row.id, { status: "settled", answer: "nothing to plan: a passing remark, or already done" });
+			this.settle(row.id, "nothing", "nothing to plan: a passing remark, or already done");
 			return true;
 		}
 		if (draft.steps.length === 0) {
@@ -481,9 +533,8 @@ export class MotivationActor {
 				key,
 				content: `You said: ${JSON.stringify(ep.user_text.replace(/\s+/g, " ").slice(0, 200))}. If you want a reminder for it, tell me when: /remind <when> <text>.`,
 			});
-			this.d.db
-				.prepare("UPDATE opportunities SET status = 'settled', ref = ?, answer = ?, updated_at = ? WHERE id = ?")
-				.run(`notice:${key}`, "no step Iyye can do: suggested /remind", this.iso(), row.id);
+			this.d.db.prepare("UPDATE opportunities SET ref = ? WHERE id = ?").run(`notice:${key}`, row.id);
+			this.settle(row.id, "nothing", "no step Iyye can do: suggested /remind");
 			return true;
 		}
 		const r = this.d.proposePlan({
@@ -497,7 +548,7 @@ export class MotivationActor {
 			via: IYYE_PROPOSED_VIA,
 		});
 		if (!r.id) {
-			this.update(row.id, { status: "settled", answer: r.text.slice(0, 300) });
+			this.settle(row.id, "failed", r.text.slice(0, 300));
 			return true;
 		}
 		this.d.db
@@ -510,15 +561,21 @@ export class MotivationActor {
 	/** Social: ask a person how the event they mentioned went. Returns true if a model call was made. */
 	private async followUp(row: ActingRow, now: Date): Promise<boolean> {
 		const [from, to] = this.d.socialHours;
-		if (now.getHours() < from || now.getHours() >= to) return false;
+		if (now.getHours() < from || now.getHours() >= to) {
+			this.event(row, "withheld", "quiet hours");
+			return false;
+		}
 		const ep = this.episode(row.cluster);
 		const person = ep ? this.personOf(ep.scope) : null;
 		if (!ep || !person) {
-			this.update(row.id, { status: "settled", answer: "its message or its person is gone" });
+			this.settle(row.id, "gone", "its message or its person is gone");
 			return false;
 		}
 		const scopes = scopesOf(this.d.db, person);
-		if (person.kind === "owner" ? this.ownerBusy(now) : this.busy(scopes, now)) return false;
+		if (person.kind === "owner" ? this.ownerBusy(now) : this.busy(scopes, now)) {
+			this.event(row, "withheld", person.kind === "owner" ? "owner busy" : "person busy");
+			return false;
+		}
 		const today = startOfDay(now);
 		const started = (
 			this.d.db
@@ -527,7 +584,10 @@ export class MotivationActor {
 				)
 				.get(today) as { n: number }
 		).n;
-		if (started >= this.d.socialPerDay) return false;
+		if (started >= this.d.socialPerDay) {
+			this.event(row, "withheld", "daily cap");
+			return false;
+		}
 		// One conversation-starter per person at a time: while one waits for a reply, or was sent within a day,
 		// another is not started (two messages about one parcel are one event); one left unanswered holds the
 		// next for `suppressMs`.
@@ -537,14 +597,14 @@ export class MotivationActor {
 			.prepare(`${theirs} AND o.ref IS NOT NULL AND (o.status = 'running' OR o.attempt_started_at >= ?) LIMIT 1`)
 			.get(row.id, ...scopes, new Date(now.getTime() - 86_400_000).toISOString());
 		if (recent) {
-			this.update(row.id, { status: "settled", answer: "covered: Iyye asked them recently" });
+			this.settle(row.id, "covered", "covered: Iyye asked them recently");
 			return false;
 		}
 		const unanswered = this.d.db
 			.prepare(`${theirs} AND o.answer = 'no reply' AND o.updated_at >= ? LIMIT 1`)
 			.get(row.id, ...scopes, new Date(now.getTime() - this.d.suppressMs).toISOString());
 		if (unanswered) {
-			this.update(row.id, { status: "settled", answer: "held: the last follow-up to them had no reply" });
+			this.settle(row.id, "covered", "held: the last follow-up to them had no reply");
 			return false;
 		}
 		if (person.kind !== "owner" && !this.d.sendMessage) return false;
@@ -552,8 +612,10 @@ export class MotivationActor {
 		if (
 			person.kind !== "owner" &&
 			this.d.db.prepare("SELECT 1 FROM sent_messages WHERE dedup_key = ?").get(`iyye:${person.id}:${localDay(now)}`)
-		)
+		) {
+			this.event(row, "withheld", "daily cap");
 			return false;
+		}
 		const name = person.kind === "owner" ? null : person.display_name;
 		const raw = await this.compose(row, followUpSystem(name), followUpInput(ep));
 		if (raw === null) return true;
@@ -572,11 +634,26 @@ export class MotivationActor {
 				)
 				.run(`notice:${key}`, at, at, row.id);
 		} else {
+			// The intent first (M4): if the process dies after the send, the row is already running and the
+			// follow-up is never sent again (the messenger's own key is per day, so tomorrow would resend).
+			this.d.db
+				.prepare(
+					"UPDATE opportunities SET status = 'running', answer = 'sending', attempt_started_at = ?, updated_at = ? WHERE id = ?",
+				)
+				.run(at, at, row.id);
 			const sent = await this.d.sendMessage!(person.id, text, `iyye:social:${row.id}`);
 			if (!sent.sentId) {
 				// The daily bounds are a "not now"; anything else (no Telegram chat) settles it.
-				if (/already wrote|limit/.test(sent.text)) return true;
-				this.update(row.id, { status: "settled", answer: sent.text.slice(0, 200) });
+				if (/already wrote|limit/.test(sent.text)) {
+					this.d.db
+						.prepare(
+							"UPDATE opportunities SET status = 'open', answer = NULL, attempt_started_at = NULL WHERE id = ?",
+						)
+						.run(row.id);
+					this.event(row, "withheld", "daily cap");
+					return true;
+				}
+				this.settle(row.id, "failed", sent.text.slice(0, 200));
 				return true;
 			}
 			this.d.db
@@ -596,21 +673,22 @@ export class MotivationActor {
 			.all() as ActingRow[]) {
 			if (row.action_kind === "propose") {
 				const plan = row.ref ? getPlan(this.d.db, row.ref) : undefined;
-				if (!plan) this.update(row.id, { status: "settled", answer: "its plan is gone" });
-				else if (plan.state === "completed") this.update(row.id, { status: "settled", answer: "plan completed" });
-				else if (plan.state === "failed") this.update(row.id, { status: "settled", answer: "plan failed" });
+				if (!plan) this.settle(row.id, "gone", "its plan is gone");
+				else if (plan.state === "completed") this.settle(row.id, "resolved", "plan completed", true);
+				else if (plan.state === "failed") this.settle(row.id, "failed", "plan failed");
 				else if (plan.state === "abandoned")
-					this.update(row.id, {
-						status: "settled",
-						answer: plan.reason === "not approved" ? "declined: not approved" : "declined: cancelled",
-					});
+					this.settle(
+						row.id,
+						"declined",
+						plan.reason === "not approved" ? "declined: not approved" : "declined: cancelled",
+					);
 				continue;
 			}
 			const ep = this.episode(row.cluster);
 			const person = ep ? this.personOf(ep.scope) : null;
 			const sentAt = row.attempt_started_at ?? row.updated_at;
 			if (!person) {
-				this.update(row.id, { status: "settled", answer: "its person is gone" });
+				this.settle(row.id, "gone", "its person is gone");
 				continue;
 			}
 			const scopes = scopesOf(this.d.db, person);
@@ -619,9 +697,9 @@ export class MotivationActor {
 					`SELECT 1 FROM events WHERE scope IN (${scopes.map(() => "?").join(", ")}) AND received_at > ? AND status != 'dropped' LIMIT 1`,
 				)
 				.get(...scopes, sentAt);
-			if (replied) this.update(row.id, { status: "settled", answer: "replied" });
+			if (replied) this.settle(row.id, "resolved", "replied", true);
 			else if (now.getTime() - Date.parse(sentAt) >= this.d.followUpWaitMs)
-				this.update(row.id, { status: "settled", answer: "no reply" });
+				this.settle(row.id, "expired", "no reply");
 		}
 	}
 
@@ -630,7 +708,7 @@ export class MotivationActor {
 		this.d.db
 			.prepare("UPDATE opportunities SET attempts = ?, answer = ?, updated_at = ? WHERE id = ?")
 			.run(attempts, why.slice(0, 300), this.iso(), row.id);
-		if (attempts >= 3) this.update(row.id, { status: "settled" });
+		if (attempts >= 3) this.settle(row.id, "failed");
 	}
 
 	/** The STM entry an initiative cluster names ("intention:<event>", "event:<event>"). */
@@ -667,7 +745,7 @@ export class MotivationActor {
 	private async ask(row: ActingRow, now: Date): Promise<void> {
 		const field = fieldOf(row);
 		if (!field) {
-			this.update(row.id, { status: "settled", answer: "nothing to ask" });
+			this.settle(row.id, "nothing", "nothing to ask");
 			return;
 		}
 		// A relation the owner already stated in their own words is taken from there, not asked again.
@@ -684,17 +762,23 @@ export class MotivationActor {
 					"owner's own words (memory)",
 					now,
 				);
-				this.update(row.id, { status: "settled", answer: `filled from the owner's own words: ${relation}` });
+				this.settle(row.id, "resolved", `filled from the owner's own words: ${relation}`, true);
 				return;
 			}
 		}
 		const day = startOfDay(now);
 		const n = (q: string, ...p: string[]) => (this.d.db.prepare(q).get(...p) as { n: number }).n;
-		if (n("SELECT count(*) AS n FROM self_questions WHERE asked_at >= ?", day) >= this.d.questionsPerDay) return;
-		if (n("SELECT count(*) AS n FROM self_questions WHERE status IN ('asked', 'answered')") > 0) return; // one at a time
+		if (n("SELECT count(*) AS n FROM self_questions WHERE asked_at >= ?", day) >= this.d.questionsPerDay) {
+			this.event(row, "withheld", "daily cap");
+			return;
+		}
+		if (n("SELECT count(*) AS n FROM self_questions WHERE status IN ('asked', 'answered')") > 0) {
+			this.event(row, "withheld", "one question at a time");
+			return;
+		}
 		const recently = new Date(now.getTime() - this.d.sameFieldMs).toISOString();
 		if (n("SELECT count(*) AS n FROM self_questions WHERE field = ? AND asked_at >= ?", field, recently) > 0) {
-			this.update(row.id, { status: "settled", answer: "asked about recently" });
+			this.settle(row.id, "covered", "asked about recently");
 			return;
 		}
 		const id = this.d.newId();
@@ -705,6 +789,7 @@ export class MotivationActor {
 			)
 			.run(id, field, text, row.id, now.toISOString());
 		await this.d.notifyOwner({ key: `question:${id}`, content: text });
+		this.event(row, "attempted", "question", `notice:question:${id}`);
 		this.update(row.id, { status: "running" });
 		this.d.log.info("motivation: asked the owner", { field });
 	}
@@ -768,7 +853,13 @@ export class MotivationActor {
 		this.d.db
 			.prepare("UPDATE self_questions SET status = ?, settled_at = ? WHERE id = ?")
 			.run(status, now.toISOString(), q.id);
-		if (q.opportunity_id) this.update(q.opportunity_id, { status: "settled", answer: `question ${status}` });
+		if (q.opportunity_id)
+			this.settle(
+				q.opportunity_id,
+				status === "accepted" ? "resolved" : status === "dismissed" ? "declined" : "expired",
+				`question ${status}`,
+				status === "accepted",
+			);
 	}
 
 	/** `/self accept <id> [text]`: apply the answer (or the text given) to the self model. */
@@ -854,6 +945,22 @@ export class MotivationActor {
 				.get() as { at: string | null }
 		).at;
 		return last !== null && now.getTime() - Date.parse(last) < this.d.quietMs;
+	}
+
+	/** Settle with a structured outcome (M4); `credited` when Iyye's own action produced it. */
+	private settle(id: string, outcome: Outcome, answer?: string, credited = false): void {
+		settleOpportunity(this.d.db, id, { outcome, credited, answer: answer ?? null, at: this.d.now() });
+	}
+
+	private event(row: Pick<ActingRow, "id" | "motivation">, kind: EventKind, reason?: string, ref?: string): void {
+		recordEvent(this.d.db, {
+			opportunityId: row.id,
+			motivation: row.motivation,
+			kind,
+			reason: reason ?? null,
+			ref: ref ?? null,
+			at: this.d.now(),
+		});
 	}
 
 	private update(id: string, fields: { status?: string; answer?: string }): void {
@@ -1074,4 +1181,16 @@ export function forgetMotivationRecords(db: Db, clusters: readonly string[], red
 		if (kept.length !== signals.length)
 			db.prepare("UPDATE motivation_samples SET signals_json = ? WHERE id = ?").run(JSON.stringify(kept), s.id);
 	}
+}
+
+/** The withheld reason a composer's "not now" stands for (M4's report counts them). */
+export function notNowReason(why: string): WithheldReason | string {
+	if (/allowance/.test(why)) return "allowance";
+	if (/energy|adenosine|reserve/.test(why)) return "energy";
+	if (/not available|not loaded|no background model|lost|unreachable/.test(why)) return "model unavailable";
+	if (/another initiative/.test(why)) return "another initiative job";
+	if (/priority/.test(why)) return "higher priority";
+	if (/paused/.test(why)) return "paused";
+	if (/person|conversation|waiting|quiet/.test(why)) return "owner busy";
+	return why.slice(0, 80);
 }

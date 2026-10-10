@@ -62,6 +62,8 @@ export interface Config {
 		proposalsDaily: number;
 		socialDailyMax: number;
 		socialHours: [number, number];
+		/** Plan 0.010 M4: initiative's daily device-time budget in minutes (owner decision 7), split by §7's shares. */
+		initiativeBudgetMin: number;
 	};
 	/**
 	 * The fact ledger (plan 0.011): extraction during the day, the nightly merge into beliefs (and structured
@@ -289,6 +291,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			proposalsDaily: int(env, "IYYE2_PROPOSALS_DAILY", 2, 0, 20),
 			socialDailyMax: int(env, "IYYE2_SOCIAL_DAILY_MAX", 3, 0, 50),
 			socialHours: hours(env.IYYE2_SOCIAL_HOURS ?? "9-21"),
+			initiativeBudgetMin: int(env, "IYYE2_INITIATIVE_BUDGET_MIN", 120, 0, 1440),
 		},
 		facts: {
 			extract: env.IYYE2_FACTS_EXTRACT !== "0",
