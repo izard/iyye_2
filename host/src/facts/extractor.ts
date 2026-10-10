@@ -60,8 +60,9 @@ export function routerComplete(routerUrl: string | ((model: string) => string), 
 		// Only a finished answer with text counts: a body without one (`{}`) is no answer, never an empty one.
 		if (!choice || typeof choice.message?.content !== "string")
 			throw new Error("the model's response had no answer text");
-		if (choice.finish_reason != null && choice.finish_reason !== "stop")
-			throw new Error(`the answer ended with ${JSON.stringify(choice.finish_reason)}`);
+		// Only "stop" says the answer is finished (2026-10-10 review): a missing marker is no proof of it.
+		if (choice.finish_reason !== "stop")
+			throw new Error(`the answer ended with ${JSON.stringify(choice.finish_reason ?? null)}, not "stop"`);
 		return choice.message.content;
 	};
 }

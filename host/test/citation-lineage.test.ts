@@ -86,6 +86,18 @@ describe("citations are the host's", () => {
 			assert.equal(f.cited, null);
 			assert.equal(f.p, 0.4);
 		}
+		// The unit too: a result saying 12 MB does not carry 12 GB.
+		const mb = reply("You have 12 GB free.", [{ ...search, text: "Avail: 12 MB free" }]);
+		assert.equal(
+			one(mb, raw({ subject: "the disk", object: "12 GB free", quote: "You have 12 GB free", tool_ref: 1 })).cited,
+			null,
+		);
+		const gb = reply("You have 12 GB free.", [{ ...search, text: "Avail: 12G free" }]);
+		assert.match(
+			one(gb, raw({ subject: "the disk", object: "12 GB free", quote: "You have 12 GB free", tool_ref: 1 })).cited ??
+				"",
+			/^web_search/,
+		);
 		// "12" is not in "512", nor 12GB in a result that only says 512.
 		const disk = reply("You have 12 GB free.", [{ ...search, text: "Avail 512G" }]);
 		const d = one(

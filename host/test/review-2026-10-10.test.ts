@@ -195,6 +195,14 @@ describe("extraction", () => {
 			}
 			body = { choices: [{ message: { content: "x" }, finish_reason: "tool_calls" }] };
 			await assert.rejects(ask(), /ended with "tool_calls"/);
+			// No finish marker is no proof the answer is finished, not even for an empty one.
+			for (const b of [
+				{ choices: [{ message: { content: "" } }] },
+				{ choices: [{ message: { content: "" }, finish_reason: null }] },
+			]) {
+				body = b;
+				await assert.rejects(ask(), /ended with null, not "stop"/, JSON.stringify(b));
+			}
 			body = { choices: [{ message: { content: "" }, finish_reason: "stop" }] };
 			assert.equal(await ask(), "", "an intentional empty answer");
 		} finally {

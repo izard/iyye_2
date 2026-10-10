@@ -200,6 +200,26 @@ export function extractionInput(doc: ExtractionDoc): string {
 	return lines.join("\n");
 }
 
+/** A whole number (or decimal) and the word or sign right after it, if any: "12 gb", "5%", "1933". */
+const FIGURE = /(?<![\d.,])(\d+(?:[.,]\d+)?)(?![\d]|[.,]\d) ?([a-zа-яё%°]+)?/giu;
+
+function sameNumber(a: string, b: string): boolean {
+	return a.replace(",", ".") === b.replace(",", ".");
+}
+
+/** Byte units by their magnitude ("g", "gb", "gib" are one); other units as written, a plural "s" aside. */
+function unitKey(u: string): string {
+	const bytes = /^([kmgtp])(?:i?b)?$/i.exec(u);
+	if (bytes) return `bytes:${bytes[1]!.toLowerCase()}`;
+	return u.toLowerCase().replace(/s$/, "");
+}
+
+/** A value's unit against the result's: no unit on either side matches; otherwise they must be one unit. */
+function sameUnit(valueUnit: string | null, resultUnit: string | null): boolean {
+	if (!valueUnit || !resultUnit) return true;
+	return unitKey(valueUnit) === unitKey(resultUnit);
+}
+
 /** How much of each tool result the extraction model is shown. */
 const TOOL_EXCERPT_CHARS = 700;
 
@@ -211,9 +231,13 @@ const TOOL_EXCERPT_CHARS = 700;
 export function traceable(result: string, f: Pick<RawFact, "object" | "details">): boolean {
 	const text = ` ${normalizeText(result)} `;
 	const value = `${f.object} ${f.details ?? ""}`;
-	const figures = value.match(/\d+(?:[.,]\d+)?/g) ?? [];
-	if (figures.length)
-		return figures.every((n) => new RegExp(`(?<![\\d.,])${n.replace(/[.,]/, "[.,]")}(?![\\d]|[.,]\\d)`).test(text));
+	const figures = [...value.toLowerCase().matchAll(FIGURE)];
+	if (figures.length) {
+		// Each figure with its unit (2026-10-10 review: "12 MB free" carried "12 GB free"): the result must have
+		// the number as a whole number, followed by the same unit or by none.
+		const found = [...result.toLowerCase().replace(/\s+/g, " ").matchAll(FIGURE)];
+		return figures.every((m) => found.some((r) => sameNumber(r[1]!, m[1]!) && sameUnit(m[2] ?? null, r[2] ?? null)));
+	}
 	const words = normalizeText(f.object)
 		.split(/[^\p{L}]+/u)
 		.filter((w) => w.length >= 4);

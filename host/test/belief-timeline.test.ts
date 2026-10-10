@@ -9,6 +9,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import {
 	conflictsOf,
@@ -301,6 +302,37 @@ describe("Iyye, forgetting, backfill", () => {
 		assert.equal(ensureBeliefTimelines(db, NOW.toISOString()), 1);
 		assert.equal(JSON.stringify(db.prepare("SELECT * FROM belief_intervals ORDER BY belief_id, seq").all()), before);
 		assert.equal(ensureBeliefTimelines(db, NOW.toISOString()), 0, "once");
+	});
+
+	test("a legacy /facts confirm of an earlier value keeps a confirmation's meaning after the migration (035)", () => {
+		const db = openDb(":memory:");
+		say(db, "Berlin", "2026-01-01");
+		const munich = say(db, "Munich", "2026-05-01").beliefId!;
+		const berlin = idOf(db, "Berlin");
+		// What 033's backfill made of an owner confirmation of Berlin merged before it: a dated "correction".
+		db.prepare(
+			`INSERT INTO belief_evidence (id, belief_id, source, scope, modality, sign, source_p, weight, relation, night, at,
+				effective_at, said_at, effective_known)
+			 VALUES ('legacy-confirm', ?, 'owner', 'owner', 'stated', 1, 0.9, 1, 'correction', 'n', '2026-10-10T12:30:00.000Z',
+				'2026-10-10', '2026-10-10T12:30:00.000Z', 1)`,
+		).run(berlin);
+		db.prepare(
+			"UPDATE schema_migrations SET applied_at = '2026-10-10T12:40:51.980Z' WHERE name = '033_belief_intervals.sql'",
+		).run();
+		rebuildTimeline(db, KEY, "2026-10-10");
+		assert.equal(now(db), "Berlin", "the bug: the dated row reopened Berlin");
+		db.exec(readFileSync(new URL("../src/state/migrations/035_legacy_confirmations.sql", import.meta.url), "utf8"));
+		assert.equal(ensureBeliefTimelines(db, NOW.toISOString()), 1);
+		assert.equal(now(db), "Munich");
+		assert.deepEqual(
+			db.prepare("SELECT effective_at, effective_known FROM belief_evidence WHERE id = 'legacy-confirm'").get(),
+			{ effective_at: null, effective_known: 0 },
+		);
+		assert.equal(getBelief(db, munich)!.state, "current");
+		// A legacy correction that created its belief stays a correction (its first evidence).
+		assert.ok(
+			db.prepare("SELECT 1 FROM belief_evidence WHERE belief_id = ? AND effective_at IS NOT NULL").get(berlin),
+		);
 	});
 
 	test("evidence merged before the dates were kept is shown as approximate, never as known", async () => {
