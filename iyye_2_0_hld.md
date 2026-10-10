@@ -600,6 +600,8 @@ Exit gate: two installations with different evidence can develop different repea
 
 ### Stage 4 — nightly local decision learning
 
+Entry condition (plan 0.013 E6, 2026-10-10): `host/test/integrity-gate.test.ts` passes, and `/facts report` shows no key with two current values and no untraced citation.
+
 Deliver scope-safe label curation, grouped/time-aware held-out datasets, local LoRA/head training, calibration, model registry, shadow/canary evaluation, atomic activation, and rollback. Start with the single multitask decision adapter; add role-specific adapters/shared-base switching only after a measured benefit and isolation test. Nightly candidate generation does not require nightly promotion.
 
 Exit gate: a representative multi-night trial demonstrates useful held-out improvement or correctly rejects weak candidates; owner interruption meets its deadline; bad/missing artifacts cannot activate; forgotten sources deactivate affected adapters; the previous revision survives crash/training failure. Bounded automatic promotion is an explicit owner-enabled policy after this gate.

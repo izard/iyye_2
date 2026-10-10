@@ -70,10 +70,27 @@ export interface ExtractionDoc {
 	/** When it was said (ISO): relative dates resolve against it. */
 	at: string;
 	/**
-	 * For a reply: the host found a successful call to a world-reading tool in its turn. Only then may a source
-	 * the reply names make its facts "cited"; the extraction model's label alone never does.
+	 * For a reply: the successful tool results of its own turn (plan 0.013 E3), numbered for the model. A fact
+	 * is cited only when the host resolves the number the model gives to one of them and finds the fact's
+	 * figures or words in it; the model's word alone never cites.
 	 */
-	toolBacked?: boolean;
+	tools?: DocTool[];
+}
+
+/** One tool result of a reply's turn, as the extraction sees it. */
+export interface DocTool {
+	/** The number the model refers to it by (1, 2, …). */
+	ref: number;
+	/** `tool_calls.id`. */
+	id: string;
+	tool: string;
+	/**
+	 * True for a tool that observes the world (web, the machine, the repositories); false for another model's
+	 * answer (`ask_thinking_model`, `look_at_image`: owner decision 2), whose provenance is kept but which
+	 * gives no observation weight.
+	 */
+	observes: boolean;
+	text: string;
 }
 
 /** What the model returns for one fact (only text fields and two flags). */
@@ -88,8 +105,10 @@ export interface RawFact {
 	negated?: boolean;
 	/** The exact words of the source this fact was read from. */
 	quote: string;
-	/** For a reply: the source Iyye named for it (a web search, a measurement), or null. */
+	/** For a reply: the source Iyye named for it (a web search, a measurement), or null. Never trusted alone. */
 	source_named?: string | null;
+	/** For a reply: the number of the turn's tool result the fact was taken from, or null (plan 0.013 E3). */
+	tool_ref?: number | null;
 }
 
 /** A fact after the host's checks: the record of plan §3.1 without its evidence ids. */
@@ -109,6 +128,8 @@ export interface ExtractedFact {
 	negated: boolean;
 	quote: string;
 	cited: string | null;
+	/** The turn's tool result the fact was traced to (plan 0.013 E3): provenance, also for another model's answer. */
+	toolCallId: string | null;
 	key: string;
 	p: number;
 	/** Why it reaches only its speaker and the owner (plan §3.6), or null when it may be shared. */
@@ -153,7 +174,7 @@ export function extractionPrompt(kind: ExtractionDoc["kind"], predicates: "close
 				? [
 						"You extract facts from one reply Iyye, a personal assistant, gave to a person.",
 						"Extract only facts Iyye told them that later conversations may depend on: answers to their questions, figures, dates, names, and things Iyye confirmed it did or set up. A short answer is a fact too: extract its figure, date or name.",
-						'Each fact is what Iyye said, not proof of it. Add "source_named": the source the reply names for it ("web search", "a measurement", a site), or null.',
+						'Each fact is what Iyye said, not proof of it. Add "tool_ref": when the input lists tool results and the fact was taken from one of them, its number; otherwise null.',
 						"Ignore greetings, apologies, offers, questions back, and Iyye's statements about its own feelings.",
 					]
 				: [
@@ -171,7 +192,32 @@ export function extractionInput(doc: ExtractionDoc): string {
 		if (doc.asked) lines.push(`They had written: ${JSON.stringify(doc.asked.slice(0, 400))}`);
 	}
 	lines.push("Text:", doc.text);
+	if (doc.kind === "reply" && doc.tools?.length) {
+		lines.push("", "Tool results Iyye had in this turn (to say which one a fact was taken from):");
+		for (const t of doc.tools)
+			lines.push(`[${t.ref}] ${t.tool}: ${t.text.replace(/\s+/g, " ").slice(0, TOOL_EXCERPT_CHARS)}`);
+	}
 	return lines.join("\n");
+}
+
+/** How much of each tool result the extraction model is shown. */
+const TOOL_EXCERPT_CHARS = 700;
+
+/**
+ * Whether a tool result carries a fact (plan 0.013 E3): every figure of its value (as a whole number, with
+ * a unit only where the result has the same one or none), and, for a value without figures, one of its
+ * content words. Traceability, not truth (owner decision 2): the result may still say something else.
+ */
+export function traceable(result: string, f: Pick<RawFact, "object" | "details">): boolean {
+	const text = ` ${normalizeText(result)} `;
+	const value = `${f.object} ${f.details ?? ""}`;
+	const figures = value.match(/\d+(?:[.,]\d+)?/g) ?? [];
+	if (figures.length)
+		return figures.every((n) => new RegExp(`(?<![\\d.,])${n.replace(/[.,]/, "[.,]")}(?![\\d]|[.,]\\d)`).test(text));
+	const words = normalizeText(f.object)
+		.split(/[^\p{L}]+/u)
+		.filter((w) => w.length >= 4);
+	return words.some((w) => text.includes(w.slice(0, Math.max(4, w.length - 2))));
 }
 
 /** Parse the model's JSON lines (fences, a JSON array, or stray prose tolerated). */
@@ -481,7 +527,14 @@ export function processFacts(
 		const subjectRef = resolveSubject(f.subject, doc, people);
 		const modality: Modality = doc.kind === "reply" ? "told_by_iyye" : doc.kind === "finding" ? "measured" : "stated";
 		const source = doc.kind === "person" ? (doc.speakerId ?? "unknown") : doc.kind === "reply" ? "iyye" : "probe";
-		const cited = doc.kind === "reply" && doc.toolBacked === true ? f.source_named?.trim() || null : null;
+		// Plan 0.013 E3: a citation is the host's: the model's number must name a result of this turn that carries
+		// the fact; only an observation cites (owner decision 2), another model's answer is kept as provenance.
+		const result =
+			doc.kind === "reply" && typeof f.tool_ref === "number"
+				? doc.tools?.find((t) => t.ref === f.tool_ref)
+				: undefined;
+		const traced = result && traceable(result.text, f) ? result : undefined;
+		const cited = traced?.observes ? `${traced.tool} result ${traced.id.slice(0, 8)}` : null;
 		const timeFrame = (TIME_FRAMES as readonly string[]).includes(f.time_frame ?? "")
 			? (f.time_frame as TimeFrame)
 			: doc.kind === "finding"
@@ -509,6 +562,7 @@ export function processFacts(
 			negated: Boolean(f.negated),
 			quote: f.quote.trim(),
 			cited,
+			toolCallId: traced?.id ?? null,
 			key,
 			private: privateReason(f, doc.text),
 			p: prior(modality, {

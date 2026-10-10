@@ -27,6 +27,7 @@
  * and no argument that can widen what a tool reads.
  */
 
+import { createHash } from "node:crypto";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 import type { Logger } from "../log.ts";
@@ -253,6 +254,9 @@ export class ToolBroker {
 						result: result.slice(0, 2000),
 						started_at: startedAt,
 						finished_at: this.d.now().toISOString(),
+						// Plan 0.013 E3: the turn this result belongs to, from the host, and what the model saw.
+						event_id: budget.turn?.eventId ?? null,
+						result_hash: createHash("sha256").update(result).digest("hex"),
 					});
 					if (outcome !== "ok") this.d.log.warn(`tools: ${tool.name} ${outcome}`, { scope: ctx.scope, result });
 					return outcome === "ok"

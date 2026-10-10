@@ -33,7 +33,7 @@ import { getEvent } from "../state/events.ts";
 import { getKv, setKv } from "../state/kv.ts";
 import { IYYE_SCOPE } from "../state/stm.ts";
 import { isForgotten } from "../state/tombstones.ts";
-import { type Belief, getBelief, mergeFact } from "./beliefs.ts";
+import { type Belief, getBelief, mergeFact, rebuildAllTimelines } from "./beliefs.ts";
 import { factSentence } from "./extract.ts";
 import { type Complete, extractPendingAtNight } from "./extractor.ts";
 import type { StmFact } from "./store.ts";
@@ -182,6 +182,8 @@ export class FactNight {
 				});
 			}
 		}
+		// Plan 0.013 E1: a planned date that has come holds now (the merge itself only rebuilds the keys it touched).
+		rebuildAllTimelines(this.d.db, this.d.now().toISOString().slice(0, 10));
 		const toStore = this.d.db
 			.prepare("SELECT id FROM stm_facts WHERE state = 'merged' AND stored_at IS NULL ORDER BY said_at")
 			.all() as { id: string }[];

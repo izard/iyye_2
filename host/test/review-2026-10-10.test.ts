@@ -203,7 +203,7 @@ describe("extraction", () => {
 	});
 });
 
-test("the clock or another model's answer never makes a reply's source cited; a search does", () => {
+test("a reply's turn offers only its own observations and model answers; the clock never", () => {
 	const db = openDb(":memory:");
 	const at = (m: number) => new Date(T0.getTime() + m * 60_000).toISOString();
 	const episode = (id: string, said: number) =>
@@ -219,7 +219,7 @@ test("the clock or another model's answer never makes a reply's source cited; a 
 			said_at: at(said),
 			answered_at: at(said + 1),
 		}) as unknown as StmEpisode;
-	const call = (tool: string, m: number) =>
+	const call = (tool: string, m: number, eventId: string) =>
 		recordToolCall(db, {
 			id: newId(),
 			scope: "owner",
@@ -228,16 +228,20 @@ test("the clock or another model's answer never makes a reply's source cited; a 
 			toolkit: "t",
 			args_json: "{}",
 			outcome: "ok",
-			result: "x",
+			result: `${tool} result`,
 			started_at: at(m),
 			finished_at: at(m),
+			event_id: eventId,
 		});
-	call("current_time", 0);
-	call("ask_thinking_model", 0);
-	call("web_search", 10);
-	const backed = (e: StmEpisode) => docsFor(db, e).find((d) => d.doc.kind === "reply")?.doc.toolBacked;
-	assert.equal(backed(episode("e1", 0)), false);
-	assert.equal(backed(episode("e2", 10)), true);
+	call("current_time", 0, "e1");
+	call("ask_thinking_model", 0, "e1");
+	call("web_search", 0, "e2"); // another turn's search, in the same minute
+	const tools = (e: StmEpisode) =>
+		docsFor(db, e)
+			.find((d) => d.doc.kind === "reply")
+			?.doc.tools?.map((t) => `${t.ref} ${t.tool} ${t.observes}`);
+	assert.deepEqual(tools(episode("e1", 0)), ["1 ask_thinking_model false"]);
+	assert.deepEqual(tools(episode("e2", 0)), ["1 web_search true"]);
 });
 
 test("an investigation's figure is found only as a whole number", () => {

@@ -19,6 +19,10 @@
  *   one of Iyye's questions about an uncertain belief, plan 0.010 M2).
  * - `/facts private <id>`, `/facts share <id>` — override the host's privacy
  *   rules for one belief (plan §3.6).
+ * - `/facts why <id>` — why a belief exists (plan 0.013 E5): its ranges, each
+ *   piece of evidence, the structured fact and the message it came from, and
+ *   the tool result it was traced to.
+ * - `/facts report` — the ledger's integrity figures (plan 0.013 E6).
  */
 
 import type { FactRelation } from "../decisions/fact-relation.ts";
@@ -26,19 +30,22 @@ import type { Logger } from "../log.ts";
 import type { HindsightClient } from "../memory/hindsight.ts";
 import { getContact, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
+import { getEvent } from "../state/events.ts";
 import {
 	type Belief,
 	confirmBelief,
+	conflictsOf,
 	correctBelief,
 	deleteBelief,
 	evidenceOf,
 	getBelief,
+	intervalsOf,
 	searchBeliefs,
 } from "./beliefs.ts";
 import { isPrivate } from "./disclosure.ts";
 import { factSentence, normalizeTerm } from "./extract.ts";
 import { deleteQueuedFactDocs, queueFactDocDeletions } from "./night.ts";
-import { factsTodayReport } from "./store.ts";
+import { factsIntegrity, factsTodayReport, integrityReport } from "./store.ts";
 
 export interface FactsCommandDeps {
 	db: Db;
@@ -65,6 +72,8 @@ export class FactsCommand {
 		if (sub === "confirm") return this.confirm(rest[0] ?? "");
 		if (sub === "wrong") return this.wrong(rest[0] ?? "", by);
 		if (sub === "private" || sub === "share") return this.disclose(rest[0] ?? "", sub);
+		if (sub === "why" && rest.length === 1) return this.why(rest[0]!);
+		if (sub === "report" && rest.length === 0) return integrityReport(factsIntegrity(this.d.db));
 		return this.lookup(args.join(" "));
 	}
 
@@ -89,14 +98,89 @@ export class FactsCommand {
 
 	private describe(b: Belief): string {
 		const ev = evidenceOf(this.d.db, b.id);
-		const validity = b.valid_to ? `${b.valid_from} – ${b.valid_to}` : `since ${b.valid_from}`;
+		// Every range the value held (plan 0.013 E1); "~" marks a date that is only when it was received.
+		const ranges = intervalsOf(this.d.db, b.id);
+		const day = (d: string, approx: number) => `${approx ? "~" : ""}${d}`;
+		const validity = ranges.length
+			? ranges
+					.map((r) =>
+						r.valid_to
+							? `${day(r.valid_from, r.approximate)} – ${r.valid_to}`
+							: `since ${day(r.valid_from, r.approximate)}`,
+					)
+					.join(", ")
+			: b.valid_to
+				? b.valid_to === b.valid_from
+					? `never held (${b.valid_from})`
+					: `${b.valid_from} – ${b.valid_to}`
+				: b.state === "closed"
+					? `planned from ${b.valid_from}`
+					: `since ${b.valid_from}`;
+		const conflicts = conflictsOf(this.d.db, b);
 		return [
 			`${b.id.slice(0, 8)} [p ${b.p.toFixed(2)}, ${b.state}, ${validity}, ${isPrivate(this.d.db, b) ? "private" : "shareable with trusted contacts"}${b.disclosure ? " (your choice)" : ""}] ${factSentence({ ...b, negated: b.negated === 1 })}`,
 			...ev.map(
 				(e) =>
-					`    ${e.sign > 0 ? "+" : "−"} ${this.who(e.source)} (${e.modality}, ${e.relation}, p ${e.source_p.toFixed(2)}, weight ${e.weight}${e.private ? ", private" : ""}) ${e.at.slice(0, 10)}`,
+					`    ${e.sign > 0 ? "+" : "−"} ${this.who(e.source)} (${e.modality}, ${e.relation}, p ${e.source_p.toFixed(2)}, weight ${e.weight}${e.private ? ", private" : ""}) ${e.effective_at ? `from ${day(e.effective_at.slice(0, 10), e.effective_known === 0 ? 1 : 0)}, ` : ""}said ${(e.said_at ?? e.at).slice(0, 10)}`,
+			),
+			// Choosing one current value does not settle a disagreement (owner decision, plan 0.013).
+			...conflicts.map(
+				(c) =>
+					`    conflict: ${c.belief.object} (${c.belief.id.slice(0, 8)}, p ${c.belief.p.toFixed(2)}) from ${[...new Set(c.evidence.map((e) => this.who(e.source)))].join(", ")} for ${[...new Set(c.evidence.map((e) => e.effective_at!.slice(0, 10)))].join(", ")}`,
 			),
 		].join("\n");
+	}
+
+	/** `/facts why <id>` (plan 0.013 E5): the chain from the belief to what it rests on. Owner only. */
+	private why(ref: string): string {
+		const b = this.resolve(ref);
+		if (typeof b === "string") return b;
+		const db = this.d.db;
+		const lines = [this.describe(b).split("\n")[0]!];
+		for (const e of evidenceOf(db, b.id)) {
+			lines.push(
+				`  ${e.sign > 0 ? "supports" : "contradicts"} · ${this.who(e.source)} · ${e.relation} · weight ${e.weight}${e.effective_at ? ` · from ${e.effective_at.slice(0, 10)}${e.effective_known ? "" : " (approximate)"}` : ""} · said ${(e.said_at ?? e.at).slice(0, 16).replace("T", " ")}`,
+			);
+			if (!e.stm_fact_id) {
+				lines.push("      your own word (/facts correct or confirm)");
+				continue;
+			}
+			const f = db.prepare("SELECT * FROM stm_facts WHERE id = ?").get(e.stm_fact_id) as
+				| {
+						quote: string;
+						event_id: string;
+						scope: string;
+						modality: string;
+						cited: string | null;
+						tool_call_id: string | null;
+				  }
+				| undefined;
+			if (!f) {
+				lines.push("      its structured fact is gone (forgotten or deleted)");
+				continue;
+			}
+			lines.push(`      quote: ${JSON.stringify(f.quote.slice(0, 200))} (${f.modality}, ${f.scope})`);
+			const ev = getEvent(db, f.event_id);
+			if (ev)
+				lines.push(
+					`      message ${f.event_id.slice(0, 8)} on ${ev.channel}, ${ev.received_at.slice(0, 16).replace("T", " ")}`,
+				);
+			if (f.tool_call_id) {
+				const t = db
+					.prepare("SELECT tool, started_at, result, result_hash FROM tool_calls WHERE id = ?")
+					.get(f.tool_call_id) as
+					| { tool: string; started_at: string; result: string | null; result_hash: string | null }
+					| undefined;
+				lines.push(
+					t
+						? `      ${f.cited ? "cited" : "taken from (another model's answer: no observation weight)"}: ${t.tool} at ${t.started_at.slice(0, 16).replace("T", " ")}${t.result_hash ? `, result ${t.result_hash.slice(0, 12)}` : ""}: ${JSON.stringify((t.result ?? "").replace(/\s+/g, " ").slice(0, 160))}`
+						: "      its tool result is gone",
+				);
+			} else if (f.modality === "told_by_iyye")
+				lines.push("      Iyye's own words, traced to no tool result: not evidence");
+		}
+		lines.push("Traced means where a claim came from, not that it is true.");
+		return lines.join("\n");
 	}
 
 	private who(source: string): string {
@@ -162,7 +246,16 @@ export class FactsCommand {
 			?.labelCorrection(r.old, text.trim(), normalizeTerm(text) === r.old.object_norm, now.toISOString())
 			.catch(() => null);
 		const nb = getBelief(this.d.db, r.newId)!;
-		return `noted: ${factSentence({ ...nb, negated: nb.negated === 1 })} (p ${nb.p.toFixed(2)}); the old value is ${getBelief(this.d.db, b.id)?.state === "closed" ? "closed, kept as history" : "contradicted"}`;
+		if (r.already)
+			return `already current: ${factSentence({ ...nb, negated: nb.negated === 1 })}; your word confirms it (p ${nb.p.toFixed(2)})`;
+		const old = getBelief(this.d.db, b.id);
+		return `noted: ${factSentence({ ...nb, negated: nb.negated === 1 })} (p ${nb.p.toFixed(2)}), from today; ${
+			r.newId === b.id
+				? "it holds again"
+				: old?.state === "closed"
+					? "the old value is closed, kept as history"
+					: "the old value is contradicted"
+		}`;
 	}
 
 	/** `/facts private|share <id>`: the owner's override of the host's privacy rules (plan §3.6). */

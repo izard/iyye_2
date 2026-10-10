@@ -117,7 +117,19 @@ export function beliefLine(db: Db, b: Belief, evidence: readonly Evidence[], rea
 	};
 	const sources = [...new Set(evidence.map(who))].slice(0, 3).join(", ");
 	const latest = evidence.reduce((x, e) => (e.at > x ? e.at : x), evidence[0]!.at);
-	const validity = b.state === "closed" && b.valid_to ? ` (until ${b.valid_to})` : "";
+	// Plan 0.013 E1: a value that never held (a same-date value that lost) is disputed, not past history; a
+	// value from a date still to come is planned, not holding.
+	const today = now.toISOString().slice(0, 10);
+	const validity =
+		b.state !== "closed"
+			? ""
+			: b.valid_to && b.valid_to === b.valid_from
+				? " (disputed: another value was given for the same time)"
+				: b.valid_to
+					? ` (until ${b.valid_to})`
+					: b.valid_from > today
+						? ` (from ${b.valid_from}, not yet)`
+						: "";
 	return `[${label} ${b.p.toFixed(2)} · ${sources} · ${ago(latest, now)}] ${factSentence({ ...b, negated: b.negated === 1 })}${validity}`;
 }
 

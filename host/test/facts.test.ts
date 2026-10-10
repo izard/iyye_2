@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { DecisionClient } from "../src/decisions/client.ts";
 import { FACT_RELATION, FactRelation } from "../src/decisions/fact-relation.ts";
-import { evidenceOf, foldP, getBelief, mergeFact, searchBeliefs } from "../src/facts/beliefs.ts";
+import { conflictsOf, evidenceOf, foldP, getBelief, mergeFact, searchBeliefs } from "../src/facts/beliefs.ts";
 import { FactsCommand } from "../src/facts/commands.ts";
 import {
 	type ExtractionDoc,
@@ -379,9 +379,10 @@ describe("F1: extraction, grounding and priors", () => {
 			toolkit: "web",
 			args_json: "{}",
 			outcome: "ok",
-			result: "…",
+			result: "Ivan Bunin was awarded the Nobel Prize in Literature in 1933.",
 			started_at: searched.toISOString(),
 			finished_at: searched.toISOString(),
+			event_id: "e2",
 		});
 		const reply = scripted({
 			"Bunin won": [
@@ -390,7 +391,7 @@ describe("F1: extraction, grounding and priors", () => {
 					predicate: "other: won",
 					object: "the Nobel Prize in 1933",
 					quote: "Bunin won the Nobel Prize in 1933",
-					source_named: "web search",
+					tool_ref: 1,
 				}),
 			],
 		});
@@ -427,6 +428,7 @@ describe("F1: extraction, grounding and priors", () => {
 					object: "the Nobel Prize in 1958",
 					quote: "Pasternak won the Nobel Prize in 1958",
 					source_named: "verified web search",
+					tool_ref: 1,
 				}),
 			],
 		});
@@ -659,12 +661,17 @@ describe("F2: beliefs and the nightly merge", () => {
 			}),
 			opts(),
 		);
-		assert.equal(hamburg.relation, "new");
+		// Plan 0.013 decision 1: for the same date the later-said value holds, and the disagreement stays visible.
+		assert.equal(hamburg.relation, "changes");
 		assert.deepEqual(
 			hamburg.touched.map((t) => t.how),
-			["contradicts"],
+			["contradicts", "changes"],
 		);
 		assert.ok(getBelief(db, munich.beliefId!)!.p < 0.9);
+		assert.deepEqual(
+			conflictsOf(db, getBelief(db, hamburg.beliefId!)!).map((c) => c.belief.object),
+			["a suburb of Munich"],
+		);
 		// A negation contradicts the same value.
 		const k2 = "contact:julia|likes";
 		const likes = mergeFact(
@@ -1175,7 +1182,7 @@ describe("F2: beliefs and the nightly merge", () => {
 				newId,
 			});
 			const reply = await cmd.command(["correct", b.beliefId!.slice(0, 8), "12"], "owner_web");
-			assert.match(reply, /noted: jacob's age is 12 \(p 0\.90\); the old value is closed/);
+			assert.match(reply, /noted: jacob's age is 12 \(p 0\.90\), from today; the old value is closed/);
 			await waitFor(
 				() =>
 					Boolean(
@@ -1233,7 +1240,10 @@ describe("F2: beliefs and the nightly merge", () => {
 				}),
 				opts("n3"),
 			);
-			assert.equal(later.relation, "new", "new, independent evidence may raise it again");
+			// New, independent evidence may raise it again: a new belief, and (said later the same date) it holds now.
+			assert.equal(later.relation, "changes");
+			assert.notEqual(later.beliefId, twelve.id);
+			assert.equal(getBelief(db, b.beliefId!)!.state, "closed");
 			assert.match(await cmd.command(["jacob"], "owner_web"), /jacob's age is 12/);
 		});
 	});

@@ -32,6 +32,7 @@ import { ReplyReviewShadow } from "./decisions/reply-review.ts";
 import { decisionsReport, labelDecision, roleReport } from "./decisions/report.ts";
 import { DecisionService } from "./decisions/service.ts";
 import { ToolkitSelectionShadow, ToolkitSelector } from "./decisions/toolkit-selection.ts";
+import { auditUntracedCitations, ensureBeliefTimelines } from "./facts/beliefs.ts";
 import { FactsCommand } from "./facts/commands.ts";
 import { FactExtractor, routerComplete } from "./facts/extractor.ts";
 import { FactNight } from "./facts/night.ts";
@@ -126,6 +127,12 @@ async function main(): Promise<number> {
 	if (!acquireHostLock(config.stateDir, log)) return 3;
 
 	const db = openDb(join(config.stateDir, "iyye.db"));
+	// Plan 0.013 E1: belief date ranges, rebuilt once from the evidence (migration 033 dated it).
+	const timelines = ensureBeliefTimelines(db, new Date().toISOString());
+	if (timelines > 0) log.info("facts: belief date ranges built", { keys: timelines });
+	// Plan 0.013 E3: citations stored before they were traced to a tool result count as uncited.
+	const untraced = auditUntracedCitations(db, new Date().toISOString());
+	if (untraced > 0) log.info("facts: untraced citations marked uncited", { facts: untraced });
 	const remoteDir = config.remote.model ? join(config.stateDir, "remote", config.remote.model.endpoint) : null;
 	const remote =
 		config.remote.model && remoteDir

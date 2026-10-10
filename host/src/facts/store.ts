@@ -25,7 +25,8 @@ import { getEvent } from "../state/events.ts";
 import { isInvestigationEntry } from "../state/observations.ts";
 import { IYYE_SCOPE, type StmEpisode, stmQuery } from "../state/stm.ts";
 import { isForgotten } from "../state/tombstones.ts";
-import { type ExtractedFact, type ExtractionDoc, factSentence, type KnownPerson } from "./extract.ts";
+import { conflictsOf, getBelief } from "./beliefs.ts";
+import { type DocTool, type ExtractedFact, type ExtractionDoc, factSentence, type KnownPerson } from "./extract.ts";
 
 export interface FactDoc {
 	docId: string;
@@ -77,11 +78,10 @@ export function knownPeople(db: Db): KnownPerson[] {
 }
 
 /**
- * Tools whose results are evidence about the world, for a reply's citations (2026-10-10 review: a source the
- * extraction model named was taken as cited without any). Memory, reminders, plans and messages are not, nor
- * the clock (it supports no other fact) or another model's answer (a model's words, not an observation).
+ * Tools whose results observe the world (plan 0.013 E3). The clock is none of them (it supports no other
+ * fact); memory, reminders, plans and messages are Iyye's own records.
  */
-const WORLD_TOOLS = [
+const OBSERVATION_TOOLS = [
 	"web_search",
 	"web_fetch",
 	"system_status",
@@ -90,20 +90,26 @@ const WORLD_TOOLS = [
 	"git_status",
 	"read_file",
 	"list_dir",
-	"look_at_image",
 ];
+/** Another model's answer (owner decision 2): kept as provenance, never an observation. */
+const MODEL_TOOLS = ["ask_thinking_model", "look_at_image"];
 
-/** Whether the turn behind a reply read the world through a tool (a successful call between message and reply). */
-function toolBacked(db: Db, e: StmEpisode): boolean {
-	if (!e.answered_at) return false;
-	return Boolean(
-		db
-			.prepare(
-				`SELECT 1 FROM tool_calls WHERE scope = ? AND outcome = 'ok' AND started_at >= ? AND started_at <= ?
-				 AND tool IN (${WORLD_TOOLS.map(() => "?").join(", ")}) LIMIT 1`,
-			)
-			.get(e.scope, e.said_at, e.answered_at, ...WORLD_TOOLS),
-	);
+/** The successful tool results of a reply's own turn, by the event the host recorded with each call. */
+function turnTools(db: Db, e: StmEpisode): DocTool[] {
+	const tools = [...OBSERVATION_TOOLS, ...MODEL_TOOLS];
+	const rows = db
+		.prepare(
+			`SELECT id, tool, result FROM tool_calls WHERE event_id = ? AND outcome = 'ok' AND result IS NOT NULL
+			 AND tool IN (${tools.map(() => "?").join(", ")}) ORDER BY started_at, rowid LIMIT 8`,
+		)
+		.all(e.event_id, ...tools) as { id: string; tool: string; result: string }[];
+	return rows.map((r, i) => ({
+		ref: i + 1,
+		id: r.id,
+		tool: r.tool,
+		observes: OBSERVATION_TOOLS.includes(r.tool),
+		text: r.result,
+	}));
 }
 
 /** The documents of one STM entry that facts are extracted from (none for entries that are not evidence). */
@@ -142,7 +148,7 @@ export function docsFor(db: Db, e: StmEpisode): FactDoc[] {
 				recipient: who.speaker,
 				asked: e.user_text,
 				at: e.answered_at ?? e.said_at,
-				toolBacked: toolBacked(db, e),
+				tools: turnTools(db, e),
 			},
 		});
 	return out;
@@ -219,8 +225,8 @@ export function recordExtraction(
 		}
 		const insert = db.prepare(
 			`INSERT INTO stm_facts (id, doc_id, event_id, scope, modality, source, subject, subject_ref, predicate, object,
-				details, valid_from, time_frame, hedged, negated, quote, cited, fact_key, p, said_at, created_at, private)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				details, valid_from, time_frame, hedged, negated, quote, cited, fact_key, p, said_at, created_at, private, tool_call_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		);
 		const fts = db.prepare("INSERT INTO stm_facts_fts (fact_id, scope, body) VALUES (?, ?, ?)");
 		for (const f of r.kept) {
@@ -248,6 +254,7 @@ export function recordExtraction(
 				d.doc.at,
 				r.at,
 				f.private ? 1 : 0,
+				f.toolCallId,
 			);
 			fts.run(id, d.episode.scope, `${factSentence(f)}\n${f.quote}`);
 		}
@@ -359,5 +366,62 @@ export function factsTodayReport(db: Db, limit = 12): string {
 			(f) =>
 				`  ${f.id.slice(0, 8)} [${f.modality}, ${f.source === OWNER_CONTACT_ID ? "owner" : f.source}, p ${f.p.toFixed(2)}] ${factSentence({ ...f, negated: f.negated === 1 })}`,
 		),
+	].join("\n");
+}
+
+/** The ledger's integrity figures (plan 0.013 E6): `/facts report` and the fixed integrity test. */
+export interface FactsIntegrity {
+	documents: { done: number; failed: number; givenUp: number; skipped: number };
+	relays: { cited: number; uncited: number; citedUntraced: number };
+	/** Single-valued keys with more than one value current: always 0. */
+	keysWithTwoCurrent: number;
+	/** Current values with competing evidence where they hold. */
+	conflicts: number;
+	beliefs: number;
+}
+
+export function factsIntegrity(db: Db): FactsIntegrity {
+	const one = <T>(sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as T;
+	const docs = one<{ done: number; failed: number; given_up: number; skipped: number }>(
+		`SELECT count(*) FILTER (WHERE status = 'done') AS done, count(*) FILTER (WHERE status = 'failed' AND attempts < ?) AS failed,
+			count(*) FILTER (WHERE status = 'failed' AND attempts >= ?) AS given_up, count(*) FILTER (WHERE status = 'skipped') AS skipped
+		 FROM fact_extractions`,
+		MAX_ATTEMPTS,
+		MAX_ATTEMPTS,
+	);
+	const relays = one<{ cited: number; uncited: number; untraced: number }>(
+		`SELECT count(*) FILTER (WHERE cited IS NOT NULL) AS cited, count(*) FILTER (WHERE cited IS NULL) AS uncited,
+			count(*) FILTER (WHERE cited IS NOT NULL AND tool_call_id IS NULL) AS untraced
+		 FROM stm_facts WHERE modality = 'told_by_iyye'`,
+	);
+	const twoCurrent = one<{ n: number }>(
+		`SELECT count(*) AS n FROM (SELECT b.fact_key FROM beliefs b JOIN belief_intervals i ON i.belief_id = b.id
+		 WHERE i.valid_to IS NULL GROUP BY b.fact_key HAVING count(*) > 1)`,
+	).n;
+	const current = db.prepare("SELECT id FROM beliefs WHERE state = 'current'").all() as { id: string }[];
+	const conflicts = current.filter((r) => {
+		const b = getBelief(db, r.id);
+		return b !== null && conflictsOf(db, b).length > 0;
+	}).length;
+	return {
+		documents: {
+			done: docs.done ?? 0,
+			failed: docs.failed ?? 0,
+			givenUp: docs.given_up ?? 0,
+			skipped: docs.skipped ?? 0,
+		},
+		relays: { cited: relays.cited ?? 0, uncited: relays.uncited ?? 0, citedUntraced: relays.untraced ?? 0 },
+		keysWithTwoCurrent: twoCurrent,
+		conflicts,
+		beliefs: one<{ n: number }>("SELECT count(*) AS n FROM beliefs").n,
+	};
+}
+
+export function integrityReport(i: FactsIntegrity): string {
+	return [
+		"fact ledger integrity (plan 0.013):",
+		`  documents: ${i.documents.done} done, ${i.documents.failed} failed (to retry), ${i.documents.givenUp} given up, ${i.documents.skipped} skipped (forgotten)`,
+		`  Iyye's words: ${i.relays.cited} cited (traced to a tool result), ${i.relays.uncited} uncited${i.relays.citedUntraced ? `, ${i.relays.citedUntraced} cited but untraced (should be 0)` : ""}`,
+		`  beliefs: ${i.beliefs}; current values with a conflict: ${i.conflicts}; keys with two current values: ${i.keysWithTwoCurrent}${i.keysWithTwoCurrent ? " (should be 0)" : ""}`,
 	].join("\n");
 }

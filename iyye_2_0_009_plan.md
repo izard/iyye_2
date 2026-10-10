@@ -1,5 +1,6 @@
 # Iyye 2.0.009 — Stage 3, Developing Character: Rough Plan
 
+- Entry condition (plan 0.013 E6, 2026-10-10): `test/integrity-gate.test.ts` passes and `/facts report` shows no key with two current values and no untraced citation.
 - Status (2026-10-05): **rough draft; owner decisions on the voice in §6; nothing built. Comes after plan 0.010 (motivations), which it builds on (owner decision, 2026-10-05).** Starts after M8 has produced a few real days of records (the evidence character learns from). Owner requirement: one part is **a separate, tunable small model that only rephrases outputs according to character and mood**.
 - Design source: [`iyye_2_0_hld.md`](iyye_2_0_hld.md) §4 (stable identity, developing character, prompt composition), §5.2 (motivations), §6.4 (relationship context), §8.2 (adenosine), §9.3 (models are replaceable, character persists), §10 (learning), §11 (a recognizable day, reinforcement with damping), §14 Stage 3, §15 #12, #13, #15.
 - Builds on: adenosine (0.007 S2), the day summary and night (0.002, 0.007 S3), Kev and the decision journal (0.003), outcome records (receipts, commitments, findings, plans, `/sent`), `/forget` and tombstones.
