@@ -108,13 +108,19 @@ export function countsFor(db: Db, m: Motivation, since: string): Counts {
 			kind,
 			since,
 		).n;
+	// Every settlement is its own journal record ("resolved (credited)"): a reopened opportunity's earlier
+	// episode keeps its outcome, and its new one is counted only once it settles.
 	const outcomes: Record<string, number> = {};
-	for (const r of all<{ outcome: string; n: number }>(
-		"SELECT outcome, count(*) AS n FROM opportunities WHERE motivation = ? AND outcome IS NOT NULL AND updated_at >= ? GROUP BY outcome",
+	let credited = 0;
+	for (const r of all<{ reason: string; n: number }>(
+		"SELECT reason, count(*) AS n FROM motivation_events WHERE motivation = ? AND kind = 'settled' AND at >= ? GROUP BY reason",
 		m,
 		since,
-	))
-		outcomes[r.outcome] = r.n;
+	)) {
+		const outcome = r.reason.replace(/ \(credited\)$/, "");
+		outcomes[outcome] = (outcomes[outcome] ?? 0) + r.n;
+		if (outcome !== r.reason) credited += r.n;
+	}
 	const withheld: Record<string, number> = {};
 	for (const r of all<{ reason: string; n: number }>(
 		"SELECT reason, count(*) AS n FROM motivation_events WHERE motivation = ? AND kind = 'withheld' AND at >= ? GROUP BY reason",
@@ -152,11 +158,7 @@ export function countsFor(db: Db, m: Motivation, since: string): Counts {
 		opened: ev("opened"),
 		attempted: ev("attempted"),
 		outcomes,
-		credited: one<{ n: number }>(
-			"SELECT count(*) AS n FROM opportunities WHERE motivation = ? AND credited = 1 AND updated_at >= ?",
-			m,
-			since,
-		).n,
+		credited,
 		withheld,
 		preempted: ev("preempted"),
 		discardedMs: device.discarded,

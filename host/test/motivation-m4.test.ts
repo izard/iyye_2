@@ -76,11 +76,34 @@ function turn(db: Db, o: { id: string; who: "owner" | "jacob"; text: string; rep
 	recordEpisode(db, getEvent(db, o.id)!, { id: `a-${o.id}`, content: o.reply ?? "OK." }, at);
 }
 
+/** A sent message as the messenger records it: its row, then its outbox action in `state`. */
+function recordSend(db: Db, o: { opportunityId: string; text: string; at: Date; state?: string | null }): string {
+	const id = `sent-${crypto.randomUUID().slice(0, 8)}`;
+	db.prepare(
+		"INSERT INTO sent_messages (id, dedup_key, recipient_contact_id, scope, route_json, text, requested_via, requested_by, requester_scope, created_at) VALUES (?, ?, 'jacob', 'contact:jacob', '{}', ?, 'background', 'iyye', ?, ?)",
+	).run(id, `iyye:jacob:${id}`, o.text, `iyye:social:${o.opportunityId}`, o.at.toISOString());
+	if (o.state === null) return id;
+	db.prepare(
+		"INSERT INTO actions (id, kind, route_json, content_hash, idempotency_key, state, created_at) VALUES (?, 'status', '{}', 'h', ?, ?, ?)",
+	).run(`act-${id}`, `notice:send:${id}`, o.state ?? "delivered", o.at.toISOString());
+	db.prepare("UPDATE sent_messages SET action_id = ? WHERE id = ?").run(`act-${id}`, id);
+	return id;
+}
+
 /** The full chain on one database: ledger, composer (real), actor, tracker, plans, investigations. */
 function stack(
 	db: Db,
 	clock: { t: Date },
-	o: { answers?: string[]; budgetMin?: number; yieldAfter?: () => string | null; composeMs?: number } = {},
+	o: {
+		answers?: string[];
+		budgetMin?: number;
+		yieldAfter?: () => string | null;
+		composeMs?: number;
+		/** Runs while the model call is pending (a person writes, the owner forgets someone). */
+		during?: () => void;
+		/** The outbox state a sent follow-up ends in. */
+		delivery?: string;
+	} = {},
 ) {
 	const answers = [...(o.answers ?? [])];
 	const sent = { notices: [] as { key: string; content: string }[], messages: [] as string[] };
@@ -92,6 +115,7 @@ function stack(
 		background: { blockedReason: () => null, yieldReason: () => o.yieldAfter?.() ?? null },
 		complete: async (_m, _s, _u, signal) => {
 			clock.t = new Date(clock.t.getTime() + (o.composeMs ?? 30_000)); // the call takes device time
+			o.during?.();
 			await new Promise((r) => setTimeout(r, 5));
 			if (signal.aborted) throw new Error("aborted");
 			return answers.shift() ?? "{}";
@@ -118,9 +142,10 @@ function stack(
 		newId,
 		compose: composer,
 		proposePlan: (p) => plans.proposePlan(p),
-		sendMessage: async (_p, text) => {
+		sendMessage: async (_p, text, via) => {
 			sent.messages.push(text);
-			return { text: "sent", sentId: `sent-${sent.messages.length}`, state: "delivered" };
+			const id = recordSend(db, { opportunityId: via.split(":").at(-1)!, text, at: clock.t, state: o.delivery });
+			return { text: "sent", sentId: id, state: o.delivery ?? "delivered" };
 		},
 		ledger,
 	});
@@ -763,8 +788,9 @@ describe("M4 review: nothing blocks what it should not, nothing happens twice", 
 			now: () => clock.t,
 			newId,
 			compose: async () => ({ ok: true, text: "How did your maths test go?" }),
-			sendMessage: async (_p, text) => {
+			sendMessage: async (_p, text, via) => {
 				sent.push(text);
+				recordSend(db, { opportunityId: via.split(":").at(-1)!, text, at: clock.t });
 				throw new Error("the process died here"); // after the message went out
 			},
 		});
@@ -775,6 +801,7 @@ describe("M4 review: nothing blocks what it should not, nothing happens twice", 
 		await s.actor.act([], new Set(["event:j1"]));
 		assert.equal(s.sent.messages.length, 0, "never sent twice");
 		assert.equal(opp(db, "event:j1")!.status, "running");
+		assert.ok(opp(db, "event:j1")!.ref, "its message's record adopted");
 	});
 
 	test("a restart right after a plan was proposed adopts it instead of proposing another", async () => {
@@ -861,5 +888,154 @@ describe("M4 review: nothing blocks what it should not, nothing happens twice", 
 			{ machine: "remote", ms: 40_000, kept: 0 },
 		]);
 		assert.deepEqual([o.status, o.attempts], ["open", 0], "not counted: it waits for the machine");
+	});
+});
+
+describe("M4 review 2: between the model call and the effect, and what earns credit", () => {
+	const followUpSetup = (db: Db) => {
+		turn(db, { id: "j1", who: "jacob", text: "I have my maths test tomorrow", at: new Date(NOON.getTime() - DAY) });
+		db.prepare(
+			`INSERT INTO opportunities (id, cluster, domain, evidence_json, evidence_text, question, status, created_at, updated_at, motivation, signal_kind, action_kind)
+			 VALUES ('f1', 'event:j1', 'social', '[]', 'e', 'q', 'open', ?, ?, 'social', 'event_followup', 'follow_up')`,
+		).run(NOON.toISOString(), NOON.toISOString());
+	};
+
+	test("/forget while the follow-up is being composed: the call is cancelled and nothing is sent", async () => {
+		const db = freshDb();
+		followUpSetup(db);
+		const clock = { t: new Date(2026, 9, 8, 19, 0) };
+		const s = stack(db, clock, {
+			answers: ["How did your maths test go?"],
+			during: () =>
+				forgetRecords(db, forgetTarget(db, getContact(db, "jacob")!) as never, "owner", clock.t.toISOString()),
+		});
+		await s.actor.act([], new Set(["event:j1"]));
+		assert.equal(opp(db, "event:j1"), undefined, "the opportunity was forgotten");
+		assert.equal(s.sent.messages.length, 0, "and nothing was sent after it");
+		assert.equal((db.prepare("SELECT count(*) AS n FROM sent_messages").get() as { n: number }).n, 0);
+		assert.deepEqual(db.prepare("SELECT kept FROM initiative_device").all(), [{ kept: 0 }], "its output discarded");
+		assert.deepEqual(events(db, "f1"), [], "nothing recorded against what was forgotten");
+	});
+
+	test("quiet hours, a pause or the person writing during the call: nothing is sent, it stays pending", async () => {
+		const db = freshDb();
+		followUpSetup(db);
+		// Started at 20:59, finished at 21:01.
+		const clock = { t: new Date(2026, 9, 8, 20, 59) };
+		let during: (() => void) | undefined;
+		const s = stack(db, clock, {
+			answers: ["How did it go?", "How did it go?", "How did it go?", "How did it go?"],
+			composeMs: 2 * MIN,
+			during: () => during?.(),
+		});
+		await s.actor.act([], new Set(["event:j1"]));
+		assert.equal(s.sent.messages.length, 0, "21:01 is outside the social hours");
+		assert.equal(opp(db, "event:j1")!.status, "open");
+		assert.ok(events(db, "f1").includes("withheld:quiet hours"));
+		// The next morning: the motivation is paused while the call runs.
+		clock.t = new Date(2026, 9, 9, 10, 0);
+		during = () => void s.actor.pause("social", "owner");
+		await s.actor.act([], new Set(["event:j1"]));
+		assert.equal(s.sent.messages.length, 0);
+		assert.ok(events(db, "f1").includes("withheld:paused"));
+		s.actor.resume("social");
+		// Jacob writes while the call runs.
+		clock.t = new Date(2026, 9, 9, 11, 0);
+		during = () => turn(db, { id: "j-mid", who: "jacob", text: "hi", at: clock.t });
+		await s.actor.act([], new Set(["event:j1"]));
+		assert.equal(s.sent.messages.length, 0);
+		assert.ok(events(db, "f1").includes("withheld:person busy"));
+		assert.deepEqual([opp(db, "event:j1")!.status, opp(db, "event:j1")!.attempts], ["open", 0]);
+		// Later, nothing in the way: it goes.
+		clock.t = new Date(2026, 9, 9, 12, 0);
+		during = undefined;
+		await s.actor.act([], new Set(["event:j1"]));
+		assert.equal(s.sent.messages.length, 1);
+	});
+
+	test("a reply credits only a delivered follow-up; never sent, failed or unconfirmed earn none", async () => {
+		const at = new Date(2026, 9, 8, 19, 0);
+		const run = async (setup: (db: Db) => void) => {
+			const db = freshDb();
+			followUpSetup(db);
+			setup(db);
+			const clock = { t: new Date(at.getTime() + HOUR) };
+			const s = stack(db, clock);
+			turn(db, { id: "j-reply", who: "jacob", text: "It went fine", at: new Date(at.getTime() + 30 * MIN) });
+			await s.actor.act([], new Set());
+			const o = opp(db, "event:j1")!;
+			return [o.status, o.outcome, o.credited];
+		};
+		const running = (db: Db, ref: string | null, answer: string) =>
+			db
+				.prepare(
+					"UPDATE opportunities SET status = 'running', ref = ?, answer = ?, attempt_started_at = ? WHERE id = 'f1'",
+				)
+				.run(ref, answer, at.toISOString());
+		// The crash state: running, "sending", and no record that a message was ever made.
+		assert.deepEqual(await run((db) => running(db, null, "sending")), ["settled", "failed", 0]);
+		// Delivered, its record found by its label after a restart: credited.
+		assert.deepEqual(
+			await run((db) => {
+				running(db, null, "sending");
+				recordSend(db, { opportunityId: "f1", text: "How did it go?", at });
+			}),
+			["settled", "resolved", 1],
+		);
+		assert.deepEqual(
+			await run((db) =>
+				running(db, recordSend(db, { opportunityId: "f1", text: "x", at, state: "terminal_failure" }), "sent"),
+			),
+			["settled", "failed", 0],
+		);
+		assert.deepEqual(
+			await run((db) =>
+				running(db, recordSend(db, { opportunityId: "f1", text: "x", at, state: "unknown" }), "sent"),
+			),
+			["settled", "resolved", 0],
+		);
+		// Still queued: a reply is not yet its doing.
+		assert.deepEqual(
+			await run((db) =>
+				running(db, recordSend(db, { opportunityId: "f1", text: "x", at, state: "queued" }), "sent"),
+			),
+			["running", null, 0],
+		);
+	});
+
+	test("a reopened opportunity starts clean, and the report counts each episode's own settlement", async () => {
+		const db = freshDb();
+		const clock = { t: NOON };
+		const s = stack(db, clock);
+		ensureTrial(db, "t", new Date(NOON.getTime() - HOUR));
+		const signal = {
+			motivation: "agency" as const,
+			kind: "plan_awaiting_approval",
+			cluster: "plan:p1",
+			evidence: ["plan:p1"],
+			weight: 0.6,
+			observedAt: NOON.toISOString(),
+			text: "a plan waits for approval",
+		};
+		const opening = [{ motivation: signal.motivation, signal }];
+		await s.actor.act(opening, new Set(["plan:p1"]));
+		clock.t = new Date(NOON.getTime() + HOUR);
+		await s.actor.act([], new Set()); // approved: resolved
+		assert.equal(opp(db, "plan:p1")!.outcome, "resolved");
+		db.prepare("UPDATE opportunities SET credited = 1 WHERE cluster = 'plan:p1'").run(); // as if credited
+		clock.t = new Date(NOON.getTime() + 8 * HOUR); // past the notice cooldown: the same plan waits again
+		await s.actor.act(opening, new Set(["plan:p1"]));
+		const o = opp(db, "plan:p1")!;
+		assert.equal(o.status, "running");
+		assert.deepEqual([o.outcome, o.credited, o.ref], [null, 0, null], "the last episode's outcome is not carried");
+		const report = motivationReport(db, s.ledger, { now: clock.t });
+		assert.match(report, /agency: opened 1, attempted 1; outcomes: resolved 1 \(credited 0\)/);
+		clock.t = new Date(NOON.getTime() + 9 * HOUR);
+		await s.actor.act([], new Set());
+		assert.match(
+			motivationReport(db, s.ledger, { now: clock.t }),
+			/agency: opened 1, attempted 1; outcomes: resolved 2/,
+		);
+		everySettlementHasAReason(db);
 	});
 });

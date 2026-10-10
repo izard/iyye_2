@@ -17,7 +17,10 @@
  *   holds is kept anywhere; device time is paid for.
  * - on another machine's model (plan 0.012) it takes that machine's device
  *   slot, a conversation here does not hold it back, and a lost connection
- *   is "not now", never an error.
+ *   is "not now", never an error;
+ * - the caller may cancel it (`cancelled`, polled with the yield reasons):
+ *   `/forget` removing its opportunity stops the call, and its output is
+ *   discarded like any other that gave way.
  */
 
 import type { Complete } from "../facts/extractor.ts";
@@ -26,6 +29,9 @@ import type { InitiativeLedger } from "./budget.ts";
 import type { Motivation } from "./signals.ts";
 
 export type Composed = { ok: true; text: string } | { ok: false; notNow: string } | { ok: false; error: string };
+
+/** Why the caller no longer wants this call (null while it does). */
+export type Cancelled = () => string | null;
 
 type Slot = { tryAcquire(label: string, opts?: { onPreempt?: () => void }): (() => void) | null };
 
@@ -53,18 +59,28 @@ export interface ComposerDeps {
 /** Make one completion under background work's rules: the text, "not now" (try later), or an error. */
 export function makeComposer(
 	deps: ComposerDeps,
-): (label: string, system: string, user: string, motivation?: Motivation, opportunityId?: string) => Promise<Composed> {
+): (
+	label: string,
+	system: string,
+	user: string,
+	motivation?: Motivation,
+	opportunityId?: string,
+	cancelled?: Cancelled,
+) => Promise<Composed> {
 	const now = deps.now ?? (() => new Date());
-	return (label, system, user, motivation, opportunityId) =>
+	return (label, system, user, motivation, opportunityId, cancelled) =>
 		deps.ledger && opportunityId
-			? deps.ledger.whileComposing(opportunityId, () => run(label, system, user, motivation, opportunityId))
-			: run(label, system, user, motivation, opportunityId);
+			? deps.ledger.whileComposing(opportunityId, () =>
+					run(label, system, user, motivation, opportunityId, cancelled),
+				)
+			: run(label, system, user, motivation, opportunityId, cancelled);
 	async function run(
 		label: string,
 		system: string,
 		user: string,
 		motivation: Motivation | undefined,
 		opportunityId: string | undefined,
+		cancelled: Cancelled | undefined,
 	): Promise<Composed> {
 		const model = deps.models.selected("background");
 		const remote = model !== null && deps.models.isRemote?.(model) === true;
@@ -88,7 +104,8 @@ export function makeComposer(
 			return { ok: false, notNow: "the device is busy" };
 		}
 		const watch = setInterval(() => {
-			const why = deps.background.yieldReason({ remote });
+			const off = cancelled?.();
+			const why = off ? `cancelled: ${off}` : deps.background.yieldReason({ remote });
 			if (why) giveWay(why);
 		}, deps.watchMs ?? 250);
 		watch.unref();
