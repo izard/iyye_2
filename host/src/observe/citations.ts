@@ -30,19 +30,23 @@ export function checkCitations(answer: string, grounded: string): CitationCheck 
 		...(text.match(/\b[\w./-]+\.(?:py|ts|js|mjs|md|txt|json|sh|toml|yaml|yml|sql|css|html)\b/g) ?? []),
 	];
 	const flat = grounded.replace(/\s/g, "");
+	// Figures are matched where words stay apart ("56.4 GB of" must not read as the unit "GBof").
+	const spaced = grounded.replace(/\$|\\text\{\s*|\}|\*\*|`/g, "").replace(/\s+/g, " ");
 	const cited = [...new Set(tokens)];
-	return { cited, invented: cited.filter((t) => !found(t, flat)) };
+	return { cited, invented: cited.filter((t) => !found(t, flat, spaced)) };
 }
 
 /**
  * A cited token in the grounded text as a whole: a figure only as a whole number ("12GB" is not in "512GB",
- * nor "1.5" in "11.52"; 2026-10-10 review), with or without its unit; a hash or a file name as itself.
+ * nor "1.5" in "11.52"; 2026-10-10 review), with its own unit (or its short form, "56.4G") or none; another
+ * unit is another figure ("12GB" is not "12MB"). A hash or a file name as itself.
  */
-function found(token: string, flat: string): boolean {
+function found(token: string, flat: string, spaced: string): boolean {
 	const figure = /^(\d+(?:\.\d+)?)(GB|MB|%)$/.exec(token);
 	if (!figure) return flat.includes(token);
 	const n = figure[1]!.replace(".", "\\.");
-	return new RegExp(`(?<![\\d.])${n}(?![\\d]|\\.\\d)`).test(flat);
+	const unit = figure[2] === "%" ? "%" : `${figure[2]![0]}(?:i?B)?`;
+	return new RegExp(`(?<![\\d.])${n} ?(?:${unit}(?![A-Za-z])|(?![\\d]|\\.\\d| ?[KMGTPkmgtp%]))`, "i").test(spaced);
 }
 
 /**

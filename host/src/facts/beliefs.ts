@@ -319,7 +319,10 @@ export function mergeFact(db: Db, f: StmFact, o: MergeOptions): MergeResult {
 		f.negated === 0 &&
 		f.modality !== "told_by_iyye" &&
 		SINGLE_VALUED.has(predicateOf(f.fact_key)) &&
-		f.valid_from >= (same.valid_to ?? "");
+		f.valid_from >= (same.valid_to ?? "") &&
+		// …and nothing current is newer: a late report (Berlin in July, after Paris from September) is history,
+		// never a second current value (2026-10-10 review of the fix).
+		!currentValues(db, f.fact_key, same.id).some((b) => b.valid_from > f.valid_from);
 	if (same && returns) {
 		beliefId = same.id;
 		relation = "changes";

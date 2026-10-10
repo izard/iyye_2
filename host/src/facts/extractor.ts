@@ -52,12 +52,17 @@ export function routerComplete(routerUrl: string | ((model: string) => string), 
 			signal: AbortSignal.any([signal, AbortSignal.timeout(600_000)]), // a hang detector, not a latency budget
 		});
 		if (!res.ok) throw new Error(`the model answered HTTP ${res.status}`);
-		const body = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
+		const body = (await res.json()) as { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[] };
+		const choice = Array.isArray(body.choices) ? body.choices[0] : undefined;
 		// Cut off at max_tokens: what arrived is not the answer (2026-10-10 review: a partial JSON line read as
 		// a complete extraction). A failure, so the caller tries again or gives up, never uses half an answer.
-		if (body.choices?.[0]?.finish_reason === "length")
-			throw new Error(`the answer was cut off at ${maxTokens} tokens`);
-		return body.choices?.[0]?.message?.content ?? "";
+		if (choice?.finish_reason === "length") throw new Error(`the answer was cut off at ${maxTokens} tokens`);
+		// Only a finished answer with text counts: a body without one (`{}`) is no answer, never an empty one.
+		if (!choice || typeof choice.message?.content !== "string")
+			throw new Error("the model's response had no answer text");
+		if (choice.finish_reason != null && choice.finish_reason !== "stop")
+			throw new Error(`the answer ended with ${JSON.stringify(choice.finish_reason)}`);
+		return choice.message.content;
 	};
 }
 

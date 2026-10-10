@@ -14,11 +14,14 @@ import type { AddressInfo } from "node:net";
 import { describe, test } from "node:test";
 import { correctBelief, getBelief, mergeFact } from "../src/facts/beliefs.ts";
 import { type BeliefReader, visibleEvidence } from "../src/facts/disclosure.ts";
+import { parseFacts } from "../src/facts/extract.ts";
 import { extractOne, routerComplete } from "../src/facts/extractor.ts";
-import type { FactDoc, StmFact } from "../src/facts/store.ts";
+import { docsFor, type FactDoc, type StmFact } from "../src/facts/store.ts";
 import { composeSystemPrompt } from "../src/integration/pi/prompt.ts";
 import { checkCitations } from "../src/observe/citations.ts";
 import { type Db, openDb } from "../src/state/db.ts";
+import type { StmEpisode } from "../src/state/stm.ts";
+import { recordToolCall } from "../src/state/tool-calls.ts";
 
 const T0 = new Date("2026-10-05T10:00:00Z");
 let n = 0;
@@ -113,6 +116,16 @@ describe("beliefs", () => {
 		assert.deepEqual(current(db), ["Berlin"]);
 	});
 
+	test("a late report of an earlier value is history: it never makes a second current value", () => {
+		const db = openDb(":memory:");
+		merge(db, fact(db, { object: "Berlin", valid_from: "2026-01-01" }));
+		merge(db, fact(db, { object: "Munich", valid_from: "2026-05-01" }));
+		merge(db, fact(db, { object: "Paris", valid_from: "2026-09-01" }));
+		const late = merge(db, fact(db, { object: "Berlin", valid_from: "2026-07-01" }));
+		assert.equal(late.relation, "corroborates");
+		assert.deepEqual(current(db), ["Paris"]);
+	});
+
 	test("an owner correction to a value that was replaced before makes it current", () => {
 		const db = openDb(":memory:");
 		merge(db, fact(db, { object: "Berlin", valid_from: "2026-01-01" }));
@@ -155,24 +168,76 @@ describe("extraction", () => {
 		assert.equal(await run(db, ""), 0);
 	});
 
-	test("a completion cut off at max_tokens is an error, never a partial answer", async () => {
+	test("valid fact lines are kept when another line is malformed (owner decision 2026-10-10)", async () => {
+		const good =
+			'{"subject": "I", "predicate": "lives_in", "object": "Berlin", "details": null, "valid_from": null, "time_frame": "permanent", "hedged": false, "negated": false, "quote": "I live in Berlin"}';
+		const parsed = parseFacts(`${good}\n{"subject": "I", "pre`);
+		assert.deepEqual([parsed.facts.length, parsed.bad], [1, 1]);
+		// Not a failed attempt: the well-formed fact goes on to be stored (the bad line is counted).
+		await assert.doesNotReject(run(openDb(":memory:"), `${good}\n{"subject": "I", "pre`));
+	});
+
+	test("only a finished answer with text counts: cut off, no answer, or another ending is an error", async () => {
+		let body: unknown = {};
 		const server = createServer((_req, res) => {
 			res.writeHead(200, { "content-type": "application/json" });
-			res.end(
-				JSON.stringify({ choices: [{ message: { content: '{"subject": "I", "pre' }, finish_reason: "length" }] }),
-			);
+			res.end(JSON.stringify(body));
 		});
 		await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+		const ask = () => routerComplete(url, 50)("m", "s", "u", new AbortController().signal);
 		try {
-			const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-			await assert.rejects(
-				routerComplete(url, 50)("m", "s", "u", new AbortController().signal),
-				/cut off at 50 tokens/,
-			);
+			body = { choices: [{ message: { content: '{"subject": "I", "pre' }, finish_reason: "length" }] };
+			await assert.rejects(ask(), /cut off at 50 tokens/);
+			for (const b of [{}, { choices: [] }, { choices: [{}] }, { choices: [{ message: { content: null } }] }]) {
+				body = b;
+				await assert.rejects(ask(), /no answer text/, JSON.stringify(b));
+			}
+			body = { choices: [{ message: { content: "x" }, finish_reason: "tool_calls" }] };
+			await assert.rejects(ask(), /ended with "tool_calls"/);
+			body = { choices: [{ message: { content: "" }, finish_reason: "stop" }] };
+			assert.equal(await ask(), "", "an intentional empty answer");
 		} finally {
 			server.close();
 		}
 	});
+});
+
+test("the clock or another model's answer never makes a reply's source cited; a search does", () => {
+	const db = openDb(":memory:");
+	const at = (m: number) => new Date(T0.getTime() + m * 60_000).toISOString();
+	const episode = (id: string, said: number) =>
+		({
+			event_id: id,
+			kind: "turn",
+			scope: "owner",
+			channel: "web",
+			contact_id: "owner",
+			action_id: `a-${id}`,
+			user_text: "q",
+			reply_text: "r",
+			said_at: at(said),
+			answered_at: at(said + 1),
+		}) as unknown as StmEpisode;
+	const call = (tool: string, m: number) =>
+		recordToolCall(db, {
+			id: newId(),
+			scope: "owner",
+			principal: "owner",
+			tool,
+			toolkit: "t",
+			args_json: "{}",
+			outcome: "ok",
+			result: "x",
+			started_at: at(m),
+			finished_at: at(m),
+		});
+	call("current_time", 0);
+	call("ask_thinking_model", 0);
+	call("web_search", 10);
+	const backed = (e: StmEpisode) => docsFor(db, e).find((d) => d.doc.kind === "reply")?.doc.toolBacked;
+	assert.equal(backed(episode("e1", 0)), false);
+	assert.equal(backed(episode("e2", 10)), true);
 });
 
 test("an investigation's figure is found only as a whole number", () => {
@@ -180,6 +245,11 @@ test("an investigation's figure is found only as a whole number", () => {
 	assert.deepEqual(checkCitations("1.5% load", "cpu 11.52%").invented, ["1.5%"]);
 	assert.deepEqual(checkCitations("512 GB free", "Avail: 512GB").invented, []);
 	assert.deepEqual(checkCitations("56.4 GB used", "used 56.4 GB of 128").invented, []);
+	// …and with its own unit: another unit is another figure.
+	assert.deepEqual(checkCitations("Usage is 12GB", "Usage is 12MB").invented, ["12GB"]);
+	assert.deepEqual(checkCitations("5% used", "5GB used").invented, ["5%"]);
+	assert.deepEqual(checkCitations("56.4 GB used", "Used: 56.4G").invented, []);
+	assert.deepEqual(checkCitations("12 GB total", "total 12, free 3").invented, []);
 });
 
 test("a trusted contact's prompt allows what recall labels with its source; an untrusted one's allows nothing", () => {

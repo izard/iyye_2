@@ -78,12 +78,12 @@ export function knownPeople(db: Db): KnownPerson[] {
 
 /**
  * Tools whose results are evidence about the world, for a reply's citations (2026-10-10 review: a source the
- * extraction model named was taken as cited without any). Memory, reminders, plans and messages are not.
+ * extraction model named was taken as cited without any). Memory, reminders, plans and messages are not, nor
+ * the clock (it supports no other fact) or another model's answer (a model's words, not an observation).
  */
 const WORLD_TOOLS = [
 	"web_search",
 	"web_fetch",
-	"current_time",
 	"system_status",
 	"git_log",
 	"git_show",
@@ -91,7 +91,6 @@ const WORLD_TOOLS = [
 	"read_file",
 	"list_dir",
 	"look_at_image",
-	"ask_thinking_model",
 ];
 
 /** Whether the turn behind a reply read the world through a tool (a successful call between message and reply). */
