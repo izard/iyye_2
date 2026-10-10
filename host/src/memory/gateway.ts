@@ -19,6 +19,7 @@ import { type BeliefReader, offerBeliefs } from "../facts/disclosure.ts";
 import { factSentence } from "../facts/extract.ts";
 import { searchFacts } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
+import { notesForNamed } from "../people/people.ts";
 import { accountsOf, getContact, linkOf, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
 import { isInvestigationEntry } from "../state/observations.ts";
@@ -33,8 +34,11 @@ export interface MemoryReader {
 }
 
 export interface RecallItem {
-	/** today: STM; memory: Hindsight; belief: the fact ledger's beliefs, already labelled (plan 0.011 F4). */
-	source: "today" | "memory" | "belief";
+	/**
+	 * today: STM; memory: Hindsight; belief: the fact ledger's beliefs, already labelled (plan 0.011 F4);
+	 * note: the owner's own note about a person the question names (plan 0.005 Stage 2, owner turns only).
+	 */
+	source: "today" | "memory" | "belief" | "note";
 	/** Whose conversation it came from, when it is not the reader's own. */
 	from: string | null;
 	/** ISO time it was said (STM) or the fact's date (LTM), if known. */
@@ -229,6 +233,18 @@ export class MemoryGateway {
 			}
 		};
 		if (query.trim()) offer([], this.queryFor(reader, query));
+		// The owner's notes about the people the question names (by name, or by a relation the owner stated).
+		if (reader.principal === "owner" && query.trim())
+			for (const { person, note } of notesForNamed(this.d.db, `${query} ${this.queryFor(reader, query)}`))
+				items.push({
+					source: "note",
+					said: null,
+					from: null,
+					when: note.created_at,
+					text: clip(
+						`Your note about ${person}${note.visibility === "person" ? " (shared with them)" : ""}: ${note.text}`,
+					),
+				});
 		if (!this.d.ltm || !this.d.ltmReady()) return { items, ltm: false };
 		if (!query.trim()) return { items, ltm: true };
 		const asked = this.queryFor(reader, query);
@@ -422,14 +438,21 @@ export class MemoryGateway {
  */
 export async function ownerOwnRecall(gateway: Pick<MemoryGateway, "recall">, topic: string): Promise<string | null> {
 	const r = await gateway.recall({ scope: "owner", principal: "owner" }, topic);
-	const own = r.items.filter((i) => i.from === null && i.source !== "belief");
+	// …nor the owner's notes about people: they are about someone `/forget` must be able to reach.
+	const own = r.items.filter((i) => i.from === null && i.source !== "belief" && i.source !== "note");
 	return own.length ? formatRecalled({ ...r, items: own }) : null;
 }
 
 export function formatRecalled(r: Recalled): string {
 	const lines = r.items.map((i) => {
 		const tag = [
-			i.source === "today" ? "today" : i.source === "belief" ? "belief" : "remembered",
+			i.source === "today"
+				? "today"
+				: i.source === "belief"
+					? "belief"
+					: i.source === "note"
+						? "the owner's own note"
+						: "remembered",
 			i.when ? i.when.slice(0, 16).replace("T", " ") : null,
 			i.from ? `from ${i.from}` : null,
 			i.said === "person"

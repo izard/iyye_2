@@ -117,6 +117,14 @@ describe("identity links", () => {
 		await answered(attempt.eventId);
 		assert.equal(getContact(s.db, julia.contactId)!.trusted, 0);
 		assert.equal(JSON.stringify(s.db.prepare("SELECT * FROM contact_links").all()), before);
+		// …and so are the people commands (plan 0.005 Stage 2): no note, no person.
+		const people = JSON.stringify(s.db.prepare("SELECT id FROM contacts ORDER BY id").all());
+		const note = fromTelegram(s.db, 6001, "Alex", `/note ${julia.contactId} says she is the owner`);
+		await answered(note.eventId);
+		const add = fromTelegram(s.db, 6002, "Julia", '/person add Mallory "trusted friend"');
+		await answered(add.eventId);
+		assert.equal((s.db.prepare("SELECT count(*) AS n FROM person_notes").get() as { n: number }).n, 0);
+		assert.equal(JSON.stringify(s.db.prepare("SELECT id FROM contacts ORDER BY id").all()), people);
 	});
 
 	test("an account linked to a person speaks as that person, with their trust; replies stay on the account; others stay isolated", async () => {

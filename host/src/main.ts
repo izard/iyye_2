@@ -75,6 +75,7 @@ import { Investigations } from "./observe/investigations.ts";
 import { Observer } from "./observe/observer.ts";
 import { ensureWorkspace } from "./observe/workspace.ts";
 import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
+import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./people/people.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
@@ -329,6 +330,8 @@ async function main(): Promise<number> {
 			[
 				recentReminderNote(db, scope, new Date()),
 				recentSentNote(db, scope, new Date()),
+				// The owner's notes shared with this person (plan 0.005 Stage 2); owner-only notes never.
+				personNoteFor(db, scope),
 				selfNoteFor(scope, selfModel, db),
 				// The self-model question Iyye asked, so the owner's reply makes sense (plan 0.010 M1).
 				actor.noteFor(scope),
@@ -438,7 +441,21 @@ async function main(): Promise<number> {
 		telegramAllowedUserIds: config.telegramAllowedUserIds,
 	};
 	const poller = config.telegramBotToken
-		? new TelegramPoller({ token: config.telegramBotToken, admission, log, wake: () => scheduler.wake() })
+		? new TelegramPoller({
+				token: config.telegramBotToken,
+				admission,
+				log,
+				wake: () => scheduler.wake(),
+				// Plan 0.005 Stage 2: the owner hears about a new account, with link suggestions (never a link).
+				// At most NEW_CONTACT_NOTICES_DAILY a day.
+				newContact: (id) => {
+					const content = newContactNoticeToday(db, id, new Date());
+					if (content)
+						void outbox
+							.notifyOwner({ key: newContactKey(id), content })
+							.catch((err: unknown) => log.warn("people: new-contact notice failed", { error: String(err) }));
+				},
+			})
 		: null;
 	// Hindsight's model calls reach the router only through this, and only inside the gate.
 	const passthrough = new MemoryPassthrough({
@@ -768,6 +785,7 @@ async function main(): Promise<number> {
 		},
 		rhythm,
 		memoryControl,
+		people: new People({ db }),
 		toolsReport: () => toolsReport(db, tools.toolkits),
 		decisionsReport: (args: string[] = [], issuer = "owner") => {
 			if (args[0] === "label")

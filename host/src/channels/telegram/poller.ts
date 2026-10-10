@@ -41,6 +41,8 @@ export interface TelegramPollerDeps {
 	log: Logger;
 	/** Called after updates were admitted, so the scheduler starts at once. */
 	wake: () => void;
+	/** A Telegram account wrote for the first time (plan 0.005 Stage 2: the owner is told). Must not throw. */
+	newContact?: ((contactId: string) => void) | null;
 	apiBase?: string;
 	/** Long-poll wait Telegram holds a getUpdates open for, in seconds. */
 	longPollS?: number;
@@ -130,6 +132,7 @@ export class TelegramPoller {
 			minBackoffMs: 1000,
 			maxBackoffMs: 60_000,
 			failedRetryMs: 300_000,
+			newContact: null,
 			...deps,
 		};
 	}
@@ -172,6 +175,13 @@ export class TelegramPoller {
 					inbound,
 				);
 				if (r.outcome === "admitted") admitted++;
+				if (r.outcome === "admitted" && r.newContactId) {
+					try {
+						this.d.newContact?.(r.newContactId);
+					} catch (err) {
+						this.d.log.warn("telegram: new-contact notice failed", { error: this.scrub((err as Error).message) });
+					}
+				}
 				if (r.outcome === "dropped")
 					this.d.log.info("telegram: update dropped", { updateId: raw.update_id, reason: r.reason });
 			} catch (err) {

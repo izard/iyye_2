@@ -35,6 +35,7 @@ import { accountsOf, type Contact, OWNER_CONTACT_ID, resolvePerson, scopeFor } f
 import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
 import { mediaPath } from "../state/media.ts";
+import { forgetNotes } from "../state/notes.ts";
 import {
 	addTombstone,
 	bankDeletionDone,
@@ -293,6 +294,8 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 		// The same replies are copied into reply-review rows (future training data): those go too, for good.
 		// The owner's statements about who they are (plan 0.010 self model).
 		forgetSelfFacts(db, [t.person.id]);
+		// The owner's notes about them (plan 0.005 Stage 2).
+		forgetNotes(db, [t.person.id]);
 		forgetReplyReviews(
 			db,
 			ownerTurns.map((r) => r.action_id),

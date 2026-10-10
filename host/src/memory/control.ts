@@ -72,7 +72,7 @@ export class MemoryControl {
 			`  - short-term memory: ${c.stm} entr${c.stm === 1 ? "y" : "ies"}, deleted`,
 			`  - conversation transcripts and the images they sent: deleted`,
 			`  - ${c.messages} message(s), Iyye's replies and ${c.toolCalls} tool call(s): text replaced by "[forgotten]" (dates and delivery records stay)`,
-			`  - ${c.decisions} shadow decision(s): deleted`,
+			`  - ${c.decisions} shadow decision(s) and your notes about them: deleted`,
 			`  - your conversation with Iyye: starts afresh; its replies to you not yet stored are dropped (they may quote them); your own words stay`,
 			`Kept: the contact, its channels and its trust, so new messages are answered and remembered normally.`,
 			`Not covered: what you yourself told Iyye about them, and Iyye's replies to you stored on earlier nights, stay in your memory.`,

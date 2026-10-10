@@ -45,6 +45,10 @@ function people(db: Db): void {
 	add("sam-1", "Sam", 7001);
 	add("sam-2", "Sam", 7002);
 	add("nochat-1", "Nina", null);
+	// Plan 0.005 Stage 2: a person added before they wrote (no account), then their account linked to them.
+	add("mila-1", "Mila", null);
+	add("mila-tg", "Mila T", 8701);
+	linkAccount(db, "mila-tg", "mila-1", "owner_web", "t");
 }
 
 describe("telegram_send (plan 0.008)", () => {
@@ -171,6 +175,12 @@ describe("telegram_send (plan 0.008)", () => {
 			await tool.run({ to: "Nina", text: "x" }, owner(), undefined),
 			/Nina has no Telegram chat with Iyye/,
 		);
+		assert.match(
+			await tool.run({ to: "Mila", text: "hello Mila" }, owner(), undefined),
+			/^Sent to Mila on Telegram and delivered/,
+			"a person with no account of their own reaches their linked account's chat",
+		);
+		assert.match(fake.messagesTo(8701).at(-1)!, /hello Mila$/);
 		assert.match(
 			await tool.run({ to: "sam-2", text: "x" }, owner(), undefined),
 			/^Sent to Sam on Telegram and delivered/,

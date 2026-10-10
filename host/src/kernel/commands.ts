@@ -84,6 +84,8 @@ export interface CommandContext {
 		forget(contact: Contact, by: string): Promise<string>;
 		remember(text: string): string;
 	} | null;
+	/** /person, /note: what Iyye knows about a person, and the owner's notes (plan 0.005 Stage 2). */
+	people?: { person(args: string, by: string): string; note(args: string, by: string): string } | null;
 	/** /day and /night: day/night status (plan 0.002 L4). */
 	rhythmReport?: { day(): string; night(): string } | null;
 }
@@ -106,6 +108,8 @@ const HELP = [
 	"/trust <contact> — mark a contact as trusted (name, Telegram user id, or id): they may then ask Iyye to message anyone it knows",
 	"/link <account> owner|<person> — this account is you (owner) or that person: shared conversation and memory",
 	"/unlink <account> — the account is its own contact again",
+	'/person <person> — what Iyye knows about someone: accounts, trust, your notes, relationship hypotheses; /person add <name> ["note"] — someone who has not written yet',
+	"/note <person> <text> — a note about someone, for your conversations only; /note share|private|delete <id> — let them see it too (Iyye may repeat it to them), or not",
 	"/untrust <contact> — remove a contact's trust",
 	"/tools — toolkits, who may use them, and the latest tool calls",
 	"/decisions — the local decision model's shadow answers and how they compared with what happened",
@@ -147,6 +151,8 @@ const COMMANDS = new Set([
 	"/untrust",
 	"/link",
 	"/unlink",
+	"/person",
+	"/note",
 	"/memory",
 	"/remember",
 	"/forget",
@@ -232,6 +238,15 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			const ref = text.trim().slice(cmd.length).trim();
 			if (!ref) return usage("/unlink <account>");
 			return { handled: true, reply: unlink(ctx, ref) };
+		}
+		case "/person":
+		case "/note": {
+			if (!ctx.people) return { handled: true, reply: "people are not available here" };
+			const rest = text.trim().slice(cmd.length);
+			return {
+				handled: true,
+				reply: cmd === "/person" ? ctx.people.person(rest, ctx.issuer) : ctx.people.note(rest, ctx.issuer),
+			};
 		}
 		case "/trust":
 		case "/untrust": {
@@ -414,8 +429,11 @@ function renderContacts(db: Db): string {
 		const twins = persons.filter(
 			(o) => o.id !== p.id && o.display_name.toLowerCase() === p.display_name.toLowerCase(),
 		);
+		const notes = (
+			db.prepare("SELECT count(*) AS n FROM person_notes WHERE person_id = ?").get(p.id) as { n: number }
+		).n;
 		lines.push(
-			`${p.display_name} — ${p.trusted ? "trusted" : "not trusted"} · ${p.bindings ?? "no channel"} · id ${p.id.slice(0, 8)}${when(p)}` +
+			`${p.display_name} — ${p.trusted ? "trusted" : "not trusted"} · ${p.bindings ?? (accounts.length ? "no channel of its own" : "no account yet")} · id ${p.id.slice(0, 8)}${when(p)}${notes ? ` · ${notes} note${notes === 1 ? "" : "s"}` : ""}` +
 				(accounts.length ? `\n    accounts: ${accounts.map(account).join(", ")}` : "") +
 				(twins.length
 					? `\n    same name as ${twins.map((t) => `id ${t.id.slice(0, 8)}`).join(", ")}: if this is the same person, /link one to the other`

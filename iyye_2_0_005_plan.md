@@ -1,6 +1,6 @@
 # Iyye 2.0.005 — Identity Linking (Theory of Mind, stage 1): Implementation Plan
 
-- Status (2026-10-03): owner decision in §6. **I1 (linking) done.** Stage 2 (owner notes about people, people before they write) is next when the owner asks.
+- Status (2026-10-10): owner decisions in §6. **I1 (linking) done. Stage 2 (owner notes, people before they write, new-contact notices, relationship hypotheses) built** (§3, "Stage 2 as built").
 - Scope: one **person** can have several channel accounts. The owner links accounts into a person, or into the owner, from a local owner surface. Conversation, short-term and long-term memory and trust then follow the person, not the account. This is the first stage of Theory of Mind (HLD §6.4): knowing *who* someone is, before modelling what they want.
 - Design source: [`iyye_2_0_hld.md`](iyye_2_0_hld.md) §6.2 ("owner-approved identity links can join channel bindings; Hindsight entity resolution may suggest a match but cannot establish identity or trust"), §6.4, §9.2 (only a local owner operation may bind identities), §15 #3.
 - Motivation (2026-10-03): the owner's two Telegram accounts were two unrelated contacts. Facts the owner gave through one account (his son Jacob is 12; Julia has Iyye's contact) were invisible to the other account and to the web chat's conversation.
@@ -71,6 +71,13 @@
 - **A new-contact notice to the owner,** with link suggestions.
 - **Relationship hypotheses** derived from conversations (HLD §6.4: stated evidence vs revisable hypotheses), source-linked, from Hindsight observations; never diagnoses.
 
+*(Stage 2 as built, 2026-10-10)*
+- **Notes** (migration `032_person_notes.sql`, `state/notes.ts`): `/note <person> <text>` (owner-only by default), `/note share|private|delete <id>`. A note is about a person: a reference to a linked account means its person, and the owner's own accounts are refused. A note written about an account before it was linked is read (and forgotten) with the person it now belongs to, whichever way round the link was made. `owner` notes reach the owner's turns through recall when the question names the person (first name, full name, or a relation the owner stated; source `note`, labelled "the owner's own note"); `person` notes also reach that person's own turns as a request-local `<owner_notes>` block (`personNoteFor`, in `turnNotes`). Never in a contact's recall, never in background work's evidence (`ownerOwnRecall`), so `/forget` reaches them all; `/forget` deletes them.
+- **People before they write:** `/person add <name> ["note"]` creates a contact with no binding (not trusted); a name some person already has, and "owner", are refused. `telegram_send` to such a person refuses until an account is linked, then uses that account's chat. `/contacts` shows "no account yet" and note counts.
+- **New-contact notice:** admission reports a Telegram account created now (`newContactId`); the poller hands it to the owner's web chat (`notifyOwner`, key `notice:new-contact:<id>`, at most 10 a day), with suggestions: people of the same first name, and people added without an account, each with the `/link` to type, and a reminder that a name is no proof. A notice never links. `/person` and `/note` sent over Telegram are dialogue (`test/identity.test.ts`).
+- **Relationship hypotheses:** `/person <person>` shows accounts, trust, notes and the fact ledger's current `relation_of` beliefs about them (plan 0.011; by reference, name, or a name in the related object), each with its label, p, sources and age. Chosen over Hindsight observations: the ledger keeps each claim's source and probability. Only relations are shown, so nothing about health or the like appears as a hypothesis.
+- **Tests:** `test/people.test.ts` (8), plus a linked-account recipient in `test/messaging.test.ts` and Telegram-sent people commands in `test/identity.test.ts`.
+
 ## 4. Risks
 
 - **An owner-linked Telegram account is as powerful as the owner in dialogue and tools** (owner decision 1). Commands stay local-only; a compromised account still exposes memory.
@@ -78,10 +85,11 @@
 
 ## 5. Out of scope
 
-- Stage 2 (§3).
 - Merging histories (a person's old Pi transcripts are not combined; recall covers them).
 - Linking web identities (the web chat is the owner only).
 
 ## 6. Owner decisions (2026-10-03)
 
 1. **A Telegram account linked to the owner is the owner** (full owner identity): the same conversation and memory as the web chat, a read-only view of every contact's memory, and owner toolkits. Trust, link and model commands remain local-only. Chosen over a separate "Alex on Telegram" person and over a limited owner identity.
+2. **Note visibility (2026-10-10):** two levels: `owner` (the default: the owner's conversations only) and `person` (also that person's own conversations, so Iyye may repeat it to them). Chosen over a third `trusted` level.
+3. **Owner notes reach the owner's turns when the person is named** (2026-10-10), through recall; not every turn.
