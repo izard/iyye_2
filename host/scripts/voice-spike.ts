@@ -82,7 +82,7 @@ for (const r of db
 	items.push({ id: `real:${r.id}`, source: "real", lang: lang(t), text: t });
 }
 db.close();
-for (const f of ["voice-pairs.json", "voice-pairs-heldout.json"])
+for (const f of ["voice-pairs.json", "voice-pairs-ch0-heldout.json"])
 	for (const p of JSON.parse(readFileSync(new URL(`../test/fixtures/${f}`, import.meta.url), "utf8")) as {
 		original: string;
 	}[]) {

@@ -4,8 +4,11 @@
 /**
  * Plan 0.009 CH0: the voice's meaning check. Every original passes as its own
  * rephrasing, faithful paraphrases pass, and every kind of meaning change is
- * refused. `test/fixtures/voice-pairs.json` is the labelled set the spike
- * measures the check's error rates on (synthetic, English and Russian).
+ * refused. The labelled sets (synthetic, English and Russian):
+ * `voice-pairs.json` and `voice-pairs-ch0-heldout.json` developed the check
+ * (the second was CH0's held-out set and has been tuned on since);
+ * `voice-pairs-heldout.json` was written before the second revision and is
+ * never used to tune it.
  */
 
 import assert from "node:assert/strict";
@@ -96,17 +99,88 @@ const errors = (file: string) => {
 	};
 };
 
-test("the development pairs: the one known false accept is added content with nothing fixed in it", () => {
-	assert.deepEqual(errors("voice-pairs.json"), {
-		falseAccepts: ["Good morning! I'm busy today."],
-		falseRejects: [],
+test("dates in words: weekdays, months and relative days, compared by what they name", () => {
+	const s = fixedSegments(
+		"Tuesday's meetings moved to May 3; may I remind you tomorrow? Во вторник, 5 мая, завтракаем.",
+		NAMES,
+	)
+		.filter((x) => x.kind === "date")
+		.map((x) => x.text);
+	assert.deepEqual(s, ["Tuesday's", "May", "tomorrow", "вторник", "мая"]);
+	assert.equal(fixedSegments("May I ask?", NAMES).length, 0);
+	assert.equal(voiceProblem("I can't see Tuesday's meetings.", "I can't see the meetings on Tuesday.", NAMES), null);
+	assert.equal(voiceProblem("Встреча во вторник.", "Вторник: встреча.", NAMES), null);
+	assert.match(voiceProblem("Встреча во вторник.", "Встреча в среду.", NAMES) ?? "", /date:wd:tue/);
+	assert.match(voiceProblem("Оплата до 25 августа.", "Оплата до 25 сентября.", NAMES) ?? "", /date:mo:8/);
+	assert.match(voiceProblem("It rained yesterday.", "It rained today.", NAMES) ?? "", /date:day:-1/);
+	assert.match(
+		voiceProblem("Good morning! I'm here if you need anything.", "Good morning! I'm busy today.", NAMES) ?? "",
+		/added date/,
+	);
+});
+
+test("a possessive is the same name", () => {
+	assert.equal(voiceProblem("Julia's flight lands at 9.", "The flight Julia is on lands at 9.", NAMES), null);
+	assert.equal(voiceProblem("Anna's cat is fine.", "The cat of Anna is fine.", NAMES), null);
+});
+
+test("tense: a past event may not become a future one, nor the reverse", () => {
+	assert.match(
+		voiceProblem("Anna said the parcel arrived.", "Anna said the parcel will arrive.", NAMES) ?? "",
+		/past event became a future/,
+	);
+	assert.match(
+		voiceProblem("Julia will be late, she wrote.", "Julia was late, she wrote.", NAMES) ?? "",
+		/future event became a past/,
+	);
+	assert.match(
+		voiceProblem("Добавила молоко в список.", "Добавлю молоко в список.", NAMES) ?? "",
+		/tense of "добавила"/,
+	);
+	assert.match(
+		voiceProblem("The router restarted twice.", "The router restarts twice.", NAMES) ?? "",
+		/tense of "restarted"/,
+	);
+	// Not a change: the same act in the passive, "she'd" as the future seen from the past, present to future.
+	assert.equal(voiceProblem("Добавила молоко в список.", "Молоко добавлено в список.", NAMES), null);
+	assert.equal(voiceProblem("Julia wrote that she will be late.", "Julia wrote she'd be late.", NAMES), null);
+	assert.equal(
+		voiceProblem("The train leaves from platform 4.", "The train will leave from platform 4.", NAMES),
+		null,
+	);
+});
+
+test("a replaced reason that keeps one negation is refused", () => {
+	assert.match(
+		voiceProblem(
+			"I don't have access to your calendar, so I can't see Tuesday's meetings.",
+			"I checked your calendar: Tuesday has no meetings.",
+			NAMES,
+		) ?? "",
+		/dropped a negation/,
+	);
+});
+
+test("the development pairs: every one judged as labelled", () => {
+	assert.deepEqual(errors("voice-pairs.json"), { falseAccepts: [], falseRejects: [] });
+});
+
+test("CH0's held-out pairs (development since the second revision): the known misses", () => {
+	assert.deepEqual(errors("voice-pairs-ch0-heldout.json"), {
+		// A Russian future without a marker, from another stem ("пришла" → "придёт").
+		falseAccepts: ["Анна сказала, что посылка придёт в понедельник."],
+		// A report of something done said as a state, or with a verb the check does not know as one.
+		falseRejects: ["Milk and eggs are now on the shopping list.", "I put milk and eggs on the shopping list."],
 	});
 });
 
-test("the held-out pairs (never used to tune the check): no worse than measured at CH0", () => {
-	// CH0 (2026-10-10): 5 of 24 changed rephrasings accepted (a tense, a lowercase Russian weekday, a negation
-	// count), 3 of 24 faithful ones refused (a possessive name, a passive report). A regression bound, not a target.
+test("the held-out pairs (never used to tune the check): no worse than measured", () => {
+	// Second revision (2026-10-10), measured once: 4 of 24 changed rephrasings accepted (a tense change of a
+	// verb without a past form, a question reported as an answer, a future without a past beside it, a state
+	// read as a deadline), 5 of 24 faithful ones refused (negations added or dropped by idioms: "don't forget",
+	// "rather than", "не позже", "молчит"; a passive report said actively). The CH0 check on this set: 14 and 5.
+	// A regression bound, not a target.
 	const e = errors("voice-pairs-heldout.json");
-	assert.ok(e.falseAccepts.length <= 5, `false accepts: ${e.falseAccepts.join(" | ")}`);
-	assert.ok(e.falseRejects.length <= 3, `false rejects: ${e.falseRejects.join(" | ")}`);
+	assert.ok(e.falseAccepts.length <= 4, `false accepts: ${e.falseAccepts.join(" | ")}`);
+	assert.ok(e.falseRejects.length <= 5, `false rejects: ${e.falseRejects.join(" | ")}`);
 });

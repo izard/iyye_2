@@ -18,9 +18,20 @@ Fixed segments must survive as a multiset (numbers, times, dates, URLs, e-mail, 
 | Labelled set | Faithful refused (false reject) | Changed accepted (false accept) |
 | --- | --- | --- |
 | `voice-pairs.json` (40 + 40, used to develop the check) | 0 / 40 | 1 / 40 (added content with nothing fixed in it: "I'm busy today") |
-| `voice-pairs-heldout.json` (24 + 24, written after, never used to tune) | **3 / 24 (12.5 %)** | **5 / 24 (21 %)** |
+| CH0's held-out set (24 + 24, written after, never used to tune at CH0; now `voice-pairs-ch0-heldout.json`) | **3 / 24 (12.5 %)** | **5 / 24 (21 %)** |
 
 The held-out misses: a tense change ("arrived" → "will arrive", "добавила" → "добавлю"), a lowercase Russian weekday ("вторник" → "среда"), a replaced reason that keeps a negation ("no access" → "I checked: no meetings"); refused: a possessive name ("Tuesday's"), passive reports ("are now on the list"). **A deterministic check cannot see meaning without fixed segments**: it is a filter, as the plan says, not proof.
+
+**Second revision (2026-10-10, after CH0; "For CH3" item 2).** Dates in words are fixed segments compared by what they name (weekdays, months, today/tomorrow/yesterday, English and Russian with case endings: "Tuesday's" = "on Tuesday" = "во вторник"; English months only capitalized, "May" never at a sentence start); a possessive is the same name; a tense rule (a future marker may not appear or vanish beside a past form, and a past verb may not come back only as another form of the same verb; a Russian short participle reports the same completed act); there may not be fewer negations than before. Tuned on the development set and CH0's held-out set (which is development since). A fresh held-out set, `voice-pairs-heldout.json` (12 originals, 7 English and 5 Russian, 24 + 24), was written before the rules were coded and measured once:
+
+| Set | False rejects | False accepts |
+| --- | --- | --- |
+| development (40 + 40) | 0 / 40 | 0 / 40 |
+| CH0's held-out, now development | 2 / 24 | 1 / 24 ("пришла" → "придёт": a Russian future without a marker, from another stem) |
+| **fresh held-out, second revision** | **5 / 24 (21 %)** | **4 / 24 (17 %)** |
+| fresh held-out, the CH0 check | 5 / 24 | 14 / 24 |
+
+Caveat: the same author wrote the rules and the fresh set, knowing which kinds of change the revision targets, so the fresh set over-represents dates and tenses and the drop in false accepts (14 → 4) is optimistic; real rephrasings decide. The new false rejects are negations moved by idiom ("don't forget", "rather than", "не позже", "молчит"): the negation-count rule's cost. Still missed: present → past ("is on Thursday" → "was on Thursday"), a question reported as an answer, "будет" beside a participle, a state read as a deadline. Those need a model's judgement: the Kev "same meaning?" role in shadow (item 4 below).
 
 ## Candidates (masked, both styles, 252 rephrasings each)
 
@@ -79,6 +90,6 @@ Reading:
 ## For CH3
 
 1. The model (one voice, owner decision 4; the owner decides by A/B): gemma-4-E4B has the most usable rephrasings in English and, with a Russian prompt, in Russian, the fewest the judge calls different, and keeps placeholders best; its LoRA path is untried. qwen35-4b-tak is faster but cannot carry a trained voice. MiniCPM5 is not a voice without tuning.
-2. The check needs: weekdays and months (both languages) as fixed segments, tense of report verbs, possessive names; then a fresh held-out set.
+2. ~~The check needs: weekdays and months (both languages) as fixed segments, tense of report verbs, possessive names; then a fresh held-out set.~~ Done (second revision, above).
 3. Russian: no real data yet; the voice's instructions in the message's language.
 4. A Kev "same meaning?" role in shadow beside the check (the plan's next step), since lexical rules miss tense and replaced reasons.
