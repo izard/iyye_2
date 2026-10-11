@@ -61,6 +61,14 @@ export function queueFactDocDeletions(
 	setKv(db, DOC_DELETIONS_KEY, JSON.stringify(queued), at);
 }
 
+/** Queue documents by bank and id (the orphan repair: documents no stored fact accounts for). */
+export function queueDocDeletions(db: Db, refs: readonly { bank: string; doc: string }[], at: string): void {
+	const queued = pendingFactDocDeletions(db);
+	const have = new Set(queued.map((q) => `${q.bank}/${q.doc}`));
+	for (const r of refs) if (!have.has(`${r.bank}/${r.doc}`)) queued.push({ bank: r.bank, doc: r.doc });
+	setKv(db, DOC_DELETIONS_KEY, JSON.stringify(queued), at);
+}
+
 export function pendingFactDocDeletions(db: Db): { bank: string; doc: string }[] {
 	try {
 		const v = JSON.parse(getKv(db, DOC_DELETIONS_KEY) ?? "[]") as unknown;

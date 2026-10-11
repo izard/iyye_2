@@ -1048,6 +1048,73 @@ describe("F2: beliefs and the nightly merge", () => {
 			);
 		});
 
+		test("plan §5: /facts orphans checks now; restore stores missing texts again next night, delete asks first", async () => {
+			const db = freshDb();
+			turn(db, { id: "e1", who: "julia", text: "I work in sales operations at a robotics company." });
+			const night = () =>
+				new FactNight({
+					db,
+					ltm: ltm.client(),
+					gate,
+					complete: scripted({
+						"sales operations": [
+							line({
+								subject: "I",
+								predicate: "works_as",
+								object: "sales operations specialist",
+								quote: "I work in sales operations",
+							}),
+						],
+					}),
+					log: silentLogger,
+					extract: true,
+					merge: true,
+					maxStep: 2,
+					now: () => T0,
+					newId,
+				});
+			assert.equal((await night().run(() => false)).stored, 1);
+			const cmd = new FactsCommand({
+				db,
+				log: silentLogger,
+				ltm: ltm.client(),
+				extractorStatus: () => "idle",
+				now: () => T0,
+				newId,
+			});
+			assert.match(await cmd.command(["orphans"], "owner_web"), /no orphans/);
+			const [key, stored] = [...ltm.docs.entries()].find(([, d]) => d.id.startsWith("fact:"))!;
+			ltm.docs.delete(key);
+			ltm.docs.set("iyye-contact-julia/fact:ghost", { ...stored, id: "fact:ghost" });
+			const listed = await cmd.command(["orphans"], "owner_web");
+			assert.match(listed, new RegExp(`missing in long-term memory: 1\\n +iyye-contact-julia ${stored.id}`));
+			assert.match(listed, /no stored fact behind it: 1\n +iyye-contact-julia fact:ghost/);
+			assert.equal(lastOrphanCheck(db)!.counts.missing, 1, "/facts report shows the check just run");
+			assert.match(await cmd.command(["orphans", "nonsense"], "owner_web"), /usage/);
+			assert.match(await cmd.command(["orphans", "restore", "confirm"], "owner_web"), /usage/);
+
+			// Restore: nothing is written to long-term memory now; the next night stores the text again, verbatim.
+			assert.match(await cmd.command(["orphans", "restore"], "owner_web"), /1 fact\(s\) will be stored again/);
+			assert.ok(!ltm.docs.has(key));
+			assert.equal((await night().run(() => false)).stored, 1);
+			assert.equal(ltm.docs.get(key)?.content, stored.content);
+			assert.match(await cmd.command(["orphans", "restore"], "owner_web"), /nothing to restore/);
+
+			// Delete: shown first, deleted only with confirm; the fact's own document stays.
+			const ask = await cmd.command(["orphans", "delete"], "owner_web");
+			assert.match(ask, /deletes 1 document\(s\) .*cannot be undone: \/facts orphans delete confirm/s);
+			assert.ok(ltm.docs.has("iyye-contact-julia/fact:ghost"));
+			assert.match(await cmd.command(["orphans", "delete", "confirm"], "owner_web"), /^deleted 1 document\(s\)$/);
+			assert.ok(!ltm.docs.has("iyye-contact-julia/fact:ghost"));
+			assert.ok(ltm.docs.has(key));
+			assert.match(await cmd.command(["orphans", "delete"], "owner_web"), /nothing to delete/);
+			assert.match(await cmd.command(["orphans"], "owner_web"), /no orphans/);
+			// Long-term memory down: said, nothing changed.
+			ltm.down = true;
+			assert.match(await cmd.command(["orphans", "delete", "confirm"], "owner_web"), /could not finish/);
+			ltm.down = false;
+		});
+
 		test("the night runs the fact ledger first; if it cannot finish, the night stops there and says why", async () => {
 			const db = freshDb();
 			turn(db, { id: "e1", who: "owner", text: "Remember the dentist on Monday." });

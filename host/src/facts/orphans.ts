@@ -27,7 +27,7 @@ import type { HindsightClient } from "../memory/hindsight.ts";
 import { HindsightError } from "../memory/hindsight.ts";
 import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
-import { factDocId, pendingFactDocDeletions } from "./night.ts";
+import { factDocId, pendingFactDocDeletions, queueDocDeletions } from "./night.ts";
 
 export const ORPHAN_CHECK_KEY = "facts.orphan_check";
 /** Listed per kind in the record (the counts are complete). */
@@ -56,6 +56,8 @@ export async function checkFactOrphans(
 	db: Db,
 	ltm: Pick<HindsightClient, "listBanks" | "listDocuments">,
 	at: string,
+	/** How many of each kind are listed (the counts are always complete); `Infinity` for a repair. */
+	sample = SAMPLE,
 ): Promise<OrphanCheck> {
 	const out: OrphanCheck = {
 		at,
@@ -68,7 +70,7 @@ export async function checkFactOrphans(
 	};
 	const note = (kind: "missing" | "unknown" | "stale", ref: OrphanRef) => {
 		out.counts[kind]++;
-		if (out[kind].length < SAMPLE) out[kind].push(ref);
+		if (out[kind].length < sample) out[kind].push(ref);
 	};
 	const forgetting = banksBeingForgotten(db);
 	const queued = new Set(pendingFactDocDeletions(db).map((q) => `${q.bank}/${q.doc}`));
@@ -160,4 +162,26 @@ export function orphanReport(c: OrphanCheck | null): string {
 		...list("in long-term memory, no stored fact behind it", c.counts.unknown, c.unknown),
 		...list("in long-term memory, its belief deleted (inert, text remains)", c.counts.stale, c.stale),
 	].join("\n");
+}
+
+/**
+ * `/facts orphans restore`: the stored facts whose text is missing are stored
+ * again by the next night (the fact night stores every merged fact without
+ * `stored_at`, verbatim, under its own document id). Returns how many.
+ */
+export function restoreMissing(db: Db, c: OrphanCheck): number {
+	let n = 0;
+	for (const r of c.missing) {
+		n += db
+			.prepare("UPDATE stm_facts SET stored_at = NULL WHERE id = ? AND stored_at IS NOT NULL AND state = 'merged'")
+			.run(r.doc.slice(5)).changes;
+	}
+	return n;
+}
+
+/** `/facts orphans delete confirm`: unknown and stale documents join the deletion queue (done at the next chance). */
+export function queueOrphanDeletions(db: Db, c: OrphanCheck, at: string): number {
+	const refs = [...c.unknown, ...c.stale];
+	queueDocDeletions(db, refs, at);
+	return refs.length;
 }

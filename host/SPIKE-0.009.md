@@ -96,6 +96,25 @@ Same smoke (`scripts/voice-lora-smoke.ts --model gemma-4-E4B --steps 20`), same 
 
 So gemma-4-E4B can carry a trained voice through the same path as MiniCPM5: about 2.3 × the step time and 3 × the memory, both small for a nightly job.
 
+## A Kev "same meaning?" role beside the check (2026-10-11; "For CH3" item 4)
+
+`scripts/meaning-spike.ts`: the real Kev (kev-4b, the serving checkpoint, its own port and scratch state, never the host's) asked two fixed yes/no questions about each (message, rewording) pair: *same* ("does the rewording say exactly the same thing … only in other words or another tone?") and its inverse *changed*. The wording was fixed before the first run and not tuned; Kev saw none of these pairs in training. Offline only: nothing journaled, nothing read by the host; per-pair rows in `~/.iyye2/spikes/meaning` (0700). 130 ms a pair; two runs gave identical figures.
+
+| Pairs | n (same) | lexical check: false accepts / false rejects | Kev *same*: AUC, accuracy at 0.5 | Of the changed rewordings the check accepts, Kev says different | Of the faithful ones the check accepts, Kev wrongly refuses |
+| --- | --- | --- | --- | --- | --- |
+| development (synthetic) | 80 (40) | 0 / 0 | 0.998, 98 % | — | 1/40 |
+| CH0's held-out (synthetic) | 48 (24) | 1 / 2 | 1.000, 98 % | 1/1 | 0/22 |
+| **fresh held-out (synthetic)** | 48 (24) | 4 / 5 | **0.993, 96 %** | **3/4** (sure, p < 0.3: 2/4) | **0/19** |
+| CH0 rephrasings of synthetic originals, gemma-4-12B's verdicts as labels | 67 (46) | 6 / 26 | 0.892, 82 % | 3/6 | 1/20 |
+| **CH0 rephrasings of real replies**, gemma-4-12B's verdicts as labels | 197 (150) | 20 / 77 | **0.654, 77 %** (the base rate is 76 %) | **1/20** | 0/73 |
+
+The inverse question ranks a little worse everywhere (held-out AUC 0.984) and abstains far more (0.3–0.7: 25 % of the held-out pairs, 59 % of the real ones), so *same* is the role's question.
+
+Reading:
+- On short, clear-cut synthetic changes Kev is nearly perfect without training, catches 3 of the 4 changes the lexical check lets through on the fresh held-out set (a present → past tense, a question reported as an answer, a state read as a deadline; it missed the Russian "будет" beside a participle), and refuses none of the faithful rewordings the check accepts. As a second filter it costs almost nothing there.
+- On the real rephrasings it barely separates what the 12B judge calls same from different (AUC 0.65 at every message length: 0.67 under 200 characters, 0.68 at 200–500, 0.68 above 500) and adds almost nothing to the check. Which of the two models is wrong there is unknown: the labels are another model's verdicts, and the real disagreements are subtler than the synthetic ones (a softened claim, a dropped clause in a long reply).
+- So: worth running in **shadow** in CH3 (cheap, and it never refused a faithful rewording the check accepted), with the owner's labels on a sample of real voice outputs deciding whether it may ever refuse. It cannot be a gate on zero-shot evidence; a trained "same meaning?" head is Stage 4 work.
+
 ## Which models can carry a trained voice
 
 - **minicpm5-2b:** yes, verified end to end (source `openbmb/MiniCPM5-2B@f974000`, arch llama).
@@ -109,4 +128,4 @@ So gemma-4-E4B can carry a trained voice through the same path as MiniCPM5: abou
 1. The model (one voice, owner decision 4; the owner decides by A/B): gemma-4-E4B has the most usable rephrasings in English and, with a Russian prompt, in Russian, the fewest the judge calls different, and keeps placeholders best; its LoRA path works (2026-10-11, below). qwen35-4b-tak is faster but cannot carry a trained voice. MiniCPM5 is not a voice without tuning.
 2. ~~The check needs: weekdays and months (both languages) as fixed segments, tense of report verbs, possessive names; then a fresh held-out set.~~ Done (second revision, above).
 3. Russian: no real data yet; the voice's instructions in the message's language.
-4. A Kev "same meaning?" role in shadow beside the check (the plan's next step), since lexical rules miss tense and replaced reasons.
+4. A Kev "same meaning?" role in shadow beside the check (the plan's next step), since lexical rules miss tense and replaced reasons. Measured offline (above): near-perfect on synthetic pairs, weak against a 12B judge on real rephrasings; shadow in CH3, owner labels before it may refuse anything.
