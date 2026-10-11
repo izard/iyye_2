@@ -137,7 +137,6 @@ export class VoiceShadow {
 			const since = new Date(at.getTime() - VOICE_BACKLOG_DAYS * 86_400_000).toISOString();
 			setKv(this.d.db, SINCE_KEY, since, at.toISOString());
 		}
-		if (!getKv(this.d.db, SALT_KEY)) setKv(this.d.db, SALT_KEY, randomBytes(32).toString("hex"), at.toISOString());
 		this.loop = new IdleLoop({ pollMs: this.d.pollMs, drain: () => this.drainOnce() });
 	}
 
@@ -185,18 +184,7 @@ export class VoiceShadow {
 	 * other numbers always lands on the same side: a repeated reply can never sit in both.
 	 */
 	split(actionId: string, text: string): "eval" | "dev" {
-		const row = this.d.db.prepare("SELECT split FROM voice_split WHERE action_id = ?").get(actionId) as
-			| { split: "eval" | "dev" }
-			| undefined;
-		if (row) return row.split;
-		const salt = getKv(this.d.db, SALT_KEY)!;
-		const key = text.replace(/\s+/g, " ").trim().toLowerCase() || `action:${actionId}`;
-		const h = createHash("sha256").update(`${salt}:${key}`).digest().readUInt32BE(0) / 2 ** 32;
-		const split = h < EVAL_SHARE ? "eval" : "dev";
-		this.d.db
-			.prepare("INSERT OR IGNORE INTO voice_split (action_id, split, assigned_at) VALUES (?, ?, ?)")
-			.run(actionId, split, this.d.now().toISOString());
-		return split;
+		return assignSplit(this.d.db, actionId, text, this.d.now());
 	}
 
 	private from(): string {
@@ -353,59 +341,15 @@ export class VoiceShadow {
 		return { scope, person, audience };
 	}
 
-	private insert(
-		r: {
-			action: Subject;
-			scope: string | null;
-			person: Contact | null;
-			audience: string;
-			model: string;
-			original: string;
-			status: string;
-			problem?: string | null;
-			lang?: string;
-			masked?: string;
-			segments?: string[];
-			system?: string;
-			characterRev?: number;
-			moodId?: string;
-			output?: string;
-			candidate?: string;
-			ms?: number;
-		},
-		at: Date,
-	): void {
-		this.split(r.action.id, r.masked ?? (r.original ? maskFixed(r.original, this.d.names()).masked : ""));
-		this.d.db
-			.prepare(
-				`INSERT OR IGNORE INTO voice_samples (id, action_id, event_id, scope, person_id, audience, lang, original, masked,
-					segments_json, model, prompt_version, system, adapter, character_rev, mood_sample_id, output, candidate,
-					status, problem, ms, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(
-				this.d.newId(),
-				r.action.id,
-				r.action.event_id,
-				r.scope,
-				r.person?.id ?? null,
-				r.audience,
-				r.lang ?? voiceLang(r.original),
-				r.original,
-				r.masked ?? "",
-				JSON.stringify(r.segments ?? []),
-				r.model,
-				VOICE_PROMPT_VERSION,
-				r.system ?? "",
-				r.characterRev ?? null,
-				r.moodId ?? null,
-				r.output ?? null,
-				r.candidate ?? null,
-				r.status,
-				r.problem ?? null,
-				r.ms ?? null,
-				at.toISOString(),
-			);
+	private insert(r: Omit<SampleRecord, "actionId" | "eventId"> & { action: Subject }, at: Date): void {
+		const { action, ...rest } = r;
+		insertSample(
+			this.d.db,
+			{ ...rest, actionId: action.id, eventId: action.event_id },
+			this.d.names(),
+			at,
+			this.d.newId,
+		);
 	}
 
 	/** Kev's "same meaning?" about candidates not yet asked (shadow: journaled, never read by the check). */
@@ -446,6 +390,98 @@ export class VoiceShadow {
 			}
 		}
 	}
+}
+
+/**
+ * The split of an original (shared by the shadow and the acting voice): fixed the first time it is seen,
+ * sealed thereafter, by a salted hash of its masked text (the salt is made once per installation).
+ */
+export function assignSplit(db: Db, actionId: string, text: string, at: Date): "eval" | "dev" {
+	const row = db.prepare("SELECT split FROM voice_split WHERE action_id = ?").get(actionId) as
+		| { split: "eval" | "dev" }
+		| undefined;
+	if (row) return row.split;
+	let salt = getKv(db, SALT_KEY);
+	if (!salt) {
+		salt = randomBytes(32).toString("hex");
+		setKv(db, SALT_KEY, salt, at.toISOString());
+	}
+	const key = text.replace(/\s+/g, " ").trim().toLowerCase() || `action:${actionId}`;
+	const h = createHash("sha256").update(`${salt}:${key}`).digest().readUInt32BE(0) / 2 ** 32;
+	const split = h < EVAL_SHARE ? "eval" : "dev";
+	db.prepare("INSERT OR IGNORE INTO voice_split (action_id, split, assigned_at) VALUES (?, ?, ?)").run(
+		actionId,
+		split,
+		at.toISOString(),
+	);
+	return split;
+}
+
+export interface SampleRecord {
+	actionId: string;
+	eventId: string | null;
+	scope: string | null;
+	person: Contact | null;
+	audience: string;
+	model: string;
+	original: string;
+	status: string;
+	problem?: string | null;
+	lang?: string;
+	masked?: string;
+	segments?: string[];
+	system?: string;
+	characterRev?: number;
+	moodId?: string;
+	output?: string;
+	candidate?: string;
+	ms?: number;
+	/** CH4: made on the turn path; `delivered`: its candidate went out instead of the original. */
+	acting?: boolean;
+	delivered?: boolean;
+}
+
+/** One sample row (and the original's split), shared by the shadow and the acting voice. */
+export function insertSample(
+	db: Db,
+	r: SampleRecord,
+	names: readonly string[],
+	at: Date,
+	newId: () => string = () => crypto.randomUUID(),
+): string {
+	assignSplit(db, r.actionId, r.masked ?? (r.original ? maskFixed(r.original, names).masked : ""), at);
+	const id = newId();
+	db.prepare(
+		`INSERT OR IGNORE INTO voice_samples (id, action_id, event_id, scope, person_id, audience, lang, original, masked,
+			segments_json, model, prompt_version, system, adapter, character_rev, mood_sample_id, output, candidate,
+			status, problem, ms, created_at, acting, delivered)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	).run(
+		id,
+		r.actionId,
+		r.eventId,
+		r.scope,
+		r.person?.id ?? null,
+		r.audience,
+		r.lang ?? voiceLang(r.original),
+		r.original,
+		r.masked ?? "",
+		JSON.stringify(r.segments ?? []),
+		r.model,
+		VOICE_PROMPT_VERSION,
+		r.system ?? "",
+		r.characterRev ?? null,
+		r.moodId ?? null,
+		r.output ?? null,
+		r.candidate ?? null,
+		r.status,
+		r.problem ?? null,
+		r.ms ?? null,
+		at.toISOString(),
+		r.acting ? 1 : 0,
+		r.delivered ? 1 : 0,
+	);
+	return id;
 }
 
 /**

@@ -139,7 +139,7 @@ const HELP = [
 	"/pause <motivation>, /resume <motivation> — self-preservation, curiosity, agency or social: stop or allow what it opens and does",
 	"/self questions — what Iyye asked about itself; /self accept <id> [answer], /self dismiss <id>; /self estimate misleading",
 	"/mood — Iyye's mood, computed from records (energy, how the day is going, each conversation), with its sources",
-	"/voice — the voice in shadow: rephrasings of delivered Telegram messages (never sent), coverage and figures; /voice next [eval|dev] — one to label; /voice same|changed <id> — did it keep the meaning; /voice better|worse <id>, /voice correct <id> <text> — which Iyye you want; /voice show <id>; /voice eval — the sealed evaluation set (each look recorded)",
+	"/voice — the voice: rephrasings of Telegram messages (shadow ones never sent), coverage and figures; /voice next [eval|dev] — one to label; /voice same|changed <id> — did it keep the meaning; /voice better|worse <id>, /voice correct <id> <text> — which Iyye you want; /voice show <id>; /voice eval — the sealed evaluation set (each look recorded); /voice act [on|off owner|contacts|all] — let the voice rephrase Telegram replies before they go out (only when the meaning check accepts; off by default)",
 	"/character — Iyye's character: temperament, style (asked of you), interests, each with its source; /character diff [n] — what changed; /character undo; /character freeze|unfreeze; /character reset [confirm]",
 	"/day — awake or asleep, day number, when the next night starts and why",
 	"/night — the night in progress (what it is doing, what is left) and the last night's result",

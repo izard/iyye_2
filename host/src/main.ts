@@ -108,6 +108,7 @@ import { toolsReport } from "./tools/report.ts";
 import { thinkComplete, thinkingToolkit } from "./tools/thinking.ts";
 import { visionToolkit } from "./tools/vision.ts";
 import { WEB_TOOLKIT, webFetchTool, webSearchTool } from "./tools/web.ts";
+import { VoiceActor } from "./voice/act.ts";
 import { VoiceCommands } from "./voice/commands.ts";
 import { routerVoice } from "./voice/prompt.ts";
 import { VoiceShadow } from "./voice/shadow.ts";
@@ -386,6 +387,7 @@ async function main(): Promise<number> {
 		reserve: config.adenosine.reserve,
 		windDown: config.adenosine.windDown,
 	});
+	let voiceActor: VoiceActor | null = null;
 	const scheduler = new Scheduler({
 		db,
 		device,
@@ -394,6 +396,9 @@ async function main(): Promise<number> {
 		outbox,
 		log,
 		onDeviceTime: (jobId, ms) => adenosine.deviceTime("chat", ms, `${jobId}:${getJob(db, jobId)?.attempt ?? 0}`),
+		// Plan 0.009 CH4: the voice, off until the owner turns a surface on (built below, with the character).
+		rephrase: (event, text, signal) =>
+			voiceActor ? voiceActor.rephrase(event, text, signal) : Promise.resolve({ content: text, record: () => {} }),
 		rhythm: {
 			mode: () => rhythm.mode(),
 			wakeForOwner: (why) => rhythm.wakeForOwner(why),
@@ -799,6 +804,21 @@ async function main(): Promise<number> {
 			.map((r) => r.display_name)
 			.filter((n) => n && n.trim().length >= 2);
 	let voiceShadow: VoiceShadow | null = null;
+	voiceActor = new VoiceActor({
+		db,
+		log,
+		models,
+		complete: routerVoice(router.url),
+		character,
+		names: personNames,
+		effectToolkits: () =>
+			new Set(
+				tools.toolkits
+					.filter((k) => k.effect === "self" || k.effect === "reach" || k.effect === "act")
+					.map((k) => k.name),
+			),
+		deadlineMs: config.voice.deadlineS * 1000,
+	});
 	const commandExtras = {
 		character,
 		moodReport: () =>
@@ -814,6 +834,7 @@ async function main(): Promise<number> {
 			}),
 		voice: new VoiceCommands({
 			db,
+			act: voiceActor,
 			names: personNames,
 			status: () => ({
 				model: models.selected("voice"),

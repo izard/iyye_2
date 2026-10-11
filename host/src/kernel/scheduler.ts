@@ -78,6 +78,19 @@ export interface SchedulerDeps {
 	onDeviceTime?: ((jobId: string, ms: number) => void) | null;
 	/** Day and night (plan 0.002 L4); without it the scheduler is always awake. */
 	rhythm?: SchedulerRhythm | null;
+	/**
+	 * The voice (plan 0.009 CH4), between the finished answer and the outbox: the content to deliver, and a
+	 * callback that records the attempt against the delivered action. It never throws and never waits for a
+	 * model; on any doubt it returns the original. The signal stops it at shutdown or a lost router (the
+	 * original then goes out: a finished answer is never recomputed).
+	 */
+	rephrase?:
+		| ((
+				event: EventRow,
+				text: string,
+				signal: AbortSignal,
+		  ) => Promise<{ content: string; record: (actionId: string) => void }>)
+		| null;
 }
 
 export interface SchedulerRhythm {
@@ -93,6 +106,8 @@ export class Scheduler {
 	private loopDone: Promise<void> = Promise.resolve();
 	private wakeUp: (() => void) | null = null;
 	private current: { jobId: string; abort: AbortController; reason: "router_lost" | "shutdown" | null } | null = null;
+	/** The voice step of the running job, if one is under way (plan 0.009 CH4). */
+	private voiceAbort: AbortController | null = null;
 
 	constructor(deps: SchedulerDeps) {
 		this.d = {
@@ -104,6 +119,7 @@ export class Scheduler {
 			device: new DeviceSlot(),
 			rhythm: null,
 			onDeviceTime: null,
+			rephrase: null,
 			...deps,
 		};
 		this.d.models.onRouterLost(() => this.abortCurrent("router_lost"));
@@ -150,6 +166,7 @@ export class Scheduler {
 	}
 
 	private abortCurrent(reason: "router_lost" | "shutdown"): void {
+		this.voiceAbort?.abort();
 		if (!this.current) return;
 		this.current.reason ??= reason;
 		this.current.abort.abort();
@@ -283,9 +300,36 @@ export class Scheduler {
 			return;
 		}
 		if (result.ok) {
-			await this.d.outbox.deliver({ jobId: job.id, event, kind: "reply", content: result.text });
+			const voiced = await this.voice(event, result.text);
+			const action = await this.d.outbox.deliver({ jobId: job.id, event, kind: "reply", content: voiced.content });
+			try {
+				voiced.record(action.id);
+			} catch (err) {
+				this.d.log.warn("scheduler: the voice attempt was not recorded", { error: (err as Error).message });
+			}
 		} else {
 			await this.fail(job, event, `${result.reason}: ${result.message}`);
+		}
+	}
+
+	/** The voice step (plan 0.009 CH4): the original on any failure; typing continues while it runs. */
+	private async voice(
+		event: EventRow,
+		text: string,
+	): Promise<{ content: string; record: (actionId: string) => void }> {
+		const keep = { content: text, record: () => {} };
+		if (!this.d.rephrase) return keep;
+		const abort = new AbortController();
+		this.voiceAbort = abort;
+		const stopTyping = this.startTyping(Outbox.routeFor(event));
+		try {
+			return await this.d.rephrase(event, text, abort.signal);
+		} catch (err) {
+			this.d.log.warn("scheduler: the voice failed, the original goes out", { error: (err as Error).message });
+			return keep;
+		} finally {
+			stopTyping();
+			this.voiceAbort = null;
 		}
 	}
 

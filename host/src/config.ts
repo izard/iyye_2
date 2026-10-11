@@ -41,9 +41,10 @@ export interface Config {
 	backgroundModel: string;
 	/**
 	 * The voice in shadow (plan 0.009 CH3): the model selected for it at first start (owner decision 7;
-	 * `/use <model> voice` changes it; it must be loaded, the host never loads it), and whether the shadow runs.
+	 * `/use <model> voice` changes it; it must be loaded, the host never loads it), whether the shadow runs, and
+	 * (CH4) how long a reply waits for its rephrasing.
 	 */
-	voice: { model: string; shadow: boolean };
+	voice: { model: string; shadow: boolean; deadlineS: number };
 	/** No background step starts this soon after chat activity, and steps are spaced this far apart. */
 	backgroundQuietS: number;
 	backgroundGapS: number;
@@ -270,7 +271,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		identityFile: absPath(env.IYYE2_IDENTITY || resolve(PROJECT_ROOT, "config/identity.md"), cwd),
 		modelsMax: int(env, "IYYE2_MODELS_MAX", 2, 1, 16),
 		backgroundModel: env.IYYE2_BACKGROUND_MODEL || "gemma-4-E4B",
-		voice: { model: env.IYYE2_VOICE_MODEL || "qwen35-4b-tak", shadow: env.IYYE2_VOICE_SHADOW !== "0" },
+		voice: {
+			model: env.IYYE2_VOICE_MODEL || "qwen35-4b-tak",
+			shadow: env.IYYE2_VOICE_SHADOW !== "0",
+			// CH4: how long a reply waits for its rephrasing before the original goes out (the answer is never lost).
+			deadlineS: int(env, "IYYE2_VOICE_DEADLINE_S", 15, 1, 600),
+		},
 		backgroundQuietS: int(env, "IYYE2_BACKGROUND_QUIET_S", 180, 0, 86_400),
 		backgroundGapS: int(env, "IYYE2_BACKGROUND_GAP_S", 30, 0, 86_400),
 		workspaceDir: absPath(

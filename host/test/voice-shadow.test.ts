@@ -391,7 +391,7 @@ test("/voice next hides the check and Kev until labelled; /voice eval is recorde
 	assert.ok(isKnownCommand("/voice next"));
 	assert.ok(isKnownCommand("/mood"));
 	const out = await handleOwnerCommand("/voice", { db, models: {} as never, issuer: "owner_web", voice: v });
-	assert.match(out.reply, /^voice \(shadow/);
+	assert.match(out.reply, /^voice \(rephrasings/);
 });
 
 test("the export: refused until the sealed set has labels; dev only; approved or owner-worded; masked and screened; with lineage", async () => {

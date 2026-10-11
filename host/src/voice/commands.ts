@@ -38,6 +38,8 @@ interface SampleRow {
 	ms: number | null;
 	kev_same: number | null;
 	created_at: string;
+	acting: number;
+	delivered: number;
 	split: "eval" | "dev";
 	meaning: string | null;
 	preference: string | null;
@@ -51,6 +53,8 @@ const SAMPLE_SQL = `SELECT v.*, s.split, m.value AS meaning, p.value AS preferen
 
 export interface VoiceCommandsDeps {
 	db: Db;
+	/** CH4: `/voice act …` (absent: acting is not available here). */
+	act?: { command(args: string[], by: string): string; report(): string } | null;
 	names: () => string[];
 	status: () => { model: string | null; pending: number; waiting: string };
 	now?: () => Date;
@@ -60,14 +64,15 @@ export class VoiceCommands {
 	private readonly d: Required<VoiceCommandsDeps>;
 
 	constructor(deps: VoiceCommandsDeps) {
-		this.d = { now: () => new Date(), ...deps };
+		this.d = { now: () => new Date(), act: null, ...deps };
 	}
 
 	command(args: string[], by: string): string {
 		const [sub, ...rest] = args;
 		const usage =
-			"usage: /voice [next [eval|dev] | show <id> | same|changed <id> | better|worse <id> | correct <id> <text> | eval]";
+			"usage: /voice [next [eval|dev] | show <id> | same|changed <id> | better|worse <id> | correct <id> <text> | eval | act [on|off owner|contacts|all]]";
 		if (!sub) return this.report();
+		if (sub === "act") return this.d.act ? this.d.act.command(rest, by) : "the acting voice is not available here";
 		if (sub === "next" && rest.length <= 1 && (!rest[0] || rest[0] === "eval" || rest[0] === "dev"))
 			return this.next(rest[0] as "eval" | "dev" | undefined);
 		if (sub === "eval" && rest.length === 0) return this.evalReport(by);
@@ -87,7 +92,8 @@ export class VoiceCommands {
 		const dev = all.filter((s) => s.split === "dev");
 		const evalN = all.filter((s) => s.split === "eval").length;
 		const lines = [
-			"voice (shadow: every message Iyye delivered on Telegram went out as written; these are rephrasings afterwards)",
+			"voice (rephrasings of Telegram messages; the shadow ones were made after delivery and never sent)",
+			...(this.d.act ? this.d.act.report().split("\n").slice(0, -1) : []),
 			`  model: ${st.model ?? "none selected (/use <model> voice; it must be loaded, the host never loads it)"}; ${st.pending} message(s) waiting${st.pending ? ` (${st.waiting})` : ""}`,
 			`  samples: ${all.length} (${dev.length} dev, ${evalN} in the sealed evaluation set); ${coverage(all)}`,
 			`  owner labels: ${count(all, (s) => s.meaning !== null)} meaning, ${count(all, (s) => s.preference !== null)} preference${count(all, (s) => s.correction !== null) ? ` (${count(all, (s) => s.correction !== null)} in your own words)` : ""}`,
@@ -124,9 +130,9 @@ export class VoiceCommands {
 			: undefined;
 		const lines = [
 			`voice sample ${s.id.slice(0, 8)} (${s.split}${s.split === "eval" ? ", sealed evaluation set" : ""}; ${s.model}, prompt ${s.prompt_version}; to ${audienceWord(s.audience)}, ${s.lang}; ${s.created_at.slice(0, 16).replace("T", " ")} UTC; character revision ${s.character_rev ?? "—"}${mood ? `; mood: energy ${energyWord(mood.energy)}, ${easeWord(mood.ease)}, ${engagementWord(mood.engagement)}` : ""})`,
-			"delivered (as written):",
+			s.acting && s.delivered ? "the original (not sent):" : "delivered (as written):",
 			indent(s.original),
-			"rephrased (never sent):",
+			s.acting && s.delivered ? "rephrased (sent instead of the original):" : "rephrased (never sent):",
 			indent(s.candidate ?? `— (${s.status}: ${s.problem ?? ""})`),
 		];
 		if (full) {
