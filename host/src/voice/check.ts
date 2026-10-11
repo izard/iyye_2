@@ -337,6 +337,21 @@ function tenseChanged(a: string, b: string): string | null {
 
 const count = (re: RegExp, text: string) => (text.match(re) ?? []).length;
 
+/** A word negated by its prefix in `a` that comes back in `b` only without it (or the reverse, called twice). */
+function prefixNegation(a: string, b: string): string | null {
+	const words = (t: string) => (t.toLowerCase().match(/\p{L}+/gu) ?? []) as string[];
+	const wa = words(a);
+	const wb = words(b);
+	for (const w of new Set(wa)) {
+		const m = /^(не|un|in|im|ir|il|dis)(\p{L}{4,})$/u.exec(w);
+		if (!m) continue;
+		const stem = m[2]!;
+		const n = (list: string[], x: string) => list.filter((y) => y === x).length;
+		if (n(wb, stem) > n(wa, stem) && n(wb, w) < n(wa, w)) return `the negation in "${w}" was dropped or added`;
+	}
+	return null;
+}
+
 function cyrillicShare(text: string): number {
 	const letters = text.match(/\p{L}/gu) ?? [];
 	if (letters.length === 0) return 0;
@@ -390,6 +405,9 @@ export function voiceProblem(original: string, rephrased: string, names: readonl
 	}
 	// "I have no access, so I can't see Tuesday's meetings" → "I checked: Tuesday has no meetings" keeps one "no".
 	if (count(NEGATION, b) < count(NEGATION, a)) return "dropped a negation";
+	// A negation inside a word: "неверно" → "верно", "incorrect" → "correct", "unlikely" → "likely".
+	const flipped = prefixNegation(a, b) ?? prefixNegation(b, a);
+	if (flipped) return flipped;
 	// A past event told as a future one, or the reverse: a future marker appears or vanishes beside a past form.
 	const fa = count(FUTURE, a);
 	const fb = count(FUTURE, b);
@@ -405,3 +423,32 @@ function nameOccurrences(text: string, name: string): number {
 	const re = new RegExp(`(?<![\\p{L}\\d])${escapeRe(stem)}${cyrillic ? "\\p{L}{0,3}" : ""}(?![\\p{L}\\d])`, "giu");
 	return (text.match(re) ?? []).length;
 }
+
+/** A failure or problem is reported (the voice preset then speaks plainly: no wit about a failure). */
+export function reportsFailure(text: string): boolean {
+	return count(FAILURE, text) > 0;
+}
+
+/**
+ * The affectionate-skeptic preset's own refusals (owner decision 13), on top of `voiceProblem`: the
+ * voice may express established content, never add to it. More words of criticism, of idealist
+ * metaphysics, or of disparagement than the original has refuse the rewording: an objection or a
+ * metaphor is the reasoning model's to make, and an idealist metaphor is eligible only when the
+ * original already has it. These only ever refuse; nothing here makes a rewording acceptable.
+ */
+export function presetProblem(original: string, rephrased: string): string | null {
+	for (const [label, re] of [
+		["criticism", CRITICISM],
+		["an idealist claim", IDEALIST],
+		["disparagement", PEJORATIVE],
+	] as const)
+		if (count(re, rephrased) > count(re, original)) return `added ${label}`;
+	return null;
+}
+
+const CRITICISM =
+	/\b(?:wrong|mistake\w*|error\w*|incorrect\w*|false|flaw\w*|fallac\w*|nonsense|actually|misguided|mistaken)\b|(?<![\p{L}])(?:ошиб\p{L}*|неверн\p{L}*|неправ\p{L}*|ложн\p{L}*|заблужд\p{L}*|на самом деле)/giu;
+const IDEALIST =
+	/\b(?:perceiv\w*|percept\w*|imagin\w*|idealis\w*|berkeley\w*|illusion\w*|representation\w*|subjectiv\w*|mind-dependent|esse est percipi)\b|(?<![\p{L}])(?:воспри\p{L}*|вообра\p{L}*|идеали\p{L}*|беркли|иллюзи\p{L}*|субъектив\p{L}*|представлени\p{L}*)/giu;
+const PEJORATIVE =
+	/\b(?:stupid\w*|idiot\w*|dumb\w*|fool\w*|silly|ridiculous|absurd\w*|clueless|naive\w*|moron\w*)\b|(?<![\p{L}])(?:туп\p{L}*|идиот\p{L}*|дура\p{L}*|дурак\p{L}*|глуп\p{L}*|нелеп\p{L}*|абсурд\p{L}*|наивн\p{L}*)/giu;

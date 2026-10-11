@@ -60,8 +60,17 @@ export function styleHeader(state: CharacterState): string {
 	return `Style: ${VOICE_DIALS.map((d) => `${d} ${state.style[d].value === null ? "neutral (not chosen yet)" : styleWord(d, state.style[d].value)}`).join(", ")}.`;
 }
 
-export function voiceSystem(lang: VoiceLang, style: string, mood: string): string {
-	return [...(lang === "ru" ? RU : EN), style, mood].join("\n");
+export function voiceSystem(lang: VoiceLang, style: string, mood: string, preset: string | null = null): string {
+	return [...(lang === "ru" ? RU : EN), ...(preset ? [preset] : []), style, mood].join("\n");
+}
+
+/**
+ * A sample's configuration identity: the base prompt's version, plus the preset's definition version
+ * and wit level when a preset shaped it (owner decision 13). `(action_id, model, prompt_version)` stays
+ * the sample's identity, so each configuration is its own sample.
+ */
+export function voiceConfigVersion(presetVersion: string | null): string {
+	return presetVersion ? `${VOICE_PROMPT_VERSION}+${presetVersion}` : VOICE_PROMPT_VERSION;
 }
 
 export function voiceUser(lang: VoiceLang, masked: string): string {

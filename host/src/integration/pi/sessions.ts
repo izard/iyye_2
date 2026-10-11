@@ -112,6 +112,11 @@ export interface TurnRequest {
 	signal?: AbortSignal;
 	/** Who asked and where (plan 0.006): tools with a `self` effect reach only this route. */
 	turn?: TurnContext;
+	/**
+	 * The owner's selected reasoning and perspective, rendered and bound by the kernel at the turn's start
+	 * (owner decision 13). Only an owner view uses it; a change reopens the session on its next turn.
+	 */
+	mind?: string | null;
 }
 
 interface LiveSession {
@@ -121,6 +126,8 @@ interface LiveSession {
 	/** The toolkits declared to the model, in declaration order; the model's prompt lists exactly these. */
 	active: string[];
 	view: ScopeView;
+	/** The bound reasoning text this session's prompt carries (owner decision 13). */
+	mind: string | null;
 	loader: IyyeResourceLoader;
 	tools: SessionTools | null;
 	lastUsed: number;
@@ -231,7 +238,7 @@ export class PiConversations {
 		let session: AgentSession;
 		let live: LiveSession;
 		try {
-			live = await this.open(req.scope, req.view, req.model);
+			live = await this.open(req.scope, req.view, req.model, req.view.kind === "owner" ? (req.mind ?? null) : null);
 			await this.selectToolkits(live, req);
 			live.tools?.beginTurn(req.turn);
 			session = live.session;
@@ -345,7 +352,7 @@ export class PiConversations {
 	private declareToolkits(live: LiveSession, active: string[]): void {
 		const kits = (live.tools?.toolkits ?? []).filter((k) => active.includes(k.name));
 		live.active = kits.map((k) => k.name);
-		live.loader.setSystemPrompt(composeSystemPrompt(this.d.identity, live.view, kits));
+		live.loader.setSystemPrompt(composeSystemPrompt(this.d.identity, live.view, kits, live.mind));
 		live.session.setActiveToolsByName(this.toolNames(live.tools, kits));
 	}
 
@@ -370,14 +377,15 @@ export class PiConversations {
 		}
 	}
 
-	private async open(scope: string, view: ScopeView, model: string): Promise<LiveSession> {
+	private async open(scope: string, view: ScopeView, model: string, mind: string | null = null): Promise<LiveSession> {
 		// The principal comes from the trusted view the kernel built, never from the conversation.
 		// Background work is the principal `iyye`: read-only toolkits only (ToolBroker.allowed).
 		const principal = view.kind === "background" ? "iyye" : view.kind;
 		// Trust too comes from the kernel's view; a change in it changes the grants, so the session reopens.
 		const trusted = view.kind === "contact" && view.trusted === true;
 		const tools = this.d.tools?.forSession({ scope, principal, trusted }) ?? null;
-		const prompt = composeSystemPrompt(this.d.identity, view, tools?.toolkits ?? []);
+		// The prompt for every permitted toolkit and the bound reasoning: a change in either reopens the session.
+		const prompt = composeSystemPrompt(this.d.identity, view, tools?.toolkits ?? [], mind);
 		const existing = this.live.get(scope);
 		if (existing && existing.prompt === prompt) {
 			existing.lastUsed = Date.now();
@@ -419,6 +427,7 @@ export class PiConversations {
 				this.d.identity,
 				view,
 				permittedKits.filter((k) => active.includes(k.name)),
+				mind,
 			),
 			await loadInlineExtensions([contextHook(recall)], this.cwd, this.agentDir),
 		);
@@ -444,7 +453,7 @@ export class PiConversations {
 				defaultThinkingLevel: "off",
 			}),
 		});
-		const live: LiveSession = { session, prompt, active, view, loader, tools, lastUsed: Date.now(), recall };
+		const live: LiveSession = { session, prompt, active, view, mind, loader, tools, lastUsed: Date.now(), recall };
 		// Every permitted tool is registered (so one can be added later); only the active ones are declared.
 		if (selecting) this.declareToolkits(live, active);
 		this.live.set(scope, live);

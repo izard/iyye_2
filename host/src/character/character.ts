@@ -13,6 +13,11 @@
  *   starting question (owner decision 9, CH1b). Style never reaches Pi's
  *   prompt (owner decision 8); only the voice (CH3) will read it.
  * - **Interests and habits:** empty until CH5's nightly review.
+ * - **Controls** (owner decision 13): owner-selected, allowlisted choices
+ *   (`character/policy.ts`): reasoning `critique` and `perspective` (rendered
+ *   into Pi's prompt for the owner's conversation), and the voice's `preset`,
+ *   `sarcasm` and `audience` (the voice only). Revisions written before they
+ *   existed read as all off; history is never rewritten.
  *
  * Every change is a new revision, undo and reset included; history is never
  * rewritten (the table refuses updates and deletes). SQLite is the truth;
@@ -24,6 +29,16 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
+import {
+	CONTROL_NAMES,
+	CONTROLS_OFF,
+	type ControlName,
+	type Controls,
+	PERSPECTIVE_DEFS,
+	PRESET_STYLE_SEED,
+	REASONING_DEFS,
+	VOICE_PRESET_DEFS,
+} from "./policy.ts";
 
 export const TEMPERAMENTS = ["curiosity", "agency", "social"] as const;
 export type Temperament = (typeof TEMPERAMENTS)[number];
@@ -50,6 +65,16 @@ export interface Value {
 	value: number | null;
 	source: Source;
 	since: string;
+	/** A dial a preset seeded, with the value it replaced: turning the preset off puts that back. */
+	via?: { preset: string; before: Value };
+}
+
+/** One owner-selected control: its allowlisted value and the definition version it was selected under. */
+export interface ControlSel {
+	value: string;
+	source: Source;
+	since: string;
+	definition: string | null;
 }
 
 export interface CharacterState {
@@ -57,6 +82,8 @@ export interface CharacterState {
 	style: Record<StyleDial, Value>;
 	/** CH5: source-linked statements; empty in CH1. */
 	interests: { text: string; since: string }[];
+	/** Owner decision 13; absent in revisions written before it (read as all off). */
+	controls: Record<ControlName, ControlSel>;
 }
 
 export type RevisionKind = "start" | "owner" | "undo" | "reset" | "review";
@@ -81,7 +108,29 @@ export function startState(at: string): CharacterState {
 		temperament: Object.fromEntries(TEMPERAMENTS.map((t) => [t, v(1)])) as Record<Temperament, Value>,
 		style: Object.fromEntries(STYLE_NAMES.map((d) => [d, v(null)])) as Record<StyleDial, Value>,
 		interests: [],
+		controls: controlsOff(at),
 	};
+}
+
+function controlsOff(at: string): Record<ControlName, ControlSel> {
+	return Object.fromEntries(
+		CONTROL_NAMES.map((c) => [c, { value: CONTROLS_OFF[c], source: "default", since: at, definition: null }]),
+	) as Record<ControlName, ControlSel>;
+}
+
+/** The plain values of a state's controls. */
+export function controlsOf(s: CharacterState): Controls {
+	return Object.fromEntries(CONTROL_NAMES.map((c) => [c, s.controls[c].value])) as unknown as Controls;
+}
+
+/** The definition version a control's value is selected under (null for off). */
+function definitionOf(c: ControlName, value: string): string | null {
+	if (value === "off") return null;
+	if (c === "critique") return REASONING_DEFS[value]?.version ?? null;
+	if (c === "perspective") return PERSPECTIVE_DEFS[value]?.version ?? null;
+	if (c === "preset") return VOICE_PRESET_DEFS[value]?.version ?? null;
+	if (c === "sarcasm") return `sarcasm:${value}`;
+	return null;
 }
 
 /** A dial's value in words: the nearest of its three choice words (0.2 / 0.5 / 0.8), or "unset". */
@@ -96,13 +145,15 @@ export interface CharacterDeps {
 	/** Where `character.json` is written; null: no snapshot (tests). */
 	stateDir: string | null;
 	now?: () => Date;
+	/** Called after every new revision (the M4 trial boundary check, plan 0.010). */
+	onChange?: ((r: Revision) => void) | null;
 }
 
 export class Character {
 	private readonly d: Required<CharacterDeps>;
 
 	constructor(deps: CharacterDeps) {
-		this.d = { now: () => new Date(), ...deps };
+		this.d = { now: () => new Date(), onChange: null, ...deps };
 	}
 
 	/** At startup: revision 0 on the first start; the snapshot rebuilt unless it is exactly what SQLite says. */
@@ -136,7 +187,10 @@ export class Character {
 			| undefined;
 		if (!row) return null;
 		const { state_json, ...rest } = row;
-		return { ...rest, state: JSON.parse(state_json) as CharacterState };
+		const state = JSON.parse(state_json) as Partial<CharacterState> & Omit<CharacterState, "controls">;
+		// A revision written before the controls existed: all off, as of that revision (never rewritten).
+		const controls = { ...controlsOff(row.created_at), ...(state.controls ?? {}) };
+		return { ...rest, state: { ...state, controls } };
 	}
 
 	/**
@@ -193,14 +247,19 @@ export class Character {
 		})();
 		const r = this.revision(rev)!;
 		this.writeSnapshot(r);
+		this.d.onChange?.(r);
 		return r;
 	}
 
 	/** `/character …` (owner surfaces only). */
 	command(args: string[], by: string): string {
 		const [sub, ...rest] = args;
-		const usage = "usage: /character [diff [n] | undo | freeze | unfreeze | reset [confirm]]";
+		const usage =
+			"usage: /character [diff [n] | undo | freeze | unfreeze | reset [confirm] | preset affectionate-skeptic|off | perspective berkeley-inspired|off | sarcasm off|dry|pointed]";
 		if (!sub) return this.report();
+		if (sub === "preset" && rest.length === 1) return this.setPreset(rest[0]!, by) ?? usage;
+		if (sub === "perspective" && rest.length === 1) return this.setControl("perspective", rest[0]!, by) ?? usage;
+		if (sub === "sarcasm" && rest.length === 1) return this.setControl("sarcasm", rest[0]!, by) ?? usage;
 		if (sub === "diff" && rest.length <= 1) {
 			const n = rest[0] ? Number(rest[0]) : 5;
 			return Number.isInteger(n) && n > 0 ? this.diff(n) : usage;
@@ -231,7 +290,12 @@ export class Character {
 				return `  ${d}: ${v.value === null ? "unset — Iyye will ask you" : `${styleWord(d, v.value)} (${v.value.toFixed(2)}, ${since(v)})`}`;
 			}),
 			`interests and habits: ${s.interests.length ? s.interests.map((i) => i.text).join("; ") : "none yet (learned at night, later)"}`,
-			"/character diff [n] · /character undo · /character freeze|unfreeze · /character reset",
+			"your selections (owner decision 13; reasoning and perspective enter the chat model's prompt in your conversation only; the voice preset only the voice):",
+			...CONTROL_NAMES.map((c) => {
+				const v = s.controls[c];
+				return `  ${CONTROL_LABEL[c]}: ${v.value}${v.definition ? ` (${v.definition})` : ""}${v.source === "owner" ? `, yours since ${v.since.slice(0, 10)}` : ""}`;
+			}),
+			"/character diff [n] · /character undo · /character freeze|unfreeze · /character reset · /character preset affectionate-skeptic|off · /character perspective berkeley-inspired|off · /character sarcasm off|dry|pointed",
 		].join("\n");
 	}
 
@@ -266,6 +330,7 @@ export class Character {
 			s.temperament = structuredClone(target.state.temperament);
 			s.style = structuredClone(target.state.style);
 			s.interests = structuredClone(target.state.interests);
+			s.controls = structuredClone(target.state.controls);
 		});
 		const changes = changesBetween(r.state, next.state);
 		return `undone: revision ${r.rev}; revision ${next.rev} is active${changes.length ? `\n${changes.map((c) => `  ${c}`).join("\n")}` : " (no value changed)"}`;
@@ -310,11 +375,78 @@ export class Character {
 				for (const t of TEMPERAMENTS)
 					if (s.temperament[t].source !== "owner") s.temperament[t] = start.temperament[t];
 				for (const d of STYLE_NAMES) if (s.style[d].source !== "owner") s.style[d] = start.style[d];
+				for (const c of CONTROL_NAMES) if (s.controls[c].source !== "owner") s.controls[c] = start.controls[c];
 				s.interests = [];
 			},
 			(at) => setKv(this.d.db, WATERMARK_KEY, at, at),
 		);
 		return `reset: revision ${next.rev} is active; ${learned.length ? `${learned.length} learned value(s) removed` : "nothing learned was there"}, your own values kept`;
+	}
+
+	/**
+	 * `/character preset affectionate-skeptic|off`: the preset turns on the critique and the voice preset
+	 * together (sarcasm starts dry), seeds the style dials the owner has not pinned, and reports both; off
+	 * turns its critique and voice off and puts back exactly the dials it seeded. The perspective is separate.
+	 */
+	private setPreset(value: string, by: string): string | null {
+		if (value !== "off" && !(value in VOICE_PRESET_DEFS)) return null;
+		const was = this.active().state;
+		if (value !== "off" && was.controls.preset.value === value) return `the ${value} preset is already on`;
+		if (value === "off" && was.controls.preset.value === "off") return "no preset is on";
+		const pinned: string[] = [];
+		const next = this.commit("owner", by, `preset ${value}`, (s, at) => {
+			const sel = (c: ControlName, v: string) => {
+				s.controls[c] = { value: v, source: "owner", since: at, definition: definitionOf(c, v) };
+			};
+			if (value === "off") {
+				const preset = s.controls.preset.value;
+				sel("critique", "off");
+				sel("preset", "off");
+				sel("sarcasm", "off");
+				for (const d of STYLE_NAMES) {
+					const v = s.style[d];
+					if (v.via?.preset === preset) s.style[d] = v.via.before;
+				}
+				return;
+			}
+			sel("critique", "material-errors");
+			sel("preset", value);
+			if (s.controls.sarcasm.value === "off") sel("sarcasm", "dry");
+			sel("audience", "owner-only");
+			for (const [d, target] of Object.entries(PRESET_STYLE_SEED[value] ?? {}) as [StyleDial, number][]) {
+				const v = s.style[d];
+				if (v.source === "owner" && !v.via) {
+					pinned.push(`${d} ${styleWord(d, v.value)}`);
+					continue;
+				}
+				s.style[d] = {
+					value: target,
+					source: "owner",
+					since: at,
+					via: { preset: value, before: v.via?.before ?? v },
+				};
+			}
+		});
+		const changes = changesBetween(was, next.state);
+		return [
+			`revision ${next.rev}: ${value === "off" ? "the preset is off; ordinary voice expression (the voice's acting setting is unchanged)" : `the ${value} preset is on (only for you: your conversation's reasoning, and the voice's wording to your linked Telegram accounts when /voice act on owner)`}`,
+			...changes.map((c) => `  ${c}`),
+			...(pinned.length ? [`  kept your own dials: ${pinned.join(", ")}`] : []),
+		].join("\n");
+	}
+
+	/** `/character perspective …` and `/character sarcasm …`: one allowlisted control, as a new revision. */
+	private setControl(c: "perspective" | "sarcasm", value: string, by: string): string | null {
+		const allowed = c === "perspective" ? ["off", ...Object.keys(PERSPECTIVE_DEFS)] : ["off", "dry", "pointed"];
+		if (!allowed.includes(value)) return null;
+		const was = this.active().state;
+		if (was.controls[c].value === value) return `${CONTROL_LABEL[c]} is already ${value}`;
+		const next = this.commit("owner", by, `${c} ${value}`, (s, at) => {
+			s.controls[c] = { value, source: "owner", since: at, definition: definitionOf(c, value) };
+		});
+		const note =
+			c === "sarcasm" && next.state.controls.preset.value === "off" ? " (it applies when a voice preset is on)" : "";
+		return [`revision ${next.rev}:${note}`, ...changesBetween(was, next.state).map((x) => `  ${x}`)].join("\n");
 	}
 
 	private snapshotPath(): string | null {
@@ -352,14 +484,24 @@ export class Character {
 			temperament: Object.fromEntries(TEMPERAMENTS.map((t) => [t, s.temperament[t].value])),
 			style: Object.fromEntries(STYLE_NAMES.map((d) => [d, s.style[d].value])),
 			interests: s.interests.map((i) => i.text),
+			controls: Object.fromEntries(CONTROL_NAMES.map((c) => [c, s.controls[c].value])),
 			sources: {
 				temperament: Object.fromEntries(TEMPERAMENTS.map((t) => [t, s.temperament[t].source])),
 				style: Object.fromEntries(STYLE_NAMES.map((d) => [d, s.style[d].source])),
+				controls: Object.fromEntries(CONTROL_NAMES.map((c) => [c, s.controls[c].source])),
 			},
 		};
 		return `${JSON.stringify(body, null, 2)}\n`;
 	}
 }
+
+const CONTROL_LABEL: Record<ControlName, string> = {
+	critique: "reasoning critique",
+	perspective: "reasoning perspective",
+	preset: "voice preset",
+	sarcasm: "voice sarcasm",
+	audience: "voice audience",
+};
 
 /** The values that differ between two states, in words. */
 export function changesBetween(a: CharacterState, b: CharacterState): string[] {
@@ -376,6 +518,11 @@ export function changesBetween(a: CharacterState, b: CharacterState): string[] {
 			out.push(
 				`style ${d}: ${styleWord(d, x)}${x === null ? "" : ` (${x.toFixed(2)})`} → ${styleWord(d, y)}${y === null ? "" : ` (${y.toFixed(2)})`} (${b.style[d].source})`,
 			);
+	}
+	for (const c of CONTROL_NAMES) {
+		const x = a.controls[c].value;
+		const y = b.controls[c].value;
+		if (x !== y) out.push(`${CONTROL_LABEL[c]}: ${x} → ${y} (${b.controls[c].source})`);
 	}
 	const before = new Set(a.interests.map((i) => i.text));
 	const after = new Set(b.interests.map((i) => i.text));

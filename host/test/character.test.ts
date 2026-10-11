@@ -48,9 +48,17 @@ test("the first start creates revision 0: temperament 1.0, style unset, no inter
 			temperament: { curiosity: 1, agency: 1, social: 1 },
 			style: { length: null, warmth: null, playfulness: null, formality: null, observations: null, emoji: null },
 			interests: [],
+			controls: { critique: "off", perspective: "off", preset: "off", sarcasm: "off", audience: "owner-only" },
 			sources: {
 				temperament: { curiosity: "default", agency: "default", social: "default" },
 				style: Object.fromEntries(STYLE_NAMES.map((d) => [d, "default"])),
+				controls: {
+					critique: "default",
+					perspective: "default",
+					preset: "default",
+					sarcasm: "default",
+					audience: "default",
+				},
 			},
 		});
 		// A restart adds nothing.

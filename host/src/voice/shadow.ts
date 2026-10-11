@@ -36,8 +36,9 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import type { Character } from "../character/character.ts";
+import { type Character, controlsOf } from "../character/character.ts";
 import { moodAt, moodHeader, recordMood } from "../character/mood.ts";
+import { type ControlValue, VOICE_PRESET_DEFS } from "../character/policy.ts";
 import type { DecisionClient, NoulQuestion, Role } from "../decisions/client.ts";
 import { IdleLoop } from "../decisions/idle.ts";
 import type { Logger } from "../log.ts";
@@ -47,7 +48,8 @@ import type { Db } from "../state/db.ts";
 import { getEvent } from "../state/events.ts";
 import { getKv, setKv } from "../state/kv.ts";
 import { forgottenAt } from "../state/tombstones.ts";
-import { maskFixed, unmask, voiceProblem } from "./check.ts";
+import { maskFixed, presetProblem, unmask, voiceProblem } from "./check.ts";
+import { voiceConfig } from "./preset.ts";
 import {
 	changeRatio,
 	styleHeader,
@@ -95,7 +97,7 @@ export interface VoiceShadowDeps {
 	models: { selected(key: "voice"): string | null; acquire(name: string): Promise<ModelLease | OpResult> };
 	background: { blockedReason(): string | null; yieldReason(): string | null };
 	complete: VoiceComplete;
-	character: Pick<Character, "revisionAt">;
+	character: Pick<Character, "revisionAt" | "revision">;
 	/** Every known person's name, for masking and the check. */
 	names: () => string[];
 	energy?: { deviceTime(kind: "background", ms: number, ref: string): void } | null;
@@ -156,13 +158,23 @@ export class VoiceShadow {
 	pending(): number {
 		const model = this.d.models.selected("voice");
 		if (!model) return 0;
-		return (
+		const live = (
 			this.d.db
-				.prepare(`SELECT count(*) AS n FROM (${SUBJECTS_SQL})`)
-				.get(this.from(), model, VOICE_PROMPT_VERSION) as {
-				n: number;
-			}
+				.prepare(`SELECT count(*) AS n FROM (${LIVE_SQL})`)
+				.get(this.from(), model, VOICE_PROMPT_VERSION, VOICE_PROMPT_VERSION) as { n: number }
 		).n;
+		const x = getExperiment(this.d.db);
+		if (!x) return live;
+		return (
+			live +
+			(
+				this.d.db
+					.prepare(`SELECT count(*) AS n FROM (${EXPERIMENT_SQL})`)
+					.get(this.from(), model, experimentKey(x)) as {
+					n: number;
+				}
+			).n
+		);
 	}
 
 	/** One pass: Kev on candidates still unasked, then rephrase what can run now. Returns samples written. */
@@ -198,19 +210,43 @@ export class VoiceShadow {
 		if (blocked) return this.idle(blocked);
 		const model = this.d.models.selected("voice");
 		if (!model) return this.idle("no voice model is selected (/use <model> voice)");
-		const s = this.d.db.prepare(`${SUBJECTS_SQL} LIMIT 1`).get(this.from(), model, VOICE_PROMPT_VERSION) as
-			| Subject
-			| undefined;
+		// The delivered messages first; then, owner messages only, the experiment the owner set (if any).
+		const experiment = getExperiment(this.d.db);
+		let s = this.d.db
+			.prepare(`${LIVE_SQL} LIMIT 1`)
+			.get(this.from(), model, VOICE_PROMPT_VERSION, VOICE_PROMPT_VERSION) as Subject | undefined;
+		const testing = !s && experiment !== null;
+		if (!s && experiment)
+			s = this.d.db.prepare(`${EXPERIMENT_SQL} LIMIT 1`).get(this.from(), model, experimentKey(experiment)) as
+				| Subject
+				| undefined;
 		if (!s) return this.idle("nothing to rephrase");
 		const who = this.subjectPerson(s);
 		const original = (s.sent_id ? s.sent_text : s.content)?.trim() ?? "";
 		const at = this.d.now();
+		const lang = voiceLang(original);
+		// The character and mood of the delivery: the turn's bound revision when it was recorded.
+		const bound = s.event_id
+			? (this.d.db.prepare("SELECT character_rev FROM turn_profiles WHERE event_id = ?").get(s.event_id) as
+					| { character_rev: number }
+					| undefined)
+			: undefined;
+		const rev =
+			(bound && this.d.character.revision(bound.character_rev)) || this.d.character.revisionAt(s.created_at);
+		const delivered = controlsOf(rev.state);
+		const x = testing && experiment ? { key: experimentKey(experiment), ...experiment } : null;
+		const tested = x ? { ...delivered, preset: x.preset, sarcasm: x.sarcasm } : delivered;
+		const config = voiceConfig(tested, who.audience, lang, original);
 		const base = {
 			action: s,
 			scope: who.scope,
 			person: who.person,
 			audience: who.audience,
 			model,
+			// An experiment's samples are their own identity, even where its configuration equals the delivery's.
+			promptVersion: x ? `${config.version}#${x.key}` : config.version,
+			profile: { rev: rev.rev, controls: delivered, plain: config.plain },
+			...(x ? { experiment: x } : {}),
 		};
 		if (!who.scope || forgottenAt(this.d.db, who.scope) !== null || original === FORGOTTEN || original === "") {
 			this.insert({ ...base, original: "", status: "forgotten", problem: "forgotten or empty" }, at);
@@ -249,11 +285,9 @@ export class VoiceShadow {
 		}, this.d.watchMs);
 		watch.unref();
 		const names = this.d.names();
-		const lang = voiceLang(original);
 		const m = maskFixed(original, names);
-		const rev = this.d.character.revisionAt(s.created_at);
 		const mood = moodAt(this.d.db, who.scope, new Date(s.created_at));
-		const system = voiceSystem(lang, styleHeader(rev.state), moodHeader(mood));
+		const system = voiceSystem(lang, styleHeader(rev.state), moodHeader(mood), config.presetText);
 		const epoch = getKv(this.d.db, FORGET_EPOCH_KEY);
 		const t0 = this.d.now().getTime();
 		let output: string | null = null;
@@ -310,7 +344,7 @@ export class VoiceShadow {
 			this.insert({ ...common, output, status: "refused", problem: u.why }, this.d.now());
 			return "written";
 		}
-		const problem = voiceProblem(original, u, names);
+		const problem = voiceProblem(original, u, names) ?? (config.presetText ? presetProblem(original, u) : null);
 		const status = problem ? "refused" : changeRatio(original, u) < UNCHANGED ? "unchanged" : "accepted";
 		this.insert({ ...common, output, candidate: u, status, problem }, this.d.now());
 		return "written";
@@ -392,6 +426,11 @@ export class VoiceShadow {
 	}
 }
 
+/** The `/forget` epoch: work that read it before a model call and sees another after it is discarded. */
+export function forgetEpoch(db: Db): string | null {
+	return getKv(db, FORGET_EPOCH_KEY);
+}
+
 /**
  * The split of an original (shared by the shadow and the acting voice): fixed the first time it is seen,
  * sealed thereafter, by a salted hash of its masked text (the salt is made once per installation).
@@ -439,6 +478,10 @@ export interface SampleRecord {
 	/** CH4: made on the turn path; `delivered`: its candidate went out instead of the original. */
 	acting?: boolean;
 	delivered?: boolean;
+	/** Owner decision 13: the configuration identity (default: the base prompt), its profile and any experiment. */
+	promptVersion?: string;
+	profile?: unknown;
+	experiment?: unknown;
 }
 
 /** One sample row (and the original's split), shared by the shadow and the acting voice. */
@@ -454,8 +497,8 @@ export function insertSample(
 	db.prepare(
 		`INSERT OR IGNORE INTO voice_samples (id, action_id, event_id, scope, person_id, audience, lang, original, masked,
 			segments_json, model, prompt_version, system, adapter, character_rev, mood_sample_id, output, candidate,
-			status, problem, ms, created_at, acting, delivered)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			status, problem, ms, created_at, acting, delivered, profile_json, experiment_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		r.actionId,
@@ -468,7 +511,7 @@ export function insertSample(
 		r.masked ?? "",
 		JSON.stringify(r.segments ?? []),
 		r.model,
-		VOICE_PROMPT_VERSION,
+		r.promptVersion ?? VOICE_PROMPT_VERSION,
 		r.system ?? "",
 		r.characterRev ?? null,
 		r.moodId ?? null,
@@ -480,6 +523,8 @@ export function insertSample(
 		at.toISOString(),
 		r.acting ? 1 : 0,
 		r.delivered ? 1 : 0,
+		r.profile === undefined ? null : JSON.stringify(r.profile),
+		r.experiment === undefined ? null : JSON.stringify(r.experiment),
 	);
 	return id;
 }
@@ -488,14 +533,53 @@ export function insertSample(
  * Delivered Telegram messages since `?` the model `?` with prompt `?` has not rephrased: replies, and
  * messages sent with `telegram_send` (their body only); not reminders or failure notices.
  */
-const SUBJECTS_SQL = `SELECT a.id, a.event_id, a.kind, a.content, a.created_at,
+const SUBJECTS_BASE = `SELECT a.id, a.event_id, a.kind, a.content, a.created_at,
 		s.id AS sent_id, s.text AS sent_text, s.scope AS sent_scope, s.recipient_contact_id
 	FROM actions a LEFT JOIN sent_messages s ON a.idempotency_key = 'notice:send:' || s.id
 	WHERE a.state = 'delivered' AND json_extract(a.route_json, '$.channel') = 'telegram'
 	AND a.content IS NOT NULL AND a.created_at >= ?
 	AND (a.kind = 'reply' OR s.id IS NOT NULL)
-	AND NOT EXISTS (SELECT 1 FROM voice_samples v WHERE v.action_id = a.id AND v.model = ? AND v.prompt_version = ?)
+	AND NOT EXISTS (SELECT 1 FROM voice_samples f WHERE f.action_id = a.id AND f.status = 'forgotten')`;
+/**
+ * Delivered messages this model has no live-configuration sample of (any preset variant of the base prompt:
+ * one configuration per message, the one it was delivered under); a forgotten original never comes back.
+ */
+const LIVE_SQL = `${SUBJECTS_BASE}
+	AND NOT EXISTS (SELECT 1 FROM voice_samples v WHERE v.action_id = a.id AND v.model = ? AND v.experiment_json IS NULL
+		AND (v.prompt_version = ? OR v.prompt_version LIKE ? || '+%'))
 	ORDER BY a.created_at, a.rowid`;
+/** Messages to the owner the current experiment has not been run on (its own sample identity). */
+const EXPERIMENT_SQL = `${SUBJECTS_BASE}
+	AND coalesce(s.scope, (SELECT e.scope FROM events e WHERE e.id = a.event_id)) = 'owner'
+	AND NOT EXISTS (SELECT 1 FROM voice_samples v WHERE v.action_id = a.id AND v.model = ?
+		AND json_extract(v.experiment_json, '$.key') = ?)
+	ORDER BY a.created_at, a.rowid`;
+
+const EXPERIMENT_KEY = "voice.experiment";
+export interface VoiceExperiment {
+	preset: ControlValue<"preset">;
+	sarcasm: ControlValue<"sarcasm">;
+	by: string;
+	at: string;
+}
+
+/** The shadow experiment the owner set (`/voice experiment`): owner messages only, never sent, no trial boundary. */
+export function getExperiment(db: Db): VoiceExperiment | null {
+	try {
+		const v = JSON.parse(getKv(db, EXPERIMENT_KEY) ?? "null") as VoiceExperiment | null;
+		return v && v.preset !== "off" ? v : null;
+	} catch {
+		return null;
+	}
+}
+
+export function setExperiment(db: Db, v: VoiceExperiment | null, at: string): void {
+	setKv(db, EXPERIMENT_KEY, JSON.stringify(v), at);
+}
+
+export function experimentKey(x: Pick<VoiceExperiment, "preset" | "sarcasm">): string {
+	return `${x.preset}:${x.sarcasm}:${VOICE_PRESET_DEFS[x.preset]?.version ?? "?"}`;
+}
 
 /**
  * `/forget` (inside its transaction): the person's samples, and samples of messages to anyone else that

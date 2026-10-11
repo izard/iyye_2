@@ -203,3 +203,13 @@ test("units and currencies belong to their number: another unit, or none, is ref
 	// The unit travels inside the placeholder, so the voice cannot change it.
 	assert.deepEqual(maskFixed("Send Julia 12 euros.", NAMES).segments, ["Julia", "12 euros"]);
 });
+
+test("a negation inside a word is a negation: dropping or adding its prefix is refused", () => {
+	assert.match(
+		voiceProblem("Это неверно: в феврале 29 дней.", "Это верно: в феврале 29 дней.", NAMES) ?? "",
+		/неверно/,
+	);
+	assert.match(voiceProblem("That is incorrect.", "That is correct.", NAMES) ?? "", /incorrect/);
+	assert.match(voiceProblem("The fix is possible today.", "The fix is impossible today.", NAMES) ?? "", /impossible/);
+	assert.equal(voiceProblem("That is incorrect.", "That's incorrect, I'm afraid.", NAMES), null);
+});

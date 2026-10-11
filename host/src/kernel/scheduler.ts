@@ -89,8 +89,21 @@ export interface SchedulerDeps {
 				event: EventRow,
 				text: string,
 				signal: AbortSignal,
+				profile: BoundProfile | null,
 		  ) => Promise<{ content: string; record: (actionId: string) => void }>)
 		| null;
+	/**
+	 * The character profile, resolved once when a turn starts and fixed for its reasoning and its delivery
+	 * (owner decision 13): `mind` goes into the turn's prompt (owner views only), the whole object to the
+	 * voice. A later owner change applies from the next turn. Never throws into the scheduler.
+	 */
+	bindProfile?: ((jobId: string, event: EventRow) => BoundProfile | null) | null;
+}
+
+/** A turn's bound profile; the scheduler passes it through without reading more than `mind`. */
+export interface BoundProfile {
+	mind: string | null;
+	[key: string]: unknown;
 }
 
 export interface SchedulerRhythm {
@@ -120,6 +133,7 @@ export class Scheduler {
 			rhythm: null,
 			onDeviceTime: null,
 			rephrase: null,
+			bindProfile: null,
 			...deps,
 		};
 		this.d.models.onRouterLost(() => this.abortCurrent("router_lost"));
@@ -268,6 +282,14 @@ export class Scheduler {
 			Math.max(1000, Math.floor(this.d.leaseMs / 3)),
 		);
 		renew.unref();
+		let profile: BoundProfile | null = null;
+		try {
+			profile = this.d.bindProfile?.(job.id, event) ?? null;
+		} catch (err) {
+			this.d.log.warn("scheduler: the profile was not bound; the turn runs without it", {
+				error: (err as Error).message,
+			});
+		}
 		let result: TurnResult;
 		let reason: "router_lost" | "shutdown" | null = null;
 		try {
@@ -283,6 +305,7 @@ export class Scheduler {
 					contactId: event.principal_contact_id ?? "",
 					eventId: event.id,
 				},
+				mind: profile?.mind ?? null,
 			});
 		} finally {
 			stopTyping();
@@ -300,7 +323,7 @@ export class Scheduler {
 			return;
 		}
 		if (result.ok) {
-			const voiced = await this.voice(event, result.text);
+			const voiced = await this.voice(event, result.text, profile);
 			const action = await this.d.outbox.deliver({ jobId: job.id, event, kind: "reply", content: voiced.content });
 			try {
 				voiced.record(action.id);
@@ -316,6 +339,7 @@ export class Scheduler {
 	private async voice(
 		event: EventRow,
 		text: string,
+		profile: BoundProfile | null,
 	): Promise<{ content: string; record: (actionId: string) => void }> {
 		const keep = { content: text, record: () => {} };
 		if (!this.d.rephrase) return keep;
@@ -323,7 +347,7 @@ export class Scheduler {
 		this.voiceAbort = abort;
 		const stopTyping = this.startTyping(Outbox.routeFor(event));
 		try {
-			return await this.d.rephrase(event, text, abort.signal);
+			return await this.d.rephrase(event, text, abort.signal, profile);
 		} catch (err) {
 			this.d.log.warn("scheduler: the voice failed, the original goes out", { error: (err as Error).message });
 			return keep;

@@ -47,12 +47,22 @@ export function operatingNote(toolkits: readonly ToolkitSummary[]): string {
 	].join("\n");
 }
 
+/**
+ * `mind` (owner decision 13): the owner's selected reasoning and perspective, rendered by the host from its
+ * own versioned definitions and bound for the turn. It enters only the owner's conversation, in the same
+ * words on every owner channel; contacts and background work never see it. Expression (style, sarcasm,
+ * mood) is never passed here (decision 8).
+ */
 export function composeSystemPrompt(
 	identity: string,
 	view: ScopeView,
 	toolkits: readonly ToolkitSummary[] = [],
+	mind: string | null = null,
 ): string {
-	return `${identity.trim()}\n\n${operatingNote(toolkits)}\n\n${conversationNote(view)}`;
+	const base = `${identity.trim()}\n\n${operatingNote(toolkits)}\n\n${conversationNote(view)}`;
+	return view.kind === "owner" && mind?.trim()
+		? `${base}\n\nHow your owner has asked you to reason with them:\n${mind.trim()}`
+		: base;
 }
 
 function conversationNote(view: ScopeView): string {

@@ -18,8 +18,10 @@
  */
 
 import { easeWord, energyWord, engagementWord } from "../character/mood.ts";
+import { isControlValue } from "../character/policy.ts";
 import type { Db } from "../state/db.ts";
 import { voiceProblem } from "./check.ts";
+import { experimentKey, getExperiment, setExperiment } from "./shadow.ts";
 
 interface SampleRow {
 	id: string;
@@ -40,6 +42,7 @@ interface SampleRow {
 	created_at: string;
 	acting: number;
 	delivered: number;
+	experiment_json: string | null;
 	split: "eval" | "dev";
 	meaning: string | null;
 	preference: string | null;
@@ -70,9 +73,10 @@ export class VoiceCommands {
 	command(args: string[], by: string): string {
 		const [sub, ...rest] = args;
 		const usage =
-			"usage: /voice [next [eval|dev] | show <id> | same|changed <id> | better|worse <id> | correct <id> <text> | eval | act [on|off owner|contacts|all]]";
+			"usage: /voice [next [eval|dev] | show <id> | same|changed <id> | better|worse <id> | correct <id> <text> | eval | act [on|off owner|contacts|all] | experiment affectionate-skeptic [off|dry|pointed] | experiment off]";
 		if (!sub) return this.report();
 		if (sub === "act") return this.d.act ? this.d.act.command(rest, by) : "the acting voice is not available here";
+		if (sub === "experiment") return this.experiment(rest, by);
 		if (sub === "next" && rest.length <= 1 && (!rest[0] || rest[0] === "eval" || rest[0] === "dev"))
 			return this.next(rest[0] as "eval" | "dev" | undefined);
 		if (sub === "eval" && rest.length === 0) return this.evalReport(by);
@@ -112,6 +116,35 @@ export class VoiceCommands {
 		return lines.join("\n");
 	}
 
+	/**
+	 * `/voice experiment <preset> [sarcasm]` / `off`: the shadow also rephrases messages to the owner with this
+	 * preset, as their own samples (their delivery's character and mood, the tested profile recorded apart).
+	 * Never sent; not a trial boundary; labels stay with each exact sample.
+	 */
+	private experiment(args: string[], by: string): string {
+		const at = this.d.now().toISOString();
+		if (args.length === 1 && args[0] === "off") {
+			setExperiment(this.d.db, null, at);
+			return "no voice experiment";
+		}
+		const [preset, sarcasm = "dry"] = args;
+		if (args.length === 0) {
+			const x = getExperiment(this.d.db);
+			return x
+				? `voice experiment: ${experimentKey(x)} (set by ${x.by}, ${x.at.slice(0, 16).replace("T", " ")} UTC)`
+				: "no voice experiment";
+		}
+		if (
+			args.length > 2 ||
+			!isControlValue("preset", preset) ||
+			preset === "off" ||
+			!isControlValue("sarcasm", sarcasm)
+		)
+			return "usage: /voice experiment affectionate-skeptic [off|dry|pointed] | /voice experiment off";
+		setExperiment(this.d.db, { preset, sarcasm, by, at }, at);
+		return `voice experiment: ${experimentKey({ preset, sarcasm })}; the shadow rephrases your Telegram messages with it too, as separate samples (never sent)`;
+	}
+
 	private next(split?: "eval" | "dev"): string {
 		const rows = this.samples(
 			`v.candidate IS NOT NULL AND m.value IS NULL${split ? " AND s.split = ?" : ""} ORDER BY v.created_at LIMIT 1`,
@@ -129,7 +162,7 @@ export class VoiceCommands {
 					| undefined)
 			: undefined;
 		const lines = [
-			`voice sample ${s.id.slice(0, 8)} (${s.split}${s.split === "eval" ? ", sealed evaluation set" : ""}; ${s.model}, prompt ${s.prompt_version}; to ${audienceWord(s.audience)}, ${s.lang}; ${s.created_at.slice(0, 16).replace("T", " ")} UTC; character revision ${s.character_rev ?? "—"}${mood ? `; mood: energy ${energyWord(mood.energy)}, ${easeWord(mood.ease)}, ${engagementWord(mood.engagement)}` : ""})`,
+			`voice sample ${s.id.slice(0, 8)} (${s.split}${s.split === "eval" ? ", sealed evaluation set" : ""}; ${s.model}, configuration ${s.prompt_version}${s.experiment_json ? " (an experiment, never sent)" : ""}; to ${audienceWord(s.audience)}, ${s.lang}; ${s.created_at.slice(0, 16).replace("T", " ")} UTC; character revision ${s.character_rev ?? "—"}${mood ? `; mood: energy ${energyWord(mood.energy)}, ${easeWord(mood.ease)}, ${engagementWord(mood.engagement)}` : ""})`,
 			s.acting && s.delivered ? "the original (not sent):" : "delivered (as written):",
 			indent(s.original),
 			s.acting && s.delivered ? "rephrased (sent instead of the original):" : "rephrased (never sent):",

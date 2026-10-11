@@ -22,8 +22,10 @@ import { TelegramSender } from "./channels/telegram/sender.ts";
 import { WebChatAdapter } from "./channels/web/adapter.ts";
 import { ensureOwnerToken, WebSessions } from "./channels/web/auth.ts";
 import { WebServer } from "./channels/web/server.ts";
-import { Character } from "./character/character.ts";
+import { Character, controlsOf, type Revision } from "./character/character.ts";
 import { moodAt, moodReport, recordMood } from "./character/mood.ts";
+import { controlsDigest } from "./character/policy.ts";
+import { bindTurnProfile, liveControlsDigest } from "./character/profile.ts";
 import { ConfigError, loadConfig, PROJECT_ROOT } from "./config.ts";
 import { DecisionClient } from "./decisions/client.ts";
 import { FactRelation } from "./decisions/fact-relation.ts";
@@ -388,6 +390,7 @@ async function main(): Promise<number> {
 		windDown: config.adenosine.windDown,
 	});
 	let voiceActor: VoiceActor | null = null;
+	let character: Character | null = null;
 	const scheduler = new Scheduler({
 		db,
 		device,
@@ -397,8 +400,12 @@ async function main(): Promise<number> {
 		log,
 		onDeviceTime: (jobId, ms) => adenosine.deviceTime("chat", ms, `${jobId}:${getJob(db, jobId)?.attempt ?? 0}`),
 		// Plan 0.009 CH4: the voice, off until the owner turns a surface on (built below, with the character).
-		rephrase: (event, text, signal) =>
-			voiceActor ? voiceActor.rephrase(event, text, signal) : Promise.resolve({ content: text, record: () => {} }),
+		rephrase: (event, text, signal, profile) =>
+			voiceActor
+				? voiceActor.rephrase(event, text, signal, (profile?.revision as Revision | undefined) ?? null)
+				: Promise.resolve({ content: text, record: () => {} }),
+		// Owner decision 13: the character bound once per turn (reasoning in the owner's prompt; the voice's preset).
+		bindProfile: (jobId, event) => (character ? bindTurnProfile(db, character, jobId, event, new Date()) : null),
 		rhythm: {
 			mode: () => rhythm.mode(),
 			wakeForOwner: (why) => rhythm.wakeForOwner(why),
@@ -440,20 +447,20 @@ async function main(): Promise<number> {
 		},
 	});
 	// M4's trial period: a new one whenever what decides behaviour changed.
-	const trial = ensureTrial(
-		db,
-		behaviourFingerprint({
-			threshold: config.self.motivationThreshold,
-			sustain: config.self.motivationSustain,
-			sweepS: config.self.motivationSweepS,
-			proposalsDaily: config.self.proposalsDaily,
-			socialDailyMax: config.self.socialDailyMax,
-			socialHours: config.self.socialHours,
-			budgetMin: config.self.initiativeBudgetMin,
-			shares: SHARES,
-		}),
-		new Date(),
-	);
+	// The behaviour's settings; the character's live reasoning and voice configuration join them only when
+	// something is selected (owner decision 13), so with everything off the fingerprint is unchanged.
+	const trialSettings = (digest: string | null) => ({
+		threshold: config.self.motivationThreshold,
+		sustain: config.self.motivationSustain,
+		sweepS: config.self.motivationSweepS,
+		proposalsDaily: config.self.proposalsDaily,
+		socialDailyMax: config.self.socialDailyMax,
+		socialHours: config.self.socialHours,
+		budgetMin: config.self.initiativeBudgetMin,
+		shares: SHARES,
+		...(digest ? { character: digest } : {}),
+	});
+	const trial = ensureTrial(db, behaviourFingerprint(trialSettings(liveControlsDigest(db))), new Date());
 	log.info("motivation: trial period", { since: trial.start, behaviour: trial.fingerprint });
 	const background = new BackgroundWorker({
 		db,
@@ -783,7 +790,19 @@ async function main(): Promise<number> {
 		},
 	});
 	// Plan 0.009 CH1a: the character's records and character.json; nothing reads its values yet.
-	const character = new Character({ db, stateDir: config.stateDir });
+	character = new Character({
+		db,
+		stateDir: config.stateDir,
+		// Every owner change (and undo, reset) of the live reasoning or voice is an M4 trial boundary.
+		onChange: (r) => {
+			const t = ensureTrial(
+				db,
+				behaviourFingerprint(trialSettings(controlsDigest(controlsOf(r.state)))),
+				new Date(),
+			);
+			log.info("motivation: trial period", { since: t.start, behaviour: t.fingerprint });
+		},
+	});
 	character.init();
 	// Plan 0.009 CH2: mood from records, journaled every half hour while awake; read only by the voice.
 	const moodTimer = setInterval(() => {

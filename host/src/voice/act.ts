@@ -26,7 +26,7 @@
  * original stays in the sample, and in Pi's session.
  */
 
-import type { Character } from "../character/character.ts";
+import { type Character, type CharacterState, controlsOf } from "../character/character.ts";
 import { moodAt, moodHeader, recordMood } from "../character/mood.ts";
 import type { Logger } from "../log.ts";
 import type { ModelLease, OpResult } from "../models/manager.ts";
@@ -34,7 +34,8 @@ import { type Contact, getContact, resolvePerson } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
 import type { EventRow } from "../state/events.ts";
 import { getKv, setKv } from "../state/kv.ts";
-import { maskFixed, unmask, voiceProblem } from "./check.ts";
+import { maskFixed, presetProblem, unmask, voiceProblem } from "./check.ts";
+import { voiceConfig } from "./preset.ts";
 import {
 	changeRatio,
 	styleHeader,
@@ -44,7 +45,7 @@ import {
 	voiceSystem,
 	voiceUser,
 } from "./prompt.ts";
-import { insertSample, VOICE_MAX_CHARS } from "./shadow.ts";
+import { forgetEpoch, insertSample, VOICE_MAX_CHARS } from "./shadow.ts";
 
 export const ACT_KEY = "voice.act";
 export const SURFACES = ["owner", "contacts"] as const;
@@ -122,7 +123,16 @@ export class VoiceActor {
 	}
 
 	/** The content to deliver for a finished reply: the rephrasing when everything allows it, else the original. */
-	async rephrase(event: EventRow, original: string, signal: AbortSignal): Promise<Rephrased> {
+	/**
+	 * `profile`: the character as bound when the turn started (owner decision 13): its style and controls
+	 * shape this message even if the owner changes them meanwhile. Without one, the active revision.
+	 */
+	async rephrase(
+		event: EventRow,
+		original: string,
+		signal: AbortSignal,
+		profile: { rev: number; state: CharacterState } | null = null,
+	): Promise<Rephrased> {
 		const keep: Rephrased = { content: original, record: () => {} };
 		try {
 			if (event.channel !== "telegram" || !event.scope) return keep;
@@ -132,7 +142,22 @@ export class VoiceActor {
 			const model = this.d.models.selected("voice");
 			if (!model) return keep;
 			const audience = person?.kind === "owner" ? "owner" : person?.trusted ? "trusted" : "contact";
-			const base = { eventId: event.id, scope: event.scope, person, audience, model, original, acting: true };
+			const rev = profile ?? this.d.character.active();
+			const controls = controlsOf(rev.state);
+			const lang = voiceLang(original);
+			const config = voiceConfig(controls, audience, lang, original);
+			const base = {
+				eventId: event.id,
+				scope: event.scope,
+				person,
+				audience,
+				model,
+				original,
+				acting: true,
+				promptVersion: config.version,
+				profile: { rev: rev.rev, controls, plain: config.plain },
+				characterRev: rev.rev,
+			};
 			const skip = (why: string): Rephrased => ({
 				content: original,
 				record: (actionId) =>
@@ -150,12 +175,11 @@ export class VoiceActor {
 			const lease = await this.d.models.acquire(model); // never loads: refused unless already loaded
 			if (!("release" in lease)) return skip(`the voice model is not available: ${lease.message}`);
 			const names = this.d.names();
-			const lang = voiceLang(original);
 			const m = maskFixed(original, names);
-			const rev = this.d.character.active();
 			const at = this.d.now();
 			const mood = moodAt(this.d.db, event.scope, at);
-			const system = voiceSystem(lang, styleHeader(rev.state), moodHeader(mood));
+			const system = voiceSystem(lang, styleHeader(rev.state), moodHeader(mood), config.presetText);
+			const epoch = forgetEpoch(this.d.db);
 			const abort = new AbortController();
 			const timer = setTimeout(() => abort.abort(), this.d.deadlineMs);
 			const onStop = () => abort.abort();
@@ -190,7 +214,6 @@ export class VoiceActor {
 				masked: m.masked,
 				segments: m.segments,
 				system,
-				characterRev: rev.rev,
 				moodId,
 				ms,
 			};
@@ -207,12 +230,14 @@ export class VoiceActor {
 						this.d.now(),
 						this.d.newId,
 					);
+			// Someone was forgotten while the voice ran: the original goes out and nothing of this is kept.
+			if (forgetEpoch(this.d.db) !== epoch) return keep;
 			if (error !== null || output === null)
 				return { content: original, record: sample({ status: "error", problem: error ?? "no output" }, false) };
 			const u = unmask(output, m.segments);
 			if (typeof u !== "string")
 				return { content: original, record: sample({ status: "refused", problem: u.why, output }, false) };
-			const problem = voiceProblem(original, u, names);
+			const problem = voiceProblem(original, u, names) ?? (config.presetText ? presetProblem(original, u) : null);
 			if (problem)
 				return { content: original, record: sample({ status: "refused", problem, output, candidate: u }, false) };
 			if (changeRatio(original, u) < UNCHANGED)

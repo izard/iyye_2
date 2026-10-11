@@ -333,4 +333,43 @@ describe("sessions with acting selection", () => {
 		assert.equal(kev.requests.length, m);
 		await conv.disposeAll();
 	});
+
+	test("owner decision 13: the bound reasoning enters only the owner's prompt, reopens the session on a change, and survives a toolkit add", async () => {
+		rmSync(requestsFile, { force: true });
+		const db = openDb(":memory:");
+		const { conv } = conversations(db);
+		const owner = { kind: "owner" as const, channel: "telegram" as const };
+		const mind = "Examine the owner's claims for material errors.";
+		const turn = (text: string, m: string | null, p: Record<string, number> = {}) => {
+			kev.answer = (id) => p[id] ?? 0;
+			return conv.turn({ scope: "owner", view: owner, model: "small", text, mind: m });
+		};
+		assert.ok((await turn("hello", null)).ok);
+		const plain = system(requests().at(-1)!);
+		assert.ok(!plain.includes(mind));
+		// The owner selects it: the next turn's prompt carries it (the session reopened on the changed prompt).
+		assert.ok((await turn("the earth is flat", mind)).ok);
+		assert.ok(system(requests().at(-1)!).includes(mind));
+		// A toolkit added mid-session keeps it.
+		assert.ok((await turn("[[tool:web_search]] check that", mind, { web: 0.9 })).ok);
+		assert.ok(declared(requests().at(-1)!).includes("web_search"));
+		assert.ok(system(requests().at(-1)!).includes(mind));
+		// Turned off: the next turn's prompt is the plain one again.
+		assert.ok((await turn("thanks", null)).ok);
+		assert.ok(!system(requests().at(-1)!).includes(mind));
+		// A contact's turn never carries it, even when it is passed.
+		assert.ok(
+			(
+				await conv.turn({
+					scope: "contact:x",
+					view: { kind: "contact", displayName: "X", channel: "telegram" },
+					model: "small",
+					text: "hi",
+					mind,
+				})
+			).ok,
+		);
+		assert.ok(!system(requests().at(-1)!).includes(mind));
+		await conv.disposeAll();
+	});
 });
