@@ -22,7 +22,8 @@
  * - `/facts why <id>` — why a belief exists (plan 0.013 E5): its ranges, each
  *   piece of evidence, the structured fact and the message it came from, and
  *   the tool result it was traced to.
- * - `/facts report` — the ledger's integrity figures (plan 0.013 E6).
+ * - `/facts report` — the ledger's integrity figures (plan 0.013 E6) and the
+ *   last night's orphan check between SQLite and long-term memory (plan §5).
  */
 
 import type { FactRelation } from "../decisions/fact-relation.ts";
@@ -45,6 +46,7 @@ import {
 import { isPrivate } from "./disclosure.ts";
 import { factSentence, normalizeTerm } from "./extract.ts";
 import { deleteQueuedFactDocs, queueFactDocDeletions } from "./night.ts";
+import { lastOrphanCheck, orphanReport } from "./orphans.ts";
 import { factsIntegrity, factsTodayReport, integrityReport } from "./store.ts";
 
 export interface FactsCommandDeps {
@@ -73,7 +75,8 @@ export class FactsCommand {
 		if (sub === "wrong") return this.wrong(rest[0] ?? "", by);
 		if (sub === "private" || sub === "share") return this.disclose(rest[0] ?? "", sub);
 		if (sub === "why" && rest.length === 1) return this.why(rest[0]!);
-		if (sub === "report" && rest.length === 0) return integrityReport(factsIntegrity(this.d.db));
+		if (sub === "report" && rest.length === 0)
+			return `${integrityReport(factsIntegrity(this.d.db))}\n${orphanReport(lastOrphanCheck(this.d.db))}`;
 		return this.lookup(args.join(" "));
 	}
 

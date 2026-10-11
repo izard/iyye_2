@@ -23,9 +23,11 @@ import {
 	resolveSubject,
 } from "../src/facts/extract.ts";
 import { type Complete, FactExtractor } from "../src/facts/extractor.ts";
-import { FactNight, STRUCTURED_TAG } from "../src/facts/night.ts";
+import { FactNight, queueFactDocDeletions, STRUCTURED_TAG } from "../src/facts/night.ts";
+import { checkFactOrphans, lastOrphanCheck, orphanReport, saveOrphanCheck } from "../src/facts/orphans.ts";
 import { docsFor, knownPeople, pendingDocs, type StmFact } from "../src/facts/store.ts";
 import { DeviceSlot } from "../src/kernel/device.ts";
+import { wakeProblems } from "../src/kernel/wake-check.ts";
 import { silentLogger } from "../src/log.ts";
 import { forgetRecords, forgetTarget } from "../src/memory/forget.ts";
 import { MemoryGateway } from "../src/memory/gateway.ts";
@@ -943,6 +945,107 @@ describe("F2: beliefs and the nightly merge", () => {
 			assert.match((await n2.run(() => false)).stopped ?? "", /unreachable/);
 			ltm.down = false;
 			assert.equal((await n2.run(() => false)).stored, 1);
+		});
+
+		test("plan §5: the night compares SQLite with long-term memory and reports orphans on either side, never repairs", async () => {
+			const db = freshDb();
+			turn(db, { id: "e1", who: "julia", text: "I work in sales operations at a robotics company." });
+			const model = scripted({
+				"sales operations": [
+					line({
+						subject: "I",
+						predicate: "works_as",
+						object: "sales operations specialist",
+						quote: "I work in sales operations",
+					}),
+				],
+			});
+			const night = new FactNight({
+				db,
+				ltm: ltm.client(),
+				gate,
+				complete: model,
+				log: silentLogger,
+				extract: true,
+				merge: true,
+				maxStep: 2,
+				now: () => T0,
+				newId,
+			});
+			assert.equal((await night.run(() => false)).stored, 1);
+			const clean = lastOrphanCheck(db)!;
+			assert.deepEqual(
+				{ expected: clean.expected, found: clean.found, counts: clean.counts, at: clean.at },
+				{
+					expected: 1,
+					found: 1,
+					counts: { missing: 0, unknown: 0, stale: 0 },
+					at: T0.toISOString(),
+				},
+			);
+			assert.match(orphanReport(clean), /1 stored fact\(s\) expected, 1 fact document\(s\) found; no orphans/);
+			const [key, stored] = [...ltm.docs.entries()].find(([, d]) => d.id.startsWith("fact:"))!;
+			const fake = (bank: string, id: string) =>
+				ltm.docs.set(`${bank}/${id}`, { ...stored, bank, id, content: "", metadata: {} });
+			const check = () => checkFactOrphans(db, ltm.client(), T0.toISOString());
+
+			// Its text gone: missing. Nothing is re-stored or deleted by the check.
+			ltm.docs.delete(key);
+			let c = await check();
+			assert.deepEqual(c.counts, { missing: 1, unknown: 0, stale: 0 });
+			assert.deepEqual(c.missing, [{ bank: "iyye-contact-julia", doc: stored.id }]);
+			assert.equal(ltm.docs.size, 0);
+			// A document no stored fact accounts for, and one in another bank than its fact's: unknown.
+			// A document queued for deletion is work in progress.
+			ltm.docs.set(key, stored);
+			ltm.banks.set("iyye-owner", { ...ltm.banks.get("iyye-contact-julia")! });
+			fake("iyye-contact-julia", "fact:ghost");
+			fake("iyye-owner", stored.id);
+			fake("iyye-contact-julia", "fact:queued");
+			queueFactDocDeletions(db, [{ scope: "contact:julia", stmFactId: "queued" }], T0.toISOString());
+			c = await check();
+			assert.deepEqual(c.counts, { missing: 0, unknown: 2, stale: 0 });
+			assert.deepEqual(c.unknown.map((r) => `${r.bank} ${r.doc}`).sort(), [
+				"iyye-contact-julia fact:ghost",
+				`iyye-owner ${stored.id}`,
+			]);
+			assert.match(orphanReport(c), /in long-term memory, no stored fact behind it: 2/);
+			// Its belief deleted while the text stayed (not queued): stale. A missing text of such a fact is expected.
+			ltm.docs.delete("iyye-contact-julia/fact:ghost");
+			ltm.docs.delete(`iyye-owner/${stored.id}`);
+			const beliefId = (
+				db.prepare("SELECT belief_id FROM stm_facts WHERE stored_at IS NOT NULL").get() as { belief_id: string }
+			).belief_id;
+			db.prepare("DELETE FROM beliefs WHERE id = ?").run(beliefId);
+			c = await check();
+			assert.deepEqual(
+				{ expected: c.expected, counts: c.counts },
+				{ expected: 0, counts: { missing: 0, unknown: 0, stale: 1 } },
+			);
+			ltm.docs.delete(key);
+			assert.deepEqual((await check()).counts, { missing: 0, unknown: 0, stale: 0 });
+
+			// The wake check of the next morning says so; an unreachable long-term memory is reported, not counted.
+			const now = new Date(T0.getTime() + 3_600_000);
+			saveOrphanCheck(db, { ...c, at: T0.toISOString() });
+			assert.ok(
+				wakeProblems({ db, services: {}, missingModels: [], now }).includes(
+					"1 stored fact(s) and long-term memory disagree (/facts report)",
+				),
+			);
+			ltm.down = true;
+			const failed = await check();
+			ltm.down = false;
+			assert.match(failed.error ?? "", /503/);
+			saveOrphanCheck(db, failed);
+			assert.match(orphanReport(lastOrphanCheck(db)), /could not finish/);
+			assert.ok(wakeProblems({ db, services: {}, missingModels: [], now }).some((p) => /could not finish/.test(p)));
+			// A day later it is no longer news.
+			assert.ok(
+				!wakeProblems({ db, services: {}, missingModels: [], now: new Date(T0.getTime() + 2 * DAY) }).some((p) =>
+					/long-term memory/.test(p),
+				),
+			);
 		});
 
 		test("the night runs the fact ledger first; if it cannot finish, the night stops there and says why", async () => {

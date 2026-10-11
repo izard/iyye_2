@@ -79,17 +79,34 @@ Reading:
 | Parity, greedy, Hugging Face bf16 (+ peft) vs llama.cpp on the Q6_K GGUF | two runs: base 8/12 and 7/12 identical, LoRA 11/12 and 12/12, median shared prefix 100 %; the adapter changed the HF output in 10/12 |
 | Stopping and the lock (after the refactor into `worker_env.py`) | SIGTERM a few seconds after start: voice trainer gone in 0.46 s, Kev trainer in 0.63 s, partial directories deleted, no process left; with a voice run holding the lock, a Kev run exited 3 at once |
 
+## The voice LoRA round trip on gemma-4-E4B (2026-10-11, synthetic data only)
+
+Same smoke (`scripts/voice-lora-smoke.ts --model gemma-4-E4B --steps 20`), same fixtures, two runs, the live host running beside it (its background model is this same GGUF, loaded separately by the live router).
+
+| Step | Result |
+| --- | --- |
+| Provisioning (`voice_provision.py gemma-4-E4B`, network once) | 11.5 min, 16 GB (one bf16 safetensors file: text, vision and audio towers) |
+| GGUF = Hugging Face source? (Q8_0) | token_embd 0.99992, blk.0 ffn_down 0.99992, blk.0 attn_output 0.99998, blk.41 attn_q 0.99996: the same model. `gguf_match.py` now has tensor pairs per GGUF architecture (Gemma 4's text model lives under `model.language_model`; norms and the 2.8-billion-parameter per-layer embedding are not compared) and fails when a pair cannot be compared |
+| Training (r8 on q/k/v/o of the **text model only**, 40 synthetic pairs, 20 steps × 4, bf16) | 135 / 139 s wall, of which 112 / 118 s loading 16 GB; 1.0 s/step; peak 17.3 GB CUDA; loss 2.32 → 0.93 / 0.92; 4.5 M trainable parameters. `voice_lora.py` now targets the text model's linear layers by full name: the vision and audio towers have same-named projections (the audio tower's wrapped, so a bare suffix fails). 264 adapter tensors: q/o on all 42 layers, k/v on the 24 that compute their own keys (the last 18 share them) |
+| Conversion (`convert_lora_to_gguf.py --base`, the existing converter venv) | 2.5–2.9 s, 264 tensors, f16. **No newer converter needed:** with `--base` it reads `config.json` directly, so transformers 4.57.6 not knowing `gemma4` does not matter; llama.cpp 926862e57 has the `Gemma4ForConditionalGeneration` text converter |
+| Router mode, per-request `lora`, greedy, 12 held-out prompts | **works**: scale 1 differs from the plain model in 12/12; repeats exact 12/12 (cached); scale 0 = plain in 8/12 (both runs, as MiniCPM: close, not identical); no `lora` field = scale 1 in only 2/12 (MiniCPM 11 and 5): always send the scale; a changed scale re-evaluates the prompt (~190 tokens), the same again reuses it |
+| Plain model, the same request fully re-evaluated | 11/12 identical (MiniCPM 12/12): one greedy text changed with the batch shape of a full prefill |
+| Parity, Hugging Face bf16 (+ peft) vs llama.cpp Q8_0 | base 7/12 identical, LoRA 11/12 (both runs), median shared prefix 100 %; the adapter moved the HF output in 12/12 |
+| MiniCPM5-2B again with the changed scripts | unchanged: same model, 0.47 s/step, 6.0 GB, loss 2.29 → 0.95, LoRA parity 12/12 |
+
+So gemma-4-E4B can carry a trained voice through the same path as MiniCPM5: about 2.3 × the step time and 3 × the memory, both small for a nightly job.
+
 ## Which models can carry a trained voice
 
 - **minicpm5-2b:** yes, verified end to end (source `openbmb/MiniCPM5-2B@f974000`, arch llama).
-- **gemma-4-E4B:** source pinned (`google/gemma-4-E4B-it@ee0ef60`), not yet tried: multimodal with per-layer embeddings; the converter venv's transformers 4.57.6 has no `gemma4`, so conversion may need a newer llama.cpp requirements set. To be measured before it can be tuned.
+- **gemma-4-E4B:** yes, verified end to end (2026-10-11, below; source `google/gemma-4-E4B-it@ee0ef60`, arch gemma4, the registry's `gemma-4-E4B-it-Q8_0.gguf`).
 - **qwen35-4b-tak:** no. A custom fine-tune of Qwen3.5-4B with no published source; an adapter trained on the base would be applied to other weights (HLD §9.5). The owner may know its source.
 
 **Owner decision (2026-10-10): the voice model is `qwen35-4b-tak` for now** (plan 0.009 §6, decision 7); a trained voice on it needs its source checkpoint.
 
 ## For CH3
 
-1. The model (one voice, owner decision 4; the owner decides by A/B): gemma-4-E4B has the most usable rephrasings in English and, with a Russian prompt, in Russian, the fewest the judge calls different, and keeps placeholders best; its LoRA path is untried. qwen35-4b-tak is faster but cannot carry a trained voice. MiniCPM5 is not a voice without tuning.
+1. The model (one voice, owner decision 4; the owner decides by A/B): gemma-4-E4B has the most usable rephrasings in English and, with a Russian prompt, in Russian, the fewest the judge calls different, and keeps placeholders best; its LoRA path works (2026-10-11, below). qwen35-4b-tak is faster but cannot carry a trained voice. MiniCPM5 is not a voice without tuning.
 2. ~~The check needs: weekdays and months (both languages) as fixed segments, tense of report verbs, possessive names; then a fresh held-out set.~~ Done (second revision, above).
 3. Russian: no real data yet; the voice's instructions in the message's language.
 4. A Kev "same meaning?" role in shadow beside the check (the plan's next step), since lexical rules miss tense and replaced reasons.

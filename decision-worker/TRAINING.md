@@ -65,7 +65,7 @@ kev-train/.venv/bin/python decision-worker/train_candidate.py --data <labelled.j
 - **Datasets:** nothing exports Iyye's labelled decisions yet (owner labels, weak labels, `/forget` exclusions, grouped and time-split partitions, sealed test set).
 - **Admission:** the trainers do not yet ask `DeviceSlot`/NightWork for the device; run them only by hand, briefly, while nobody needs the GPU.
 - **Other Kev models:** the trainer and predictor take any Kev LoRA + head checkpoint on any base Kev supports (provision it first; offline otherwise).
-- **The voice (plan 0.009 CH6):** only the mechanics are built and measured (MiniCPM5-2B: train 0.47 s/step, 6 GB; convert 3 s; per-request LoRA through the router; `host/SPIKE-0.009.md`). Not built: training examples from the owner's preference pairs (masked), evaluation with the meaning check as a hard gate, registry, scheduling, serving a voice. gemma-4-E4B (multimodal, per-layer embeddings) is provisioned by source but not yet tried; its conversion may need a newer converter than transformers 4.57.6.
+- **The voice (plan 0.009 CH6):** only the mechanics are built and measured (MiniCPM5-2B: train 0.47 s/step, 6 GB; convert 3 s; per-request LoRA through the router; `host/SPIKE-0.009.md`). Not built: training examples from the owner's preference pairs (masked), evaluation with the meaning check as a hard gate, registry, scheduling, serving a voice. gemma-4-E4B verified too (2026-10-11): train 1.0 s/step, 17.3 GB, 16 GB to load; convert 3 s with the existing converter venv; per-request LoRA through the router; LoRA parity 11/12. LoRAs target the text model only (`voice_lora.py` `text_targets`).
 
 ## Commands
 

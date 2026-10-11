@@ -46,6 +46,19 @@ def encode(tok, ex: dict) -> tuple[list[int], list[int]]:
     return p + a, [-100] * len(p) + a
 
 
+def text_targets(model, names: list[str]) -> list[str]:
+    """The text model's linear layers with these names, by full module name. A multimodal model (Gemma 4) has
+    same-named projections in its vision and audio towers, which the voice never uses and llama.cpp's text GGUF
+    does not contain; a bare suffix would match them too (and fail on the audio tower's wrapped linears)."""
+    found = [
+        n for n, m in model.named_modules()
+        if isinstance(m, torch.nn.Linear) and n.rsplit(".", 1)[-1] in names and not any(t in n for t in ("vision", "audio"))
+    ]
+    if not found:
+        raise SystemExit(f"voice_lora: no text-model linear layers named {names}")
+    return found
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
@@ -69,7 +82,7 @@ def main() -> None:
     tok = AutoTokenizer.from_pretrained(a.base)
     model = AutoModelForCausalLM.from_pretrained(a.base, dtype=torch.bfloat16).to("cuda")
     model.config.use_cache = False
-    config = LoraConfig(r=a.rank, lora_alpha=a.alpha, lora_dropout=0.0, target_modules=a.targets.split(","), task_type="CAUSAL_LM")
+    config = LoraConfig(r=a.rank, lora_alpha=a.alpha, lora_dropout=0.0, target_modules=text_targets(model, a.targets.split(",")), task_type="CAUSAL_LM")
     model = get_peft_model(model, config)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     examples = [json.loads(line) for line in Path(a.data).read_text(encoding="utf-8").splitlines() if line.strip()]

@@ -103,7 +103,7 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
 ## 5. Still open
 
 - When Stage 4's nightly job is built relative to CH6, since the voice depends on it.
-- The source of `qwen35-4b-tak` (decision 7), without which it cannot carry a trained voice; whether gemma-4-E4B's GGUF LoRA converts and applies (not yet tried).
+- The source of `qwen35-4b-tak` (decision 7), without which it cannot carry a trained voice. (gemma-4-E4B's GGUF LoRA converts and applies through the router: verified 2026-10-11, `host/SPIKE-0.009.md`; so it is a voice model that can be tuned, and MiniCPM5-2B the other.)
 
 ## 6. Owner decisions (2026-10-04)
 
