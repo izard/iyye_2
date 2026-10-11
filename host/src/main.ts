@@ -22,6 +22,7 @@ import { TelegramSender } from "./channels/telegram/sender.ts";
 import { WebChatAdapter } from "./channels/web/adapter.ts";
 import { ensureOwnerToken, WebSessions } from "./channels/web/auth.ts";
 import { WebServer } from "./channels/web/server.ts";
+import { Character } from "./character/character.ts";
 import { ConfigError, loadConfig, PROJECT_ROOT } from "./config.ts";
 import { DecisionClient } from "./decisions/client.ts";
 import { FactRelation } from "./decisions/fact-relation.ts";
@@ -772,7 +773,11 @@ async function main(): Promise<number> {
 			},
 		},
 	});
+	// Plan 0.009 CH1a: the character's records and character.json; nothing reads its values yet.
+	const character = new Character({ db, stateDir: config.stateDir });
+	character.init();
 	const commandExtras = {
+		character,
 		commitments: new ReminderCommands({ db }),
 		plans,
 		sentReport: () => sentReport(db),

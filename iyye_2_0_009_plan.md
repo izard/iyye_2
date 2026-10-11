@@ -1,7 +1,7 @@
 # Iyye 2.0.009 — Stage 3, Developing Character: Rough Plan
 
 - Entry condition (plan 0.013 E6, 2026-10-10): `test/integrity-gate.test.ts` passes and `/facts report` shows no key with two current values and no untraced citation.
-- Status (2026-10-10): **CH0 done (`host/SPIKE-0.009.md`), and CH6's environments and round trip (infrastructure only, `decision-worker/TRAINING.md`); nothing else built.** Before (2026-10-05): **rough draft; owner decisions on the voice in §6. Comes after plan 0.010 (motivations), which it builds on (owner decision, 2026-10-05).** Starts after M8 has produced a few real days of records (the evidence character learns from). Owner requirement: one part is **a separate, tunable small model that only rephrases outputs according to character and mood**.
+- Status (2026-10-11): **CH1 planned in detail** (below; owner decisions 8 and 9); **CH1a built** (records, `character.json`, `/character`; nothing reads the values); CH1b waits for plan 0.010 M4's trial. (2026-10-10): **CH0 done (`host/SPIKE-0.009.md`), and CH6's environments and round trip (infrastructure only, `decision-worker/TRAINING.md`); nothing else built.** Before (2026-10-05): **rough draft; owner decisions on the voice in §6. Comes after plan 0.010 (motivations), which it builds on (owner decision, 2026-10-05).** Starts after M8 has produced a few real days of records (the evidence character learns from). Owner requirement: one part is **a separate, tunable small model that only rephrases outputs according to character and mood**.
 - Design source: [`iyye_2_0_hld.md`](iyye_2_0_hld.md) §4 (stable identity, developing character, prompt composition), §5.2 (motivations), §6.4 (relationship context), §8.2 (adenosine), §9.3 (models are replaceable, character persists), §10 (learning), §11 (a recognizable day, reinforcement with damping), §14 Stage 3, §15 #12, #13, #15.
 - Builds on: adenosine (0.007 S2), the day summary and night (0.002, 0.007 S3), Kev and the decision journal (0.003), outcome records (receipts, commitments, findings, plans, `/sent`), `/forget` and tombstones.
 
@@ -84,13 +84,60 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
   - **As built (2026-10-10):** `host/src/voice/check.ts` (the meaning check, `maskFixed`/`unmask`; `test/voice-check.test.ts` with labelled pairs, a held-out set never used to tune it: 12.5 % false rejects, 21 % false accepts) and `scripts/voice-spike.ts` (94 real replies, all English, and 32 synthetic, 14 Russian; three candidates, masked and plain). Usable rephrasings (accepted and actually changed): gemma-4-E4B 47 % (41 tok/s; it keeps Russian only when the instructions are in Russian, then 19 of 28 synthetic Russian rephrasings usable), qwen35-4b-tak 42 % (91 tok/s), minicpm5-2b 19 % (mostly copies). llama.cpp applies a per-request LoRA scale through the router; a changed scale re-evaluates the prompt. A MiniCPM5 voice LoRA trains at 0.47 s/step in 6 GB and converts in 3 s. qwen35-4b-tak cannot carry a trained voice (no known source checkpoint). Figures and recommendations in the spike; the model is the owner's A/B choice in CH3.
   - **The check's second revision (2026-10-10):** dates in words (weekdays, months, today/tomorrow/yesterday, English and Russian) as fixed segments compared by what they name, possessive names, a tense rule (past ↔ future), no fewer negations. On a fresh held-out set written before the change: 21 % false rejects, 17 % false accepts (the CH0 check: 21 % and 58 % on the same set; optimistic, since the same author wrote rules and set). Details in the spike.
   - **A Kev "same meaning?" role, offline (2026-10-11, `scripts/meaning-spike.ts`):** zero-shot kev-4b, 130 ms a pair. Synthetic held-out pairs: AUC 0.99, 96 % right; it catches 3 of the 4 changes the lexical check accepts and refuses none of the faithful rewordings the check accepts. Real CH0 rephrasings against gemma-4-12B's verdicts: AUC 0.65, adding almost nothing. In CH3 it runs in shadow; the owner's labels decide whether it may ever refuse.
-- **CH1 — Character state:** migration, revisions, `character.json`, `/character …`, prompt composition reads style (HLD §4.3); no learning yet; temperament wired into the kernel's dials at 1.0 (no behaviour change).
+- **CH1 — Character state:** migration, revisions, `character.json`, `/character …`; no learning yet; temperament wired into the kernel's dials at 1.0 (no behaviour change). Style never reaches Pi's prompt (owner decision 8); the starting style is asked of the owner (owner decision 9). In detail below.
 - **CH2 — Mood:** deterministic mood from records, `/mood`, journal; the valence Kev role in shadow.
 - **CH3 — Voice, shadow, and A/B:** the voice runs on every Telegram message to a contact and the meaning check judges it, but the **original is delivered**; `/voice` shows both; `/voice compare` and the live split collect the A/B figures; the owner picks the model and when to let it act.
 - **CH4 — Voice, acting:** on contacts' Telegram messages only; one strength dial; fixed segments; the bounded mood remark; fallback to the original; owner feedback commands collecting masked pairs.
 - **CH5 — Nightly character review:** bounded deltas from evidence, interests/habits, undo/freeze/reset, forgetting.
 - **CH6 — Voice in the nightly tuning** (environments and the round trip built 2026-10-10: `voice_provision.py`, `voice_train.py`, the converter venv, `scripts/voice-lora-smoke.ts`; no data path, evaluation, registry or schedule yet): the voice LoRA becomes one tunable of the Stage 4 nightly job (built with it, or this stage builds the job's generic part first: candidate registry, held-out sets, promotion and rollback, preemption by owner input). Character review (CH5) and the temperament tuning stay deterministic and bounded; only the voice and Kev adapters are trained weights.
 - **CH7 — Evaluation (exit gate):** two scratch installations fed different evidence for several simulated days develop different, repeatable habits and voices; the same installation keeps them across restart and a chat-model change; reset removes them; generated self-praise moves nothing.
+
+### CH1 in detail (2026-10-11)
+
+**Entry:** plan 0.013 E6 holds (checked on the live database 2026-10-11: no key with two current values, no untraced citation; `test/integrity-gate.test.ts` passes). **Blocking:** plan 0.010 M4's live trial (started 2026-10-10 15:47, 5–7 days, then the owner's review). Wiring temperament edits `motivation/actor.ts`, `motivation/budget.ts` and `observe/investigations.ts`, which the trial's behaviour fingerprint hashes, so it would start a new trial period; and the starting question takes the self-question slot the motivations use. So CH1 is built in two parts: **CH1a** changes nothing live and may be built during the trial; **CH1b** waits for the review.
+
+**What the character is in CH1** (HLD §4.2, §2.1 above):
+- **Temperament:** curiosity, agency, social initiative; multipliers in [0.7, 1.3], all 1.0.
+- **Style:** six dials in [0, 1]: `length` (short … long), `warmth` (reserved … warm), `playfulness` (serious … playful), `formality` (casual … formal), `observations` (how often to volunteer one: rarely … often), `emoji` (none … more). Each is **unset** until the owner answers (decision 9); an unset dial means "no preference", which the voice (CH3) reads as its neutral default. Owner decision 8: **style never reaches Pi's prompt.** It is read only by the voice (CH3 on) and nothing else; Pi's prompt gains only CH5's interests and habits, and only through CH5.
+- **Interests and habits:** an empty list (CH5 fills it).
+- Revision number, review time (none yet), frozen flag, reset watermark, and per value its source: `default`, `owner` (the starting answer or `/character set`), later `review` (CH5).
+
+**Records** (migration 037, `character/`):
+- `character_revisions`: immutable rows (rev, created_at, parent_rev, kind `start | owner | undo | reset` (CH5 adds `review`), state_json, by, note).
+- `character_evidence` (rev, kind, ref, person_id): empty in CH1, created now so CH5's evidence and `/forget` (which recomputes the revisions a forgotten person's evidence shaped, §2.6) need no later rebuild.
+- The active revision, frozen flag and watermark in `kv`.
+- `~/.iyye2/character.json`: the active revision, written atomically (temp file, then rename) after every change and at startup (rebuilt from SQLite if missing or stale; SQLite is the truth, the file is a snapshot for inspection and for readers outside the host).
+- Revision 0 (kind `start`) is created at the first start: temperament 1.0, every style dial unset.
+
+**Owner commands** (owner surfaces only, like every owner command; nothing arriving over Telegram changes character):
+- `/character`: the active revision, each value with its source and since when, frozen or not.
+- `/character diff [n]`: what changed in the last n revisions ("what changed in you?").
+- `/character undo`: a new revision equal to the parent of the active one (history is never rewritten).
+- `/character freeze|unfreeze`: CH5's review skips a frozen character; owner changes still apply.
+- `/character reset [confirm]`: a new revision equal to revision 0 plus the owner's own values (the starting answer and `/character set`s are the owner's, not learned), and a watermark for CH5 (evidence older than it never counts again). Shown first, done with `confirm`.
+- `/character set <dial> <value>`: an owner value (a style choice word or 0–1; a temperament within [0.7, 1.3]). Proposed, see open decision 4.
+
+**The starting question (owner decision 9; CH1b).** One of Iyye's first questions to the owner: when CH1b starts and the style is still all unset, it is the next self-question asked, before any motivation's question, through the existing self-question path (`self_questions`, field `character:style`; the one-at-a-time slot and the daily cap of 3 are shared, so it takes the first free slot; it is not a motivation opportunity and charges no initiative budget). It is asked in the owner's web chat, worded by the host (no model):
+> Before I develop a style of my own, how would you like me to start? One word each: length short / medium / long; warmth reserved / friendly / warm; playfulness serious / light / playful; formality casual / neutral / formal; observations rarely / sometimes / often; emoji none / few / more.
+
+The owner's next message is its pending answer, as for every self-question; it is applied only by `/self accept <id> [answer]`, never from Telegram text alone. The host parses it deterministically: each dial named with one of its three words (English, plus the same words in Russian), or `dial=word` / `dial=0.7`; three words map to 0.2 / 0.5 / 0.8. Accepting creates a revision (kind `owner`, by the owner, note: the question id). Dials the answer did not settle stay unset and are listed in the reply; they are not asked again (the owner sets them with `/character set` when they like). Dismissed: never asked again. Expiry as for self-questions (7 days), then asked once more, at most twice in all.
+
+**Temperament wired at 1.0 (CH1b; open decision 3).** The kernel reads the active temperament and scales its own dials, clamped to their configured limits (a multiplier above 1 can never exceed the configured maximum; the kernel keeps the bounds, HLD §4.3):
+- curiosity: the investigation cooldown (divided), stale-observation windows (divided), curiosity's share of the initiative budget;
+- social initiative: the daily caps on findings (`IYYE2_FINDINGS_PER_DAY`), Iyye's own messages and social follow-ups (`IYYE2_SOCIAL_DAILY_MAX`), rounded down, never above the configured value;
+- agency: Iyye's daily plan proposals (`IYYE2_PROPOSALS_DAILY`) and agency's budget share.
+At 1.0 every product equals today's value, so behaviour does not change; the change is one deliberate new trial fingerprint (the temperament joins the fingerprint's settings, so any later change starts a new period).
+
+**Not in CH1:** learning (CH5), mood (CH2), the voice (CH3), anything in Pi's prompt.
+
+**CH1a as built (2026-10-11):** `src/character/character.ts` (`Character`: `init` creates revision 0 on the first start and rebuilds a missing, damaged or stale `character.json`; `commit` is the one way a value changes, used by undo and reset and later by CH1b and CH5; the snapshot is written to a temporary file and renamed, mode 0600) and migration 037 (`character_revisions`, whose triggers refuse updates and deletes; `character_evidence`, empty until CH5). `/character`, `/character diff [n]`, `/character undo` (back to the state before the active revision; undo twice puts it back), `/character freeze|unfreeze`, `/character reset [confirm]` (keeps the owner's own values, removes learned ones, sets the watermark). `/character set` is not built (open decision 4). `test/character.test.ts` (7); migration 037 applied to a copy of the live database (integrity and foreign keys OK).
+
+**Tests:** revisions are immutable and `character.json` matches the active revision after every command and after a restart (a missing or stale file is rebuilt); undo, freeze, reset with its watermark; owner commands refused from Telegram (the linked owner account included); the starting question: asked first when the slot is free, its answer applied only by `/self accept`, the parser (each dial, both languages, `dial=value`, partial answers, garbage), dismissal and expiry; temperament 1.0 changes no cap, cooldown, window or share (the M4 replay unchanged); a temperament set to 1.3 never exceeds a configured maximum, 0.7 never drops a cap below 1 (or 0 when configured 0); style never appears in any Pi prompt (a test over the composed system prompt and every request-local note).
+
+**Open owner decisions for CH1:**
+3. Which dials temperament scales: the list above (proposed), and whether it also tilts the 0.010 budget shares.
+4. Whether `/character set` exists in CH1 (proposed: yes, for style and temperament within bounds). Style set this way changes nothing until the voice; temperament set this way changes initiative at once.
+5. What `/character reset` keeps: proposed above (revision 0 plus the owner's own values).
 
 ## 4. Risks
 
@@ -106,7 +153,7 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
 - When Stage 4's nightly job is built relative to CH6, since the voice depends on it.
 - The source of `qwen35-4b-tak` (decision 7), without which it cannot carry a trained voice. (gemma-4-E4B's GGUF LoRA converts and applies through the router: verified 2026-10-11, `host/SPIKE-0.009.md`; so it is a voice model that can be tuned, and MiniCPM5-2B the other.)
 
-## 6. Owner decisions (2026-10-04)
+## 6. Owner decisions (2026-10-04, later ones dated)
 
 1. **Surfaces:** the voice rephrases only Telegram messages to contacts.
 2. **Mood:** mostly colours phrasing; saying it in words is an exception.
@@ -116,4 +163,7 @@ Kept for later in this stage: a useful recipe ("weekly repo digest") becomes a d
 6. **The owner's linked Telegram accounts get the voice too**, like every contact (2026-10-04, later).
 7. **The voice model for now: `qwen35-4b-tak`** (2026-10-10, after CH0). CH3 starts with it; the A/B (decision 3) can still replace it. Known from CH0: it cannot carry a trained voice LoRA until its source checkpoint is known (an adapter trained on Qwen3.5-4B would be applied to other weights), so CH6 needs that source or another model; its Russian needs the instructions in Russian.
 
-Next: CH1 (character state), after plan 0.010 M4's trial.
+8. **Style does not reach Pi's prompt** (2026-10-11). Only CH5 may put anything of the character there (its interests and habits).
+9. **The starting style values are one of Iyye's first questions to the owner** (2026-10-11), not chosen by the host or the model.
+
+Next: CH1a (records, `character.json`, `/character`; nothing live changes), possible during plan 0.010 M4's trial; CH1b (the starting question, temperament wired at 1.0) after the trial's review.

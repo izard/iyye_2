@@ -87,6 +87,8 @@ export interface CommandContext {
 	} | null;
 	/** /person, /note: what Iyye knows about a person, and the owner's notes (plan 0.005 Stage 2). */
 	people?: { person(args: string, by: string): string; note(args: string, by: string): string } | null;
+	/** /character [diff [n] | undo | freeze | unfreeze | reset [confirm]] (plan 0.009 CH1a). */
+	character?: { command(args: string[], by: string): string } | null;
 	/** /day and /night: day/night status (plan 0.002 L4). */
 	rhythmReport?: { day(): string; night(): string } | null;
 }
@@ -132,6 +134,7 @@ const HELP = [
 	"/pause initiative, /resume initiative — stop or allow background work",
 	"/pause <motivation>, /resume <motivation> — self-preservation, curiosity, agency or social: stop or allow what it opens and does",
 	"/self questions — what Iyye asked about itself; /self accept <id> [answer], /self dismiss <id>; /self estimate misleading",
+	"/character — Iyye's character: temperament, style (asked of you), interests, each with its source; /character diff [n] — what changed; /character undo; /character freeze|unfreeze; /character reset [confirm]",
 	"/day — awake or asleep, day number, when the next night starts and why",
 	"/night — the night in progress (what it is doing, what is left) and the last night's result",
 	"/memory — memory status: short-term (today) and long-term, the last night",
@@ -174,6 +177,7 @@ const COMMANDS = new Set([
 	"/self",
 	"/motivation",
 	"/facts",
+	"/character",
 	"/plan",
 	"/domain",
 	"/pause",
@@ -291,6 +295,11 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			return {
 				handled: true,
 				reply: ctx.facts ? await ctx.facts.command(args, ctx.issuer) : "facts are not available here",
+			};
+		case "/character":
+			return {
+				handled: true,
+				reply: ctx.character ? ctx.character.command(args, ctx.issuer) : "the character is not available here",
 			};
 		case "/sent":
 			return { handled: true, reply: ctx.sentReport ? ctx.sentReport() : "sending is not available here" };
