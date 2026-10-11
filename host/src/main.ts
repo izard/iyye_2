@@ -22,7 +22,7 @@ import { TelegramSender } from "./channels/telegram/sender.ts";
 import { WebChatAdapter } from "./channels/web/adapter.ts";
 import { ensureOwnerToken, WebSessions } from "./channels/web/auth.ts";
 import { WebServer } from "./channels/web/server.ts";
-import { Character, controlsOf, type Revision } from "./character/character.ts";
+import { Character, controlsOf, definitionsOf, type Revision } from "./character/character.ts";
 import { moodAt, moodReport, recordMood } from "./character/mood.ts";
 import { controlsDigest } from "./character/policy.ts";
 import { bindTurnProfile, liveControlsDigest } from "./character/profile.ts";
@@ -797,7 +797,7 @@ async function main(): Promise<number> {
 		onChange: (r) => {
 			const t = ensureTrial(
 				db,
-				behaviourFingerprint(trialSettings(controlsDigest(controlsOf(r.state)))),
+				behaviourFingerprint(trialSettings(controlsDigest(controlsOf(r.state), definitionsOf(r.state)))),
 				new Date(),
 			);
 			log.info("motivation: trial period", { since: t.start, behaviour: t.fingerprint });

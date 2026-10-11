@@ -34,7 +34,9 @@ import {
 	CONTROLS_OFF,
 	type ControlName,
 	type Controls,
+	type Definitions,
 	PERSPECTIVE_DEFS,
+	PRESET_CURRENT,
 	PRESET_STYLE_SEED,
 	REASONING_DEFS,
 	VOICE_PRESET_DEFS,
@@ -118,6 +120,15 @@ function controlsOff(at: string): Record<ControlName, ControlSel> {
 	) as Record<ControlName, ControlSel>;
 }
 
+/** The definition versions a state's selections were made under (what renders, owner decision 14). */
+export function definitionsOf(s: CharacterState): Definitions {
+	return {
+		critique: s.controls.critique.definition,
+		perspective: s.controls.perspective.definition,
+		preset: s.controls.preset.definition,
+	};
+}
+
 /** The plain values of a state's controls. */
 export function controlsOf(s: CharacterState): Controls {
 	return Object.fromEntries(CONTROL_NAMES.map((c) => [c, s.controls[c].value])) as unknown as Controls;
@@ -128,7 +139,7 @@ function definitionOf(c: ControlName, value: string): string | null {
 	if (value === "off") return null;
 	if (c === "critique") return REASONING_DEFS[value]?.version ?? null;
 	if (c === "perspective") return PERSPECTIVE_DEFS[value]?.version ?? null;
-	if (c === "preset") return VOICE_PRESET_DEFS[value]?.version ?? null;
+	if (c === "preset") return value in VOICE_PRESET_DEFS ? PRESET_CURRENT : null;
 	if (c === "sarcasm") return `sarcasm:${value}`;
 	return null;
 }
@@ -391,7 +402,14 @@ export class Character {
 	private setPreset(value: string, by: string): string | null {
 		if (value !== "off" && !(value in VOICE_PRESET_DEFS)) return null;
 		const was = this.active().state;
-		if (value !== "off" && was.controls.preset.value === value) return `the ${value} preset is already on`;
+		// Selected again under a newer definition (owner decision 14): an update, recorded as any change.
+		if (value !== "off" && was.controls.preset.value === value) {
+			if (was.controls.preset.definition === PRESET_CURRENT) return `the ${value} preset is already on`;
+			const next = this.commit("owner", by, `preset ${value} updated to ${PRESET_CURRENT}`, (s, at) => {
+				s.controls.preset = { ...s.controls.preset, since: at, definition: PRESET_CURRENT, source: "owner" };
+			});
+			return `revision ${next.rev}: the ${value} preset now uses ${PRESET_CURRENT} (was ${was.controls.preset.definition ?? "none"})`;
+		}
 		if (value === "off" && was.controls.preset.value === "off") return "no preset is on";
 		const pinned: string[] = [];
 		const next = this.commit("owner", by, `preset ${value}`, (s, at) => {
@@ -440,7 +458,15 @@ export class Character {
 		const allowed = c === "perspective" ? ["off", ...Object.keys(PERSPECTIVE_DEFS)] : ["off", "dry", "pointed"];
 		if (!allowed.includes(value)) return null;
 		const was = this.active().state;
-		if (was.controls[c].value === value) return `${CONTROL_LABEL[c]} is already ${value}`;
+		if (was.controls[c].value === value) {
+			const current = definitionOf(c, value);
+			if (was.controls[c].definition === current || c === "sarcasm" || value === "off")
+				return `${CONTROL_LABEL[c]} is already ${value}`;
+			const next = this.commit("owner", by, `${c} ${value} updated to ${current}`, (s, at) => {
+				s.controls[c] = { value, source: "owner", since: at, definition: current };
+			});
+			return `revision ${next.rev}: ${CONTROL_LABEL[c]} ${value} now uses ${current} (was ${was.controls[c].definition ?? "none"})`;
+		}
 		const next = this.commit("owner", by, `${c} ${value}`, (s, at) => {
 			s.controls[c] = { value, source: "owner", since: at, definition: definitionOf(c, value) };
 		});
@@ -523,6 +549,10 @@ export function changesBetween(a: CharacterState, b: CharacterState): string[] {
 		const x = a.controls[c].value;
 		const y = b.controls[c].value;
 		if (x !== y) out.push(`${CONTROL_LABEL[c]}: ${x} → ${y} (${b.controls[c].source})`);
+		else if (a.controls[c].definition !== b.controls[c].definition)
+			out.push(
+				`${CONTROL_LABEL[c]}: ${y}, definition ${a.controls[c].definition ?? "none"} → ${b.controls[c].definition ?? "none"}`,
+			);
 	}
 	const before = new Set(a.interests.map((i) => i.text));
 	const after = new Set(b.interests.map((i) => i.text));

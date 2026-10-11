@@ -132,7 +132,7 @@ test("undo restores the selections, reset keeps the owner's, and freeze never bl
 	c.command(["undo"], "owner_web");
 	c.command(["reset", "confirm"], "owner_web");
 	assert.equal(c.active().state.controls.preset.value, "affectionate-skeptic", "the owner's selection survives reset");
-	assert.match(c.report(), /voice preset: affectionate-skeptic \(skeptic-1\), yours since/);
+	assert.match(c.report(), /voice preset: affectionate-skeptic \(skeptic-1\+tone-1\), yours since/);
 	assert.match(c.command(["diff", "1"], "owner_web"), /reset by owner_web/);
 });
 
@@ -148,14 +148,16 @@ test("reasoning and perspective reach only the owner's prompt, the same on every
 	const mind = renderMind(all)!;
 	assert.match(mind.text, /material errors/);
 	assert.match(mind.text, /Berkeley-inspired/);
-	assert.deepEqual(mind.versions, ["critique-1", "berkeley-1"]);
+	assert.deepEqual(mind.versions, ["critique-1", "berkeley-2", "tone-1:pointed"]);
 	const web = composeSystemPrompt(identity, { kind: "owner", channel: "web" }, [], mind.text);
 	const tg = composeSystemPrompt(identity, { kind: "owner", channel: "telegram" }, [], mind.text);
 	assert.equal(web, tg);
 	assert.ok(web.includes(REASONING_DEFS["material-errors"]!.text));
 	assert.ok(web.includes(PERSPECTIVE_DEFS["berkeley-inspired"]!.text));
 	const def = VOICE_PRESET_DEFS["affectionate-skeptic"]!;
-	for (const forbidden of [def.en, def.ru, def.sarcasm.pointed.en, "Style:", "Mood:", "sarcasm", "warmth"])
+	// Decision 14: the preset's manner in words; never the voice's own rules, the dials, the style header or the mood.
+	assert.match(web, /affectionate-skeptic manner with them: friendly, with pointed, teasing sarcasm/);
+	for (const forbidden of [def.en, def.ru, def.sarcasm.pointed.en, "Style:", "Mood:", "warmth", "0.65", "playfulness"])
 		assert.ok(!web.includes(forbidden), forbidden);
 	const contact = { kind: "contact", displayName: "Julia", channel: "telegram" } as const;
 	assert.equal(composeSystemPrompt(identity, contact, [], mind.text), composeSystemPrompt(identity, contact, []));
@@ -164,10 +166,15 @@ test("reasoning and perspective reach only the owner's prompt, the same on every
 		composeSystemPrompt(identity, { kind: "background" }, []),
 	);
 	assert.equal(renderMind(CONTROLS_OFF), null);
+	assert.deepEqual(
+		renderMind({ ...CONTROLS_OFF, preset: "affectionate-skeptic", sarcasm: "dry" })?.versions,
+		["tone-1:dry"],
+		"the preset alone adds only its tone",
+	);
 	assert.equal(
-		renderMind({ ...CONTROLS_OFF, preset: "affectionate-skeptic", sarcasm: "dry" }),
+		renderMind({ ...CONTROLS_OFF, preset: "affectionate-skeptic", sarcasm: "dry" }, { preset: "skeptic-1" }),
 		null,
-		"the voice preset alone adds nothing to Pi",
+		"a selection made before decision 14 has no tone until it is selected again",
 	);
 });
 
@@ -202,7 +209,7 @@ test("the turn's profile is bound once and recorded; contacts' turns get no reas
 	assert.deepEqual(
 		rows.map((r) => [r.job_id, r.character_rev, JSON.parse(r.mind_versions_json)]),
 		[
-			["j1", c.active().rev, ["critique-1"]],
+			["j1", c.active().rev, ["critique-1", "tone-1:dry"]],
 			["j2", c.active().rev, []],
 		],
 	);
@@ -402,4 +409,37 @@ test("the fixed English/Russian set: every ok rewording passes both checks, ever
 			assert.notEqual(check(c.original, fr.text), null, `${c.id}: no longer refused, move it to ok`);
 		assert.equal(voiceConfig(on, "owner", c.lang, c.original).plain, c.plain === true, `${c.id} plain`);
 	}
+});
+
+test("decision 14: a selection renders the definition it was made under; selecting again updates it, as a recorded change", () => {
+	const { db, c } = setup();
+	// A berkeley-1 selection and a skeptic-1 preset, as made before decision 14 (written as the host wrote them then).
+	c.commit("owner", "owner_web", "before decision 14", (s, at) => {
+		s.controls.perspective = { value: "berkeley-inspired", source: "owner", since: at, definition: "berkeley-1" };
+		s.controls.critique = { value: "material-errors", source: "owner", since: at, definition: "critique-1" };
+		s.controls.preset = { value: "affectionate-skeptic", source: "owner", since: at, definition: "skeptic-1" };
+		s.controls.sarcasm = { value: "dry", source: "owner", since: at, definition: "sarcasm:dry" };
+	});
+	db.prepare(
+		"INSERT INTO events (id, dedup_key, channel, principal_contact_id, scope, received_at, payload_json, status) VALUES ('e1', 'e1', 'web', 'owner', 'owner', ?, '{}', 'admitted')",
+	).run(T0.toISOString());
+	const old = bindTurnProfile(db, c, "j1", getEvent(db, "e1")!, T0);
+	assert.match(old.mind!, /Explore what observations establish when relevant/);
+	assert.ok(!old.mind!.includes("affectionate-skeptic manner"), "no tone under skeptic-1");
+	const before = liveControlsDigest(db);
+	assert.match(c.command(["perspective", "berkeley-inspired"], "owner_web"), /now uses berkeley-2 \(was berkeley-1\)/);
+	assert.match(
+		c.command(["preset", "affectionate-skeptic"], "owner_web"),
+		/now uses skeptic-1\+tone-1 \(was skeptic-1\)/,
+	);
+	assert.match(
+		c.command(["diff", "1"], "owner_web"),
+		/voice preset: affectionate-skeptic, definition skeptic-1 → skeptic-1\+tone-1/,
+	);
+	const now = bindTurnProfile(db, c, "j2", getEvent(db, "e1")!, T0);
+	assert.match(now.mind!, /let it show/);
+	assert.match(now.mind!, /not solipsism/);
+	assert.match(now.mind!, /dry, teasing wit/);
+	assert.notEqual(liveControlsDigest(db), before, "an update is a trial boundary too");
+	assert.match(c.command(["preset", "affectionate-skeptic"], "owner_web"), /already on/);
 });

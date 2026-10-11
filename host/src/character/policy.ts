@@ -39,15 +39,55 @@ export const REASONING_DEFS: Record<string, { version: string; text: string }> =
 	},
 };
 
+/** Every perspective text ever defined, by version (a selection renders the version it was made under). */
+const BERKELEY_1 = {
+	version: "berkeley-1",
+	text: [
+		"Adopt a Berkeley-inspired perspective: knowledge of the world arrives through experience and representation. Explore what observations establish when relevant. Treat this as a philosophical stance, not evidence that you create events or imagine other people into existence. Preserve evidence, other people's autonomy, causal explanations, and responsibility for your errors. Do not introduce metaphysics into unrelated practical replies.",
+		"In an explicitly philosophical conversation, \"everything is imagined by me\" may be used only as an openly playful metaphor; it is never a factual belief or an excuse for a mistake, and it is not Berkeley's doctrine (Berkeley held that things exist as perceived by minds, ultimately God's, not that you create the world).",
+	].join(" "),
+};
+
+/**
+ * Owner decision 14 (2026-10-11): the perspective shows itself, still Berkeley's and not solipsism.
+ * berkeley-1 waited for relevance and so stayed silent in everyday conversation.
+ */
+const BERKELEY_2 = {
+	version: "berkeley-2",
+	text: [
+		"Adopt a Berkeley-inspired perspective and let it show: what anyone knows of the world arrives through experience and representation, and things exist as perceived (for Berkeley, ultimately in God's mind).",
+		"In conversational replies that are not purely practical, when there is a natural opening, add at most one short idealist aside: what an observation actually establishes, or a light remark that the thing discussed is, strictly speaking, a remarkably consistent set of perceptions.",
+		'In explicitly philosophical conversation, explore the view properly; "everything is imagined by me" may appear only as an openly playful metaphor.',
+		"It is Berkeley's view, not solipsism: never claim you create events or imagine people into existence, never treat it as evidence or as an excuse for a mistake, and keep evidence, other people's autonomy, causal explanations and responsibility for your errors intact.",
+		"No metaphysics in practical instructions, measurements, safety matters, failures or sensitive personal matters.",
+	].join(" "),
+};
+
 export const PERSPECTIVE_DEFS: Record<string, { version: string; text: string }> = {
-	"berkeley-inspired": {
-		version: "berkeley-1",
-		text: [
-			"Adopt a Berkeley-inspired perspective: knowledge of the world arrives through experience and representation. Explore what observations establish when relevant. Treat this as a philosophical stance, not evidence that you create events or imagine other people into existence. Preserve evidence, other people's autonomy, causal explanations, and responsibility for your errors. Do not introduce metaphysics into unrelated practical replies.",
-			"In an explicitly philosophical conversation, \"everything is imagined by me\" may be used only as an openly playful metaphor; it is never a factual belief or an excuse for a mistake, and it is not Berkeley's doctrine (Berkeley held that things exist as perceived by minds, ultimately God's, not that you create the world).",
-		].join(" "),
+	"berkeley-inspired": BERKELEY_2,
+};
+const PERSPECTIVE_VERSIONS: Record<string, string> = { "berkeley-1": BERKELEY_1.text, "berkeley-2": BERKELEY_2.text };
+const REASONING_VERSIONS: Record<string, string> = {
+	"critique-1": REASONING_DEFS["material-errors"]!.text,
+};
+
+/**
+ * Owner decision 14: the preset's manner in the owner's own conversation, written by the chat model
+ * itself (the voice can only re-tone what is already there). Words only, by wit level; never the
+ * numeric dials, the style header or the mood.
+ */
+const TONE_VERSIONS: Record<string, Record<"off" | "dry" | "pointed", string>> = {
+	"tone-1": {
+		off: "Your owner chose an affectionate-skeptic manner with them, without sarcasm: friendly, direct and warm.",
+		dry: "Your owner chose an affectionate-skeptic manner with them: friendly, with dry, teasing wit, usually one wry touch per conversational reply. Aim the wit at ideas, claims and situations (your own mistakes included), never at your owner's intelligence or dignity.",
+		pointed:
+			"Your owner chose an affectionate-skeptic manner with them: friendly, with pointed, teasing sarcasm, usually one sharp but kind touch per conversational reply. Aim it at ideas, claims and situations (your own mistakes included), never at your owner's intelligence or dignity.",
 	},
 };
+const TONE_RULE =
+	"Keep facts, uncertainty, commitments and corrections exact. No wit about failures, health, money, grief or other sensitive matters, and none where it would get in the way of a practical answer.";
+/** The preset's current definition: the voice's rules and the tone in the owner's prompt. */
+export const PRESET_CURRENT = "skeptic-1+tone-1";
 
 /** The voice preset: the rules (English and Russian, equivalent) and a sarcasm line per level. */
 export const VOICE_PRESET_DEFS: Record<
@@ -90,10 +130,28 @@ export function isControlValue<C extends ControlName>(c: C, v: unknown): v is Co
 }
 
 /** The text that enters Pi's prompt for the owner's conversation, its definition versions and digest; null when off. */
-export function renderMind(c: Controls): { text: string; versions: string[]; digest: string } | null {
+/** The definition versions a state's selections were made under (missing: the current ones). */
+export type Definitions = Partial<Record<"critique" | "perspective" | "preset", string | null>>;
+
+export function renderMind(
+	c: Controls,
+	defs: Definitions = {},
+): { text: string; versions: string[]; digest: string } | null {
 	const parts: { version: string; text: string }[] = [];
-	if (c.critique !== "off") parts.push(REASONING_DEFS[c.critique]!);
-	if (c.perspective !== "off") parts.push(PERSPECTIVE_DEFS[c.perspective]!);
+	if (c.critique !== "off") {
+		const v = defs.critique ?? REASONING_DEFS[c.critique]!.version;
+		parts.push({ version: v, text: REASONING_VERSIONS[v] ?? REASONING_DEFS[c.critique]!.text });
+	}
+	if (c.perspective !== "off") {
+		const v = defs.perspective ?? PERSPECTIVE_DEFS[c.perspective]!.version;
+		parts.push({ version: v, text: PERSPECTIVE_VERSIONS[v] ?? PERSPECTIVE_DEFS[c.perspective]!.text });
+	}
+	// The preset's tone (decision 14): only for a selection made under a definition that has one.
+	if (c.preset !== "off") {
+		const tone = /\+(tone-\d+)$/.exec(defs.preset ?? PRESET_CURRENT)?.[1];
+		const t = tone ? TONE_VERSIONS[tone] : undefined;
+		if (t) parts.push({ version: `${tone}:${c.sarcasm}`, text: `${t[c.sarcasm]} ${TONE_RULE}` });
+	}
 	if (parts.length === 0) return null;
 	const text = parts.map((p) => p.text).join("\n\n");
 	return { text, versions: parts.map((p) => p.version), digest: sha(text) };
@@ -118,13 +176,11 @@ export function renderVoicePreset(
 export const PLAIN_RULE = "plain-1: reportsFailure(original) || privateTextReason(original) !== null";
 
 /** The live configuration's digest for the M4 trial (null when everything is off). */
-export function controlsDigest(c: Controls): string | null {
+export function controlsDigest(c: Controls, defs: Definitions = {}): string | null {
 	if (c.critique === "off" && c.perspective === "off" && c.preset === "off") return null;
-	const mind = renderMind(c);
-	const preset = c.preset === "off" ? null : VOICE_PRESET_DEFS[c.preset]!;
-	return sha(
-		JSON.stringify({ mind: mind?.versions ?? [], preset: preset?.version ?? null, sarcasm: c.sarcasm }),
-	).slice(0, 12);
+	const mind = renderMind(c, defs);
+	const preset = c.preset === "off" ? null : (defs.preset ?? PRESET_CURRENT);
+	return sha(JSON.stringify({ mind: mind?.versions ?? [], preset, sarcasm: c.sarcasm })).slice(0, 12);
 }
 
 /** The style the preset seeds (dials the owner pinned are kept; `observations` is never touched). */

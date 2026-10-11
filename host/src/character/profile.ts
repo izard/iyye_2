@@ -12,7 +12,7 @@
 
 import type { Db } from "../state/db.ts";
 import type { EventRow } from "../state/events.ts";
-import { Character, controlsOf, type Revision } from "./character.ts";
+import { Character, controlsOf, definitionsOf, type Revision } from "./character.ts";
 import { type Controls, controlsDigest, renderMind } from "./policy.ts";
 
 export interface TurnProfile {
@@ -37,7 +37,7 @@ export function bindTurnProfile(
 ): TurnProfile {
 	const revision = character.active();
 	const controls = controlsOf(revision.state);
-	const rendered = ownerTurn(event) ? renderMind(controls) : null;
+	const rendered = ownerTurn(event) ? renderMind(controls, definitionsOf(revision.state)) : null;
 	db.prepare(
 		`INSERT OR REPLACE INTO turn_profiles (job_id, event_id, scope, character_rev, controls_json, mind_versions_json, mind_digest, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -57,7 +57,8 @@ export function bindTurnProfile(
 /** The active revision's live-configuration digest for the M4 trial (null when nothing is selected or no revision yet). */
 export function liveControlsDigest(db: Db): string | null {
 	try {
-		return controlsDigest(controlsOf(new Character({ db, stateDir: null }).active().state));
+		const state = new Character({ db, stateDir: null }).active().state;
+		return controlsDigest(controlsOf(state), definitionsOf(state));
 	} catch {
 		return null;
 	}

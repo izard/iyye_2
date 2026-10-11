@@ -159,7 +159,7 @@ Character and model competence are distinct. Explicit character state expresses 
 
 ### 4.3 Prompt composition
 
-At job start, build a bounded context from stable identity, the active character revision (its interests and habits; in the owner's conversation, the reasoning and perspective the owner selected, owner decision 13; style, sarcasm, mood and the numeric dials reach only the voice, owner decision 2026-10-11, plan 0.009), current operational state, the authorized contact view, relevant memories, and the job's acceptance criteria. Preserve upstream prompt stability and context-management behavior where possible.
+At job start, build a bounded context from stable identity, the active character revision (its interests and habits; in the owner's conversation, the reasoning, perspective and the preset's manner in words the owner selected, owner decisions 13 and 14; the numeric dials, the style header and mood reach only the voice, owner decision 2026-10-11, plan 0.009), current operational state, the authorized contact view, relevant memories, and the job's acceptance criteria. Preserve upstream prompt stability and context-management behavior where possible.
 
 Character changes apply at a safe turn boundary or the next job. They never mutate the authorization policy. A more adventurous temperament can investigate more often within its budget; it cannot grant itself more tools.
 
