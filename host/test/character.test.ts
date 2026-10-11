@@ -97,6 +97,42 @@ test("character.json is rebuilt at startup when missing, stale or damaged, and w
 	}
 });
 
+test("a damaged snapshot with the right revision, frozen flag and watermark is still rebuilt", () => {
+	const { dir, c, file, done } = setup();
+	try {
+		c.init();
+		const path = join(dir, "character.json");
+		const good = readFileSync(path, "utf8");
+		const bad = file();
+		bad.temperament.curiosity = 99;
+		delete bad.style;
+		writeFileSync(path, JSON.stringify(bad));
+		c.init();
+		assert.equal(readFileSync(path, "utf8"), good);
+		writeFileSync(path, good.replace("\n}", ', "extra": 1\n}'));
+		c.init();
+		assert.equal(readFileSync(path, "utf8"), good, "any difference at all is rebuilt");
+	} finally {
+		done();
+	}
+});
+
+test("reset commits its revision and its watermark together, even when the snapshot cannot be written", () => {
+	const { dir, c, done } = setup();
+	try {
+		c.init();
+		c.commit("review", "night", "night review", (s, at) => {
+			s.temperament.agency = { value: 1.1, source: "review", since: at };
+		});
+		rmSync(dir, { recursive: true, force: true }); // the snapshot write fails
+		assert.throws(() => c.command(["reset", "confirm"], "owner_web"));
+		assert.equal(c.active().kind, "reset");
+		assert.equal(c.watermark(), c.active().created_at);
+	} finally {
+		done();
+	}
+});
+
 test("undo is a new revision back to the state before; undo twice puts it back; the start cannot be undone", () => {
 	const { db, c, file, done } = setup();
 	try {

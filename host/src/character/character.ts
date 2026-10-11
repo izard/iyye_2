@@ -20,7 +20,7 @@
  * rebuilt at startup when missing or stale.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
@@ -105,7 +105,7 @@ export class Character {
 		this.d = { now: () => new Date(), ...deps };
 	}
 
-	/** At startup: revision 0 on the first start; the snapshot rebuilt when missing or stale. */
+	/** At startup: revision 0 on the first start; the snapshot rebuilt unless it is exactly what SQLite says. */
 	init(): Revision {
 		const at = this.d.now().toISOString();
 		this.d.db.transaction(() => {
@@ -119,7 +119,7 @@ export class Character {
 			}
 		})();
 		const active = this.active();
-		if (this.snapshotRevision() !== active.rev) this.writeSnapshot(active);
+		if (!this.snapshotCurrent(active)) this.writeSnapshot(active);
 		return active;
 	}
 
@@ -139,6 +139,19 @@ export class Character {
 		return { ...rest, state: JSON.parse(state_json) as CharacterState };
 	}
 
+	/**
+	 * The revision that was active at `at`: every change is a new revision, so
+	 * the latest created at or before it (revision 0 for anything earlier,
+	 * since the starting character's values held then too). Undo and reset are
+	 * revisions as well, so this holds across them.
+	 */
+	revisionAt(at: string): Revision {
+		const row = this.d.db
+			.prepare("SELECT rev FROM character_revisions WHERE created_at <= ? ORDER BY rev DESC LIMIT 1")
+			.get(at) as { rev: number } | undefined;
+		return this.revision(row?.rev ?? 0) ?? this.active();
+	}
+
 	frozen(): { by: string; at: string } | null {
 		const v = getKv(this.d.db, FROZEN_KEY);
 		return v ? (JSON.parse(v) as { by: string; at: string }) : null;
@@ -152,13 +165,16 @@ export class Character {
 	/**
 	 * A new revision from the active one: `change` edits a copy of its state.
 	 * The only way a value changes (CH1b's starting answer, `/character set`,
-	 * CH5's review); undo and reset use it too.
+	 * CH5's review); undo and reset use it too. `alongside` runs in the same
+	 * transaction (reset's watermark), so the database never holds one without
+	 * the other; the snapshot is written only after both are committed.
 	 */
 	commit(
 		kind: RevisionKind,
 		by: string,
 		note: string | null,
 		change: (s: CharacterState, at: string) => void,
+		alongside?: (at: string) => void,
 	): Revision {
 		const at = this.d.now().toISOString();
 		const rev = this.d.db.transaction(() => {
@@ -172,6 +188,7 @@ export class Character {
 				)
 				.run(next, at, parent.rev, kind, JSON.stringify(state), by, note);
 			setKv(this.d.db, ACTIVE_KEY, String(next), at);
+			alongside?.(at);
 			return next;
 		})();
 		const r = this.revision(rev)!;
@@ -284,14 +301,19 @@ export class Character {
 		];
 		if (!confirm)
 			return `reset goes back to the starting character and keeps your own values; what Iyye learned goes (${learned.length ? learned.join(", ") : "nothing learned yet"}), and what it learned from cannot bring it back. History is kept. /character reset confirm`;
-		const next = this.commit("reset", by, `reset from revision ${r.rev}`, (s, at) => {
-			const start = startState(at);
-			for (const t of TEMPERAMENTS) if (s.temperament[t].source !== "owner") s.temperament[t] = start.temperament[t];
-			for (const d of STYLE_NAMES) if (s.style[d].source !== "owner") s.style[d] = start.style[d];
-			s.interests = [];
-		});
-		setKv(this.d.db, WATERMARK_KEY, next.created_at, next.created_at);
-		this.writeSnapshot(next);
+		const next = this.commit(
+			"reset",
+			by,
+			`reset from revision ${r.rev}`,
+			(s, at) => {
+				const start = startState(at);
+				for (const t of TEMPERAMENTS)
+					if (s.temperament[t].source !== "owner") s.temperament[t] = start.temperament[t];
+				for (const d of STYLE_NAMES) if (s.style[d].source !== "owner") s.style[d] = start.style[d];
+				s.interests = [];
+			},
+			(at) => setKv(this.d.db, WATERMARK_KEY, at, at),
+		);
 		return `reset: revision ${next.rev} is active; ${learned.length ? `${learned.length} learned value(s) removed` : "nothing learned was there"}, your own values kept`;
 	}
 
@@ -299,16 +321,14 @@ export class Character {
 		return this.d.stateDir ? join(this.d.stateDir, "character.json") : null;
 	}
 
-	private snapshotRevision(): number | null {
+	/** Whether `character.json` is byte for byte what `writeSnapshot` would write now: any other content is rebuilt. */
+	private snapshotCurrent(r: Revision): boolean {
 		const p = this.snapshotPath();
-		if (!p || !existsSync(p)) return null;
+		if (!p) return true;
 		try {
-			const v = JSON.parse(readFileSync(p, "utf8")) as { revision?: unknown; frozen?: unknown; watermark?: unknown };
-			// Stale also when the frozen flag or the watermark no longer match.
-			if (v.frozen !== (this.frozen() !== null) || (v.watermark ?? null) !== this.watermark()) return null;
-			return typeof v.revision === "number" ? v.revision : null;
+			return readFileSync(p, "utf8") === this.snapshotText(r);
 		} catch {
-			return null;
+			return false;
 		}
 	}
 
@@ -316,6 +336,12 @@ export class Character {
 	private writeSnapshot(r: Revision): void {
 		const p = this.snapshotPath();
 		if (!p) return;
+		const tmp = `${p}.${process.pid}.tmp`;
+		writeFileSync(tmp, this.snapshotText(r), { mode: 0o600 });
+		renameSync(tmp, p);
+	}
+
+	private snapshotText(r: Revision): string {
 		const s = r.state;
 		const body = {
 			revision: r.rev,
@@ -331,9 +357,7 @@ export class Character {
 				style: Object.fromEntries(STYLE_NAMES.map((d) => [d, s.style[d].source])),
 			},
 		};
-		const tmp = `${p}.${process.pid}.tmp`;
-		writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
-		renameSync(tmp, p);
+		return `${JSON.stringify(body, null, 2)}\n`;
 	}
 }
 

@@ -43,6 +43,7 @@ import {
 	pendingBankDeletions,
 	queueBankDeletion,
 } from "../state/tombstones.ts";
+import { forgetVoice } from "../voice/shadow.ts";
 import { bankFor } from "./gateway.ts";
 
 export const FORGOTTEN = "[forgotten]";
@@ -296,6 +297,14 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 		forgetSelfFacts(db, [t.person.id]);
 		// The owner's notes about them (plan 0.005 Stage 2).
 		forgetNotes(db, [t.person.id]);
+		// The voice's shadow samples of messages to them and their labels, and their conversation's mood (plan 0.009).
+		forgetVoice(
+			db,
+			t.scopes,
+			[t.person.id],
+			[t.person.display_name, ...accountsOf(db, t.person.id).map((a) => a.display_name)],
+			at,
+		);
 		forgetReplyReviews(
 			db,
 			ownerTurns.map((r) => r.action_id),

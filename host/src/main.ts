@@ -23,6 +23,7 @@ import { WebChatAdapter } from "./channels/web/adapter.ts";
 import { ensureOwnerToken, WebSessions } from "./channels/web/auth.ts";
 import { WebServer } from "./channels/web/server.ts";
 import { Character } from "./character/character.ts";
+import { moodAt, moodReport, recordMood } from "./character/mood.ts";
 import { ConfigError, loadConfig, PROJECT_ROOT } from "./config.ts";
 import { DecisionClient } from "./decisions/client.ts";
 import { FactRelation } from "./decisions/fact-relation.ts";
@@ -91,7 +92,7 @@ import { recentReminderNote, remindersChip, remindersToday } from "./state/commi
 import { type Db, openDb } from "./state/db.ts";
 import { getJob } from "./state/jobs.ts";
 import { getKv } from "./state/kv.ts";
-import { DAY_KEYS } from "./state/models.ts";
+import { DAY_KEYS, seedSelectedModel } from "./state/models.ts";
 import { recentSentNote, sentReport } from "./state/sent.ts";
 import { recordIyyeEntry } from "./state/stm.ts";
 import { appendFeed } from "./state/web.ts";
@@ -107,6 +108,9 @@ import { toolsReport } from "./tools/report.ts";
 import { thinkComplete, thinkingToolkit } from "./tools/thinking.ts";
 import { visionToolkit } from "./tools/vision.ts";
 import { WEB_TOOLKIT, webFetchTool, webSearchTool } from "./tools/web.ts";
+import { VoiceCommands } from "./voice/commands.ts";
+import { routerVoice } from "./voice/prompt.ts";
+import { VoiceShadow } from "./voice/shadow.ts";
 import { SearxngService } from "./web/searxng.ts";
 
 async function main(): Promise<number> {
@@ -776,8 +780,51 @@ async function main(): Promise<number> {
 	// Plan 0.009 CH1a: the character's records and character.json; nothing reads its values yet.
 	const character = new Character({ db, stateDir: config.stateDir });
 	character.init();
+	// Plan 0.009 CH2: mood from records, journaled every half hour while awake; read only by the voice.
+	const moodTimer = setInterval(() => {
+		if (rhythm.mode() !== "awake") return;
+		try {
+			const now = new Date();
+			recordMood(db, moodAt(db, null, now), "sweep", now);
+		} catch (err) {
+			log.warn("mood: sample failed", { error: (err as Error).message });
+		}
+	}, 30 * 60_000);
+	moodTimer.unref();
+	// Plan 0.009 CH3: the voice in shadow (built below, once the decision client exists).
+	if (registry.models.some((m) => m.name === config.voice.model && !m.remote))
+		seedSelectedModel(db, "voice", config.voice.model, new Date().toISOString());
+	const personNames = () =>
+		(db.prepare("SELECT display_name FROM contacts WHERE kind != 'owner'").all() as { display_name: string }[])
+			.map((r) => r.display_name)
+			.filter((n) => n && n.trim().length >= 2);
+	let voiceShadow: VoiceShadow | null = null;
 	const commandExtras = {
 		character,
+		moodReport: () =>
+			moodReport(db, new Date(), (scope) => {
+				if (scope === "owner") return "you";
+				const id = /^contact:(.+)$/.exec(scope)?.[1];
+				const c = id
+					? (db.prepare("SELECT display_name FROM contacts WHERE id = ?").get(id) as
+							| { display_name: string }
+							| undefined)
+					: undefined;
+				return c?.display_name ?? scope;
+			}),
+		voice: new VoiceCommands({
+			db,
+			names: personNames,
+			status: () => ({
+				model: models.selected("voice"),
+				pending: voiceShadow?.pending() ?? 0,
+				waiting: voiceShadow
+					? voiceShadow.lastReason
+					: config.voice.shadow
+						? "starting"
+						: "off (IYYE2_VOICE_SHADOW=0)",
+			}),
+		}),
 		commitments: new ReminderCommands({ db }),
 		plans,
 		sentReport: () => sentReport(db),
@@ -953,6 +1000,23 @@ async function main(): Promise<number> {
 		ready: () => decisions.checkpoint !== null,
 		log,
 	});
+	if (config.voice.shadow)
+		voiceShadow = new VoiceShadow({
+			db,
+			log,
+			device,
+			models,
+			background,
+			complete: routerVoice(router.url),
+			character,
+			names: personNames,
+			energy: adenosine,
+			decisions: {
+				client: decisionClient,
+				ready: () => decisions.checkpoint !== null,
+				chatPending: () => scheduler.hasRunnableJobs(),
+			},
+		});
 	const owner = ensureOwnerToken(config.stateDir);
 	const web = new WebServer({
 		port: config.webPort,
@@ -995,6 +1059,8 @@ async function main(): Promise<number> {
 				await memory.stop();
 				await selectionShadow.stop();
 				await replyReview.stop();
+				await voiceShadow?.stop();
+				clearInterval(moodTimer);
 				await factExtractor.stop();
 				await background.stop();
 				adenosine.stop();
@@ -1059,6 +1125,7 @@ async function main(): Promise<number> {
 	decisions.start(); // in the background too
 	selectionShadow.start();
 	replyReview.start();
+	voiceShadow?.start();
 	background.start();
 	factExtractor.start();
 	observer.start();

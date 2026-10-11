@@ -7,7 +7,8 @@
  * order and tone; it may not add, drop or change what the message says.
  *
  * - **Fixed segments** must survive exactly, as a multiset: numbers (times,
- *   dates and amounts included), URLs, e-mail addresses, @mentions, file names
+ *   dates and amounts included) with their unit or currency ("12 euros" =
+ *   "€12", never "12 dollars"; a unit may not go or come), URLs, e-mail addresses, @mentions, file names
  *   and paths, hashes, quoted strings, dates said in words (weekdays, months,
  *   today/tomorrow/yesterday, in English and Russian, compared by what they
  *   name: "Tuesday's" = "on Tuesday" = "во вторник"), and names (the contacts
@@ -41,6 +42,81 @@ export interface Segment {
 	end: number;
 }
 
+/**
+ * Units and currencies that belong to the number before them (or, for a
+ * currency sign, after), each with the one name it is compared by; English
+ * and Russian, any inflection. `spaced` may follow after a space; `attached`
+ * single letters only directly ("5m", "3h"), since "5 m" is too often a word.
+ */
+const UNITS: { unit: string; spaced?: string; attached?: string }[] = [
+	{ unit: "eur", spaced: "€|euros?|eur|евро" },
+	{ unit: "usd", spaced: "\\$|dollars?|usd|доллар\\p{L}{0,3}|бакс\\p{L}{0,3}" },
+	{ unit: "pound", spaced: "£|pounds?|gbp|lbs?|фунт\\p{L}{0,3}" },
+	{ unit: "rub", spaced: "₽|r(?:ou)?bles?|rub|руб\\p{L}{0,4}" },
+	{ unit: "yen", spaced: "¥|yen|jpy|иен\\p{L}{0,2}|йен\\p{L}{0,2}" },
+	{ unit: "percent", spaced: "%|percent|per cent|процент\\p{L}{0,3}" },
+	{ unit: "degc", spaced: "°\\s?c|degrees? c(?:elsius)?|градус\\p{L}{0,3} цельси\\p{L}{1,2}" },
+	{ unit: "degf", spaced: "°\\s?f|degrees? f(?:ahrenheit)?" },
+	{ unit: "degree", spaced: "°|degrees?|градус\\p{L}{0,3}" },
+	{ unit: "km", spaced: "km|kilomet(?:er|re)s?|км|километр\\p{L}{0,3}" },
+	{ unit: "mile", spaced: "miles?|мил\\p{L}{1,3}" },
+	{ unit: "cm", spaced: "cm|centimet(?:er|re)s?|см|сантиметр\\p{L}{0,3}" },
+	{ unit: "mm", spaced: "mm|millimet(?:er|re)s?|мм|миллиметр\\p{L}{0,3}" },
+	{ unit: "metre", spaced: "met(?:er|re)s?|метр\\p{L}{0,3}", attached: "m|м" },
+	{ unit: "kg", spaced: "kg|kilos?|kilograms?|кг|килограмм\\p{L}{0,3}" },
+	{ unit: "gram", spaced: "grams?|грамм\\p{L}{0,3}", attached: "g" },
+	{ unit: "ml", spaced: "ml|millilit(?:er|re)s?|мл|миллилитр\\p{L}{0,3}" },
+	{ unit: "litre", spaced: "lit(?:er|re)s?|литр\\p{L}{0,3}", attached: "l|л" },
+	{ unit: "tb", spaced: "tb|tib|terabytes?|тб|терабайт\\p{L}{0,2}" },
+	{ unit: "gb", spaced: "gb|gib|gigabytes?|гб|гигабайт\\p{L}{0,2}" },
+	{ unit: "mb", spaced: "mb|mib|megabytes?|мб|мегабайт\\p{L}{0,2}" },
+	{ unit: "kb", spaced: "kb|kib|kilobytes?|кб|килобайт\\p{L}{0,2}" },
+	{ unit: "second", spaced: "seconds?|secs?|сек\\p{L}{0,4}", attached: "s|с" },
+	{ unit: "minute", spaced: "minutes?|mins?|мин\\p{L}{0,4}" },
+	{ unit: "hour", spaced: "hours?|hrs?|час\\p{L}{0,2}", attached: "h|ч" },
+	{ unit: "day", spaced: "days?|дн(?:я|ей|и|ю|ям|ях)|день|сут\\p{L}{0,2}" },
+	{ unit: "week", spaced: "weeks?|недел\\p{L}{1,3}" },
+	{ unit: "month", spaced: "months?|месяц\\p{L}{0,3}" },
+	{ unit: "year", spaced: "years?|год\\p{L}{0,2}|лет" },
+	{ unit: "times", spaced: "times|раз(?:а)?" },
+];
+const UNIT_TEXT = UNITS.map((u) => new RegExp(`^(?:${[u.spaced, u.attached].filter(Boolean).join("|")})$`, "iu"));
+const SPACED = UNITS.map((u) => u.spaced)
+	.filter(Boolean)
+	.join("|");
+const ATTACHED = UNITS.map((u) => u.attached)
+	.filter(Boolean)
+	.join("|");
+const NUMBER = new RegExp(
+	`(?:[$€£₽¥]\\s?)?\\d+(?:[.,:/-]\\d+)*(?:(?:\\s?(?:${SPACED})|(?:${ATTACHED}))(?![\\p{L}\\d]))?`,
+	"giu",
+);
+
+/** Currencies and percentages: their words outside any number segment ("12 euros dollars" has one). */
+const MONEY_UNITS = new Set(["eur", "usd", "pound", "rub", "yen", "percent"]);
+const MONEY_WORDS = new RegExp(
+	`(?<![\\p{L}\\d])(?:${UNITS.filter((u) => MONEY_UNITS.has(u.unit))
+		.map((u) => u.spaced)
+		.join("|")})(?![\\p{L}\\d])`,
+	"giu",
+);
+function bareMoney(text: string, names: readonly string[]): number {
+	let rest = text;
+	for (const s of fixedSegments(text, names).reverse())
+		rest = rest.slice(0, s.start) + " ".repeat(s.end - s.start) + rest.slice(s.end);
+	return (rest.match(MONEY_WORDS) ?? []).length;
+}
+
+/** The unit a number segment carries, by the name it is compared by ("" for none). */
+function unitOf(segment: string): string {
+	const sign = /^[$€£₽¥]/u.exec(segment)?.[0];
+	if (sign) return unitOf(`0${sign}`);
+	const rest = segment.replace(/^\d+(?:[.,:/-]\d+)*\s?/u, "").toLowerCase();
+	if (!rest) return "";
+	const i = UNIT_TEXT.findIndex((re) => re.test(rest));
+	return i < 0 ? rest : UNITS[i]!.unit;
+}
+
 /** Order matters: earlier kinds claim their characters first. */
 const PATTERNS: [SegmentKind, RegExp][] = [
 	["url", /\bhttps?:\/\/[^\s<>()"'«»“”]+[^\s<>()"'«»“”.,;:!?]/gu],
@@ -52,7 +128,7 @@ const PATTERNS: [SegmentKind, RegExp][] = [
 		/(?<![\p{L}\d])(?:~?\/)?(?:[\w.-]+\/)+[\w.-]*[\w-]|(?<![\p{L}\d.])[\w-]+\.(?:ts|js|mjs|json|md|py|sh|sql|txt|csv|log|yml|yaml|toml|gguf|db|png|jpe?g|pdf)\b/gu,
 	],
 	["hash", /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,64}\b/gu],
-	["number", /\d+(?:[.,:/-]\d+)*/gu],
+	["number", NUMBER],
 ];
 
 /** Dates said in words, each with what it names; matched before names, so "Tuesday" is a date. */
@@ -172,7 +248,11 @@ function escapeRe(s: string): string {
 function key(s: Pick<Segment, "kind" | "text">): string {
 	if (s.kind === "date") return `date:${dateMatches(s.text, true)[0]?.names ?? s.text.toLowerCase()}`;
 	if (s.kind === "name") return `name:${s.text.toLowerCase().replace(/['’]s$/u, "")}`;
-	if (s.kind === "number") return `number:${s.text.replace(/,(?=\d{3}\b)/g, "")}`;
+	if (s.kind === "number") {
+		const digits = /\d+(?:[.,:/-]\d+)*/u.exec(s.text)![0].replace(/,(?=\d{3}\b)/g, "");
+		const unit = unitOf(s.text);
+		return `number:${digits}${unit ? ` ${unit}` : ""}`;
+	}
 	if (s.kind === "url") return `url:${s.text.replace(/\/$/, "")}`;
 	return `${s.kind}:${s.text}`;
 }
@@ -291,6 +371,8 @@ export function voiceProblem(original: string, rephrased: string, names: readonl
 		if (k.startsWith("name:") && nameOccurrences(a, k.slice(5)) >= n) continue;
 		return `added ${k}`;
 	}
+	// A currency or a percentage said apart from any number ("⟦1⟧ dollars" around a masked "12 euros").
+	if (bareMoney(b, names) > bareMoney(a, names)) return "added a currency or percentage";
 	const has = (re: RegExp, t: string) => count(re, t) > 0;
 	// A problem said as a negation ("could not reach" → "did not answer") is the same problem.
 	// (as many negations as before: "I reached it: no rain" is not "I could not reach it, so I don't know").

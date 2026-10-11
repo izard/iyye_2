@@ -686,6 +686,20 @@ export function privateReason(
 	return null;
 }
 
+/**
+ * Why a whole text may hold a private fact, by the same rules (plan 0.009 CH3:
+ * the voice's training export screens masked prose with it, since masking
+ * names and numbers does not remove what a sentence says about someone).
+ */
+export function privateTextReason(text: string): string | null {
+	if (ASKED_PRIVATE.test(text)) return "asks to keep something private";
+	if (CREDENTIAL.test(text)) return "a credential";
+	if (HEALTH.test(text)) return "health";
+	if (MONEY.test(text)) return "money";
+	if (ADDRESS.test(text)) return "an address";
+	return null;
+}
+
 /** One structured sentence for storage and recall: "Julia plays the violin". */
 export function factSentence(
 	f: Pick<ExtractedFact, "subject" | "predicate" | "object" | "negated" | "details">,

@@ -184,3 +184,22 @@ test("the held-out pairs (never used to tune the check): no worse than measured"
 	assert.ok(e.falseAccepts.length <= 4, `false accepts: ${e.falseAccepts.join(" | ")}`);
 	assert.ok(e.falseRejects.length <= 5, `false rejects: ${e.falseRejects.join(" | ")}`);
 });
+
+test("units and currencies belong to their number: another unit, or none, is refused", () => {
+	assert.match(voiceProblem("It costs 12 euros.", "It costs 12 dollars.", NAMES) ?? "", /number:12 eur/);
+	assert.match(voiceProblem("It costs 12 euros.", "It costs 12.", NAMES) ?? "", /number:12 eur/);
+	assert.match(voiceProblem("It costs 12.", "It costs 12 euros.", NAMES) ?? "", /dropped number:12$/);
+	assert.match(voiceProblem("Disk is 85% full.", "Disk is 85 GB full.", NAMES) ?? "", /number:85 percent/);
+	assert.match(voiceProblem("Wait 5 minutes.", "Wait 5 hours.", NAMES) ?? "", /number:5 minute/);
+	assert.match(voiceProblem("Подожди 5 минут.", "Подожди 5 часов.", NAMES) ?? "", /number:5 minute/);
+	assert.match(voiceProblem("Это стоит 300 рублей.", "Это стоит 300 долларов.", NAMES) ?? "", /number:300 rub/);
+	// The same unit in another form is the same.
+	assert.equal(voiceProblem("It costs 12 euros.", "The price is €12.", NAMES), null);
+	assert.equal(voiceProblem("Disk is 85% full.", "The disk is 85 percent full.", NAMES), null);
+	assert.equal(voiceProblem("It took 3h.", "It took 3 hours.", NAMES), null);
+	assert.equal(voiceProblem("Это стоит 300 рублей.", "Цена: 300 руб.", NAMES), null);
+	// …nor can it name another currency beside the placeholder.
+	assert.match(voiceProblem("It costs 12 euros.", "It costs 12 euros dollars.", NAMES) ?? "", /added a currency/);
+	// The unit travels inside the placeholder, so the voice cannot change it.
+	assert.deepEqual(maskFixed("Send Julia 12 euros.", NAMES).segments, ["Julia", "12 euros"]);
+});
