@@ -86,6 +86,8 @@ test("the run configuration always isolates; only provisioning shares the host's
 		rootfs: "/r",
 		work: "/w",
 		args: ["/bin/sh", "-c", "x"],
+		memoryMb: 256,
+		tasks: 32,
 		uid: 1000,
 		gid: 1000,
 		tmpMb: 64,
@@ -109,7 +111,17 @@ test("the run configuration always isolates; only provisioning shares the host's
 		c.mounts.filter((m) => m.type === "bind").map((m) => [m.destination, m.source]),
 		[["/work", "/w"]],
 	);
-	const p = provisionConfig({ rootfs: "/r", work: "/w", args: ["x"], uid: 1, gid: 1, tmpMb: 1, fileMb: 1 });
+	const p = provisionConfig({
+		rootfs: "/r",
+		work: "/w",
+		args: ["x"],
+		uid: 1,
+		gid: 1,
+		tmpMb: 1,
+		fileMb: 1,
+		memoryMb: 1,
+		tasks: 1,
+	});
 	assert.throws(() => assertIsolated(p), /network namespace is missing/);
 	const tampered = structuredClone(c);
 	tampered.mounts.push({ destination: "/home", type: "bind", source: "/home", options: ["rbind"] });

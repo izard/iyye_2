@@ -15,8 +15,12 @@
  *   size-capped tmpfs. Nothing of the home directory or Iyye's state.
  * - **Privileges:** user namespace (root inside is the host user outside), no
  *   capabilities, no new privileges, a fixed environment (no host variables).
- * - Memory, processes and CPU are bounded outside, by the systemd scope the
- *   runner starts runc in; file sizes and open files by rlimits here.
+ * - **Limits:** memory (no swap) and the number of tasks on the container's
+ *   own cgroup (`linux.resources`; runc creates it in the systemd user tree
+ *   the runner's scope delegates: a scope's own limits would not hold, since
+ *   runc moves the container out of it); file sizes and open files by
+ *   rlimits. CPU is bounded only by the wall-clock limit (the user tree does
+ *   not delegate the cpu controller).
  *
  * `provisionConfig` is the one configuration with the host's network: used
  * only by `scripts/provision-sandbox.ts` to install packages into the root.
@@ -30,6 +34,9 @@ export interface RunConfigInput {
 	gid: number;
 	tmpMb: number;
 	fileMb: number;
+	/** Kernel limits on the container's own cgroup (runc creates it under the delegated systemd user tree). */
+	memoryMb: number;
+	tasks: number;
 }
 
 const ENV = [
@@ -92,6 +99,10 @@ function base(i: RunConfigInput, readonlyRoot: boolean, namespaces: readonly str
 			{ destination: "/work", type: "bind", source: i.work, options: ["rbind", "rw", "nosuid", "nodev"] },
 		],
 		linux: {
+			resources: {
+				memory: { limit: i.memoryMb * 1024 * 1024, swap: i.memoryMb * 1024 * 1024 },
+				pids: { limit: i.tasks },
+			},
 			uidMappings: [{ containerID: 0, hostID: i.uid, size: 1 }],
 			gidMappings: [{ containerID: 0, hostID: i.gid, size: 1 }],
 			namespaces: namespaces.map((type) => ({ type })),
@@ -128,6 +139,8 @@ export function assertIsolated(c: OciConfig): void {
 	for (const need of NAMESPACES) if (!ns.has(need)) throw new Error(`sandbox: the ${need} namespace is missing`);
 	if (!c.root.readonly) throw new Error("sandbox: the root must be read-only");
 	if (!c.process.noNewPrivileges) throw new Error("sandbox: noNewPrivileges must be set");
+	if (!(c.linux.resources.memory.limit > 0) || !(c.linux.resources.pids.limit > 0))
+		throw new Error("sandbox: memory and task limits must be set");
 	if (Object.values(c.process.capabilities).some((list) => list.length > 0))
 		throw new Error("sandbox: no capabilities may be granted");
 	const binds = c.mounts.filter((m) => m.type === "bind" || m.options?.includes("rbind"));

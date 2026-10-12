@@ -7,9 +7,11 @@
  *
  * - **Isolation** is `config.ts`'s: no network, a read-only Alpine root, only
  *   the conversation's `/work` from the host, no capabilities, a fixed env.
- * - **Limits:** runc runs inside a transient systemd user scope with
- *   `MemoryMax`, `MemorySwapMax=0`, `TasksMax` and `CPUQuota`, so a memory hog
- *   or a fork bomb is contained by the kernel; a wall-clock limit kills the
+ * - **Limits:** runc runs inside a transient systemd user scope, a delegated
+ *   cgroup tree in which it creates the container's own cgroup with its
+ *   memory and task limits (`config.ts`), so a memory hog or a fork bomb is
+ *   contained by the kernel (verified by the smoke: the scope's own limits do
+ *   not reach the container, which runc moves out of it); a wall-clock limit kills the
  *   container (`runc kill`, then `runc delete --force`), and so does the
  *   caller's abort (a turn stopped, background work giving way). These are
  *   resource bounds on Iyye's own experiment, not a limit on a model's
@@ -25,7 +27,7 @@
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Logger } from "../log.ts";
 import { runConfig } from "./config.ts";
@@ -166,13 +168,16 @@ export class Sandbox {
 		mkdirSync(bundle, { recursive: true, mode: 0o700 });
 		mkdirSync(this.paths.state, { recursive: true, mode: 0o700 });
 		const config = runConfig({
-			rootfs: this.paths.rootfs,
+			// runc refuses a root given as a symlink: the real path.
+			rootfs: realpathSync(this.paths.rootfs),
 			work,
 			args: ["/bin/sh", "-c", command],
 			uid: this.d.uid,
 			gid: this.d.gid,
 			tmpMb: this.d.limits.tmpMb,
 			fileMb: this.d.limits.fileMb,
+			memoryMb: this.d.limits.memoryMb,
+			tasks: this.d.limits.tasks,
 		});
 		writeFileSync(join(bundle, "config.json"), JSON.stringify(config), { mode: 0o600 });
 		const runcArgs = ["--root", this.paths.state, "run", "--bundle", bundle, id];

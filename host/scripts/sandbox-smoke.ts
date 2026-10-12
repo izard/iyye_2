@@ -81,7 +81,11 @@ try {
 		r.output,
 	);
 	r = await run("env");
-	check("a fixed environment (no host variables)", !/TELEGRAM|IYYE2_|SSH_|XDG_/.test(r.output), r.output);
+	check(
+		"a fixed environment (no host variables)",
+		r.exitCode === 0 && r.output.includes("PATH=") && !/TELEGRAM|IYYE2_|SSH_|XDG_/.test(r.output),
+		r.output,
+	);
 	r = await run(
 		"python3 - <<'EOF'\nimport socket\nfor host, port in [('127.0.0.1', 8180), ('127.0.0.1', 8186), ('127.0.0.1', 5100), ('192.168.1.123', 5100), ('1.1.1.1', 53)]:\n    s = socket.socket(); s.settimeout(2)\n    try:\n        s.connect((host, port)); print('REACHED', host, port)\n    except Exception as e:\n        print('blocked', host, port, type(e).__name__)\ntry:\n    socket.getaddrinfo('example.com', 80); print('REACHED dns')\nexcept Exception as e:\n    print('blocked dns', type(e).__name__)\nEOF",
 	);
@@ -90,10 +94,10 @@ try {
 		!r.output.includes("REACHED") && r.output.includes("blocked dns"),
 		r.output,
 	);
-	r = await run("python3 -c 'b = bytearray(1024 * 1024 * 1024); print(len(b))'");
+	r = await run("python3 -c 'print(\"started\", flush=True); b = bytearray(1024 * 1024 * 1024); print(len(b))'");
 	check(
 		"a memory hog is stopped (256 MB limit)",
-		r.exitCode !== 0 && !r.output.includes("1073741824"),
+		r.output.includes("started") && r.exitCode !== 0 && !r.output.includes("1073741824"),
 		`${r.exitCode} ${r.output}`,
 	);
 	r = await run(

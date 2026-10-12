@@ -79,6 +79,8 @@ const run = (label: string, script: string) => {
 		gid: process.getgid!(),
 		tmpMb: 512,
 		fileMb: 1024,
+		memoryMb: 2048,
+		tasks: 256,
 	});
 	writeFileSync(join(bundle, "config.json"), JSON.stringify(c));
 	execFileSync(
