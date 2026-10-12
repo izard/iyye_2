@@ -257,6 +257,18 @@ Fixes:
 
 Tests: `turn-limits.test.ts` (compaction without thinking and the next turn thinking again; a loop of validation-rejected calls stopped after 3 and answered; `shorten`), `adenosine.test.ts` (the cap). The fake router gained `[[callloop:NAME|{json}]]`.
 
+### §9 The sandbox (owner decision 2026-10-12)
+
+The owner asked for a basic runc sandbox, "so Iyye can test hypotheses instead of just theorizing". Owner decisions: the owner's turns and Iyye's own work (never contacts); a pinned Alpine root with python3; a per-conversation `/work` that lasts the day. This is the constrained worker HLD §7 allows, and an owner exception to "never expose a shell or interpreter".
+- **Toolkit** `sandbox` (`tools/sandbox.ts`), declared last, always on in the owner's sessions; one tool, `sandbox_run(command)`: `/bin/sh -c` in `/work`. New effect `compute`: the owner (their linked Telegram accounts too) and Iyye's own work, never contacts and never plan steps (a contact may have written the question). `evidence: false`: the model sees the output, framed as data from its own run; `tool_calls.result` keeps a fixed note without figures, so investigations, plan steps and the fact ledger's `tool_ref` can never cite it. The voice keeps a reply's exact words in a turn that used it.
+- **Isolation** (`sandbox/config.ts`, the only builder; `assertIsolated` throws otherwise): rootless runc with user, pid, ipc, uts, mount, cgroup and **network** namespaces (no network at all: not the router, Hindsight, Postgres, Kev, SearXNG, the web chat, the LAN or the internet); the provisioned root read-only; `/work` the only host directory; `/tmp` a 256 MB tmpfs; no capabilities, `noNewPrivileges`, a fixed environment; rlimits on file size (256 MB), open files and core dumps.
+- **Limits** (`sandbox/sandbox.ts`): runc runs in a transient `systemd-run --user --scope` with `MemoryMax` (1 GB, `IYYE2_SANDBOX_MEMORY_MB`), `MemorySwapMax=0`, `TasksMax` 128 and `CPUQuota` 200 %; a wall-clock limit (60 s, `IYYE2_SANDBOX_TIMEOUT_S`) and the caller's abort kill and delete the container. A resource bound on Iyye's own experiment, not a model-time limit: the turn continues with what the run returned. One run at a time; output capped at 6,000 characters (head and tail); runc and systemd-run get a minimal environment (never the host's secrets); leftover containers are removed at startup.
+- **Workspaces:** `<state>/sandbox/work/<hash of scope>`, 512 MB each (a full one refuses runs), wiped at the end of every completed night and on `/forget` (all of them).
+- **Root:** `scripts/provision-sandbox.ts` downloads `alpine-minirootfs-3.24.2-aarch64` (sha256 and sha512 pinned), extracts it without ownership, installs python3 with apk (signed repository) in the one configuration with the host's network, and writes `provisioned.json` (packages and a tree hash). The host refuses a root that does not match it.
+- **Background:** `IYYE2_SANDBOX_BACKGROUND=1` gives the toolkit to Iyye's own work (investigations; not plan steps); off by default, since it changes what investigations can do: switched on, it joins the M4 trial settings (a new period).
+- **Prerequisite on the Spark:** `/usr/bin/runc` (containerd.io) has no AppArmor profile, so Ubuntu refuses it user namespaces; the owner adds one (`/etc/apparmor.d/runc-usr-bin`, `userns`, unconfined).
+- **Tests:** `test/sandbox.test.ts` (a fake runc: the configuration, timeouts, aborts, one at a time, caps, leftovers, permissions, not evidence); `scripts/sandbox-smoke.ts` on the Spark (python, `/work`, the root, no network, memory, tasks, time, output, file size).
+
 ## 5. Risks
 
 - **Engines block SearXNG** (captchas, rate limits): quality varies, and Wikipedia is the always-available fallback.

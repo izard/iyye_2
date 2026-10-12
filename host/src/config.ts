@@ -45,6 +45,12 @@ export interface Config {
 	 * (CH4) how long a reply waits for its rephrasing.
 	 */
 	voice: { model: string; shadow: boolean; deadlineS: number };
+	/**
+	 * The sandbox (owner decision 2026-10-12): `sandbox_run` in the owner's turns when provisioned on Linux
+	 * (`IYYE2_SANDBOX=0` turns it off), and in Iyye's own work only with `IYYE2_SANDBOX_BACKGROUND=1`
+	 * (a new M4 trial period). Each run's wall-clock limit and memory.
+	 */
+	sandbox: { on: boolean; background: boolean; timeoutS: number; memoryMb: number };
 	/** No background step starts this soon after chat activity, and steps are spaced this far apart. */
 	backgroundQuietS: number;
 	backgroundGapS: number;
@@ -271,6 +277,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		identityFile: absPath(env.IYYE2_IDENTITY || resolve(PROJECT_ROOT, "config/identity.md"), cwd),
 		modelsMax: int(env, "IYYE2_MODELS_MAX", 2, 1, 16),
 		backgroundModel: env.IYYE2_BACKGROUND_MODEL || "gemma-4-E4B",
+		sandbox: {
+			on: env.IYYE2_SANDBOX !== "0",
+			background: env.IYYE2_SANDBOX_BACKGROUND === "1",
+			timeoutS: int(env, "IYYE2_SANDBOX_TIMEOUT_S", 60, 1, 3600),
+			memoryMb: int(env, "IYYE2_SANDBOX_MEMORY_MB", 1024, 64, 65_536),
+		},
 		voice: {
 			model: env.IYYE2_VOICE_MODEL || "qwen35-4b-tak",
 			shadow: env.IYYE2_VOICE_SHADOW !== "0",

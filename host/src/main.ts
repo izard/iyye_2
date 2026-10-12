@@ -89,6 +89,7 @@ import { Observer } from "./observe/observer.ts";
 import { ensureWorkspace } from "./observe/workspace.ts";
 import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
 import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./people/people.ts";
+import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
@@ -107,6 +108,7 @@ import { currentTimeTool, systemStatusTool } from "./tools/probes.ts";
 import { projectToolkit } from "./tools/project.ts";
 import { remindersToolkit } from "./tools/reminders.ts";
 import { toolsReport } from "./tools/report.ts";
+import { sandboxToolkit } from "./tools/sandbox.ts";
 import { thinkComplete, thinkingToolkit } from "./tools/thinking.ts";
 import { visionToolkit } from "./tools/vision.ts";
 import { WEB_TOOLKIT, webFetchTool, webSearchTool } from "./tools/web.ts";
@@ -304,6 +306,18 @@ async function main(): Promise<number> {
 					dailyMax: config.vision.dailyMax,
 				})
 			: null;
+	// The sandbox (owner decision 2026-10-12): rootless runc, no network, the owner's turns (and Iyye's own work
+	// with IYYE2_SANDBOX_BACKGROUND=1). Unavailable, and said so, unless provisioned on Linux.
+	const sandbox = config.sandbox.on
+		? new Sandbox({
+				stateDir: config.stateDir,
+				log,
+				limits: { timeoutS: config.sandbox.timeoutS, memoryMb: config.sandbox.memoryMb },
+			})
+		: null;
+	const sandboxProblem = sandbox ? sandbox.init() : "off (IYYE2_SANDBOX=0)";
+	if (sandboxProblem) log.info("sandbox: not available", { why: sandboxProblem });
+	const sandboxKit = sandbox && !sandboxProblem ? sandboxToolkit(sandbox) : null;
 	const tools = new ToolBroker({
 		db,
 		log,
@@ -328,6 +342,8 @@ async function main(): Promise<number> {
 			messaging,
 			// Last (2026-10-08): Iyye's own repositories, read-only, in the owner's turns only (effect `private`).
 			projectKit,
+			// Last (2026-10-12): the sandbox, effect `compute` (the owner and Iyye's own work, never contacts).
+			...(sandboxKit ? [sandboxKit] : []),
 			// Last (2026-10-09): the reasoning model on the owner's other machine, owner-only.
 			...(thinkingKit ? [thinkingKit] : []),
 			// Last (2026-10-09): images sent in the conversation, the owner and trusted contacts.
@@ -433,6 +449,8 @@ async function main(): Promise<number> {
 				// Last (plan 0.010 M2): the web for curiosity's investigations, on Iyye's own daily budget.
 				// Investigation sessions never get `messaging` (ToolBroker.allowed): a page must not make Iyye write.
 				...(webToolkit ? [webToolkit] : []),
+				// Last (2026-10-12): the sandbox for Iyye's own work, only when switched on (a new M4 trial period).
+				...(sandboxKit && config.sandbox.background ? [sandboxKit] : []),
 			],
 		}),
 	});
@@ -459,6 +477,8 @@ async function main(): Promise<number> {
 		budgetMin: config.self.initiativeBudgetMin,
 		shares: SHARES,
 		...(digest ? { character: digest } : {}),
+		// Iyye's own work with the sandbox changes what investigations can do: a new period when switched on.
+		...(sandboxKit && config.sandbox.background ? { sandbox: "background" } : {}),
 	});
 	const trial = ensureTrial(db, behaviourFingerprint(trialSettings(liveControlsDigest(db))), new Date());
 	log.info("motivation: trial period", { since: trial.start, behaviour: trial.fingerprint });
@@ -584,6 +604,8 @@ async function main(): Promise<number> {
 			// resetAll retired every session row, background ones too: close the background conversations as well,
 			// or a paused step would continue its old in-memory conversation (plan 0.007 S1).
 			await backgroundConversations.disposeAll();
+			// The sandbox's workspaces last the day, like the conversations that wrote them.
+			sandbox?.wipeAll();
 			log.info("rhythm: conversations start afresh", { retired: n });
 		},
 		notify: (text) => appendFeed(db, { kind: "notice", text, at: new Date().toISOString() }),
@@ -673,6 +695,8 @@ async function main(): Promise<number> {
 		forgetBackground: (scopes) => backgroundConversations.forgetScopes(scopes),
 		retireConversations: (scopes) => conversations.retireScopes(scopes),
 		forgetQueued: (scopes) => {
+			// A workspace may hold anything a conversation wrote about the person: all of them go.
+			sandbox?.wipeAll();
 			selectionShadow.forgetScopes(scopes);
 			selector.forgetScopes(scopes);
 		},
@@ -833,7 +857,9 @@ async function main(): Promise<number> {
 		effectToolkits: () =>
 			new Set(
 				tools.toolkits
-					.filter((k) => k.effect === "self" || k.effect === "reach" || k.effect === "act")
+					.filter(
+						(k) => k.effect === "self" || k.effect === "reach" || k.effect === "act" || k.effect === "compute",
+					)
 					.map((k) => k.name),
 			),
 		deadlineMs: config.voice.deadlineS * 1000,
