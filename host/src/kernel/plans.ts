@@ -21,6 +21,13 @@
  *   suspended until a receipt settles it.
  * - **other**: nothing can do it, so it is blocked and the plan is suspended.
  *   Such a plan never completes; the owner can cancel it.
+ * - **task** (2026-10-13): something the person does themselves (an agreed
+ *   list: "add the sandbox, then write access"). Iyye only keeps it; it is
+ *   done when the person says so in their own conversation
+ *   (`plan_task_done`) or the owner with `/plan done <id> <n>`. Tasks wait
+ *   in any order and never block the other steps; the plan completes when
+ *   every step is done. A plan of tasks only, proposed by the owner on any
+ *   of their own channels, is authorized at once: it arranges nothing.
  *
  * **Authorization** (HLD §3, security invariants): a plan runs only once
  * authorized. It is authorized at once only when the owner proposed it in
@@ -67,7 +74,8 @@ export const IYYE_PROPOSED_VIA = "Iyye, from the owner's words";
 export type ProposedStep =
 	| { kind: "investigate"; question: string }
 	| { kind: "remind"; text: string; when: string }
-	| { kind: "other"; description: string };
+	| { kind: "other"; description: string }
+	| { kind: "task"; description: string };
 
 export interface Proposal {
 	intent: string;
@@ -182,13 +190,15 @@ export class PlanRunner {
 			} else {
 				const description = s.description.trim();
 				if (!description) return no(`Not proposed: step ${i + 1} is empty.`);
-				steps.push({ kind: "other", description, status: "pending" });
+				steps.push({ kind: s.kind, description, status: "pending" });
 			}
 		}
 		// Only the owner's own proposal in the local web chat; never Iyye's, wherever the owner said it.
 		const ownWebChat = p.principal === "owner" && p.route.channel === "web";
 		const typed = steps.every((s) => s.kind !== "other");
-		const auto = ownWebChat && typed;
+		// The owner's own to-do list arranges nothing (no tool runs, nothing is sent): any owner channel.
+		const ownList = p.principal === "owner" && steps.every((s) => s.kind === "task");
+		const auto = (ownWebChat && typed) || ownList;
 		const id = this.d.newId();
 		insertPlan(this.d.db, {
 			id,
@@ -200,7 +210,11 @@ export class PlanRunner {
 			created_event_id: p.eventId,
 			steps,
 			state: auto ? "authorized" : "proposed",
-			authorization: auto ? "auto: proposed by the owner in the web chat; internal steps and reminders to it" : null,
+			authorization: ownList
+				? "auto: the owner's own list (steps only the owner does)"
+				: auto
+					? "auto: proposed by the owner in the web chat; internal steps and reminders to it"
+					: null,
 			created_at: now.toISOString(),
 		});
 		this.d.log.info("plans: proposed", { id, auto, steps: steps.length });
@@ -209,7 +223,9 @@ export class PlanRunner {
 			queueMicrotask(() => void this.tick());
 			return {
 				id,
-				text: `Plan ${id.slice(0, 8)} is authorized and starts now. Reminders go out at their times; the other steps run one at a time, in order:\n${list}\nEach step is done only with its evidence (a grounded answer, a delivered reminder); tell the person exactly these steps and times.`,
+				text: ownList
+					? `Plan ${id.slice(0, 8)} is kept as a list of things the person does:\n${list}\nEach is done when they say so (plan_task_done); it lasts beyond today, so later conversations can see what is still open.`
+					: `Plan ${id.slice(0, 8)} is authorized and starts now. Reminders go out at their times; the other steps run one at a time, in order:\n${list}\nEach step is done only with its evidence (a grounded answer, a delivered reminder, the person's word for their own tasks); tell the person exactly these steps and times.`,
 			};
 		}
 		if (p.principal === "iyye") {
@@ -245,6 +261,29 @@ export class PlanRunner {
 		queueMicrotask(() => void this.tick());
 		const blocked = stepsOf(p).some((s) => s.kind === "other");
 		return `approved: ${quote(p.intent)}${blocked ? " (it has a step no tool can do: it will stop there, suspended)" : ""}`;
+	}
+
+	/**
+	 * A task step done (2026-10-13): by the person in their own conversation (`plan_task_done`, `scope` given:
+	 * only plans of that conversation) or by the owner (`/plan done`, scope null). Recorded with who and when.
+	 */
+	markTaskDone(ref: string, stepNo: number, by: string, scope: string | null): string {
+		const p = this.find(ref);
+		if (typeof p === "string") return p;
+		if (scope !== null && p.scope !== scope) return `no plan ${ref} in this conversation`;
+		if (!["authorized", "active", "suspended"].includes(p.state)) return `plan ${p.id.slice(0, 8)} is ${p.state}`;
+		const steps = stepsOf(p);
+		const s = steps[stepNo - 1];
+		if (!s) return `plan ${p.id.slice(0, 8)} has no step ${stepNo}`;
+		if (s.kind !== "task")
+			return `step ${stepNo} is not a task of the person's: it is done only with its own evidence`;
+		if (s.status === "done") return `step ${stepNo} was already done`;
+		steps[stepNo - 1] = { ...s, status: "done", done_by: by, done_at: this.iso() };
+		if (!updatePlan(this.d.db, p.id, this.iso(), { steps }, ["authorized", "active", "suspended"]))
+			return `plan ${p.id.slice(0, 8)} changed meanwhile; look again`;
+		queueMicrotask(() => void this.tick());
+		const left = steps.filter((x) => x.status !== "done").length;
+		return `done: step ${stepNo} of plan ${p.id.slice(0, 8)} (${quote(s.description, 120)}); ${left ? `${left} step(s) left` : "every step is done"}`;
 	}
 
 	/** `/plan cancel <id>`: abandoned; its coming reminders are cancelled and its queued steps dropped. */
@@ -394,7 +433,8 @@ export class PlanRunner {
 			updatePlan(this.d.db, p.id, this.iso(), { state: "active", reason: null });
 			p = getPlan(this.d.db, p.id)!;
 		}
-		const i = steps.findIndex((s) => s.kind !== "remind" && s.status !== "done");
+		// Reminders run on their own clocks and tasks wait for the person: neither holds the others back.
+		const i = steps.findIndex((s) => s.kind !== "remind" && s.kind !== "task" && s.status !== "done");
 		if (i < 0) {
 			if (steps.every((s) => s.status === "done")) this.complete(p, steps);
 			return;
@@ -588,6 +628,24 @@ export class PlanRunner {
 	}
 }
 
+/**
+ * A request-local note for a conversation's turns (2026-10-13): its open plans, with each step's state, so a
+ * question like "what did we plan?" is answered from the record, not from memory. None when there are none.
+ */
+export function openPlansNote(db: Db, scope: string): string | null {
+	const open = plansIn(db, OPEN_PLAN_STATES).filter((p) => p.scope === scope);
+	if (open.length === 0) return null;
+	const lines = open
+		.slice(0, 5)
+		.map((p) =>
+			[
+				`plan ${p.id.slice(0, 8)} (${p.state}, since ${p.created_at.slice(0, 10)}): ${quote(p.intent, 200)}`,
+				...stepsOf(p).map((s, i) => `  ${i + 1}. [${s.status}] ${stepText(s)}`),
+			].join("\n"),
+		);
+	return `<open_plans>\nThe plans of this conversation that are not finished (records, not memory):\n${lines.join("\n")}\n</open_plans>`;
+}
+
 function investigatePrompt(p: PlanRow, question: string): string {
 	return [
 		`A step of a plan (${p.intent.slice(0, 200)}): ${question}`,
@@ -598,6 +656,8 @@ function investigatePrompt(p: PlanRow, question: string): string {
 function stepText(s: PlanStep): string {
 	if (s.kind === "investigate") return `look into: ${quote(s.question, 200)}`;
 	if (s.kind === "remind") return `remind at ${describeAt(new Date(s.due_at))}: ${quote(s.text, 200)}`;
+	if (s.kind === "task")
+		return `the person does: ${quote(s.description, 200)}${s.status === "done" && s.done_at ? ` (done ${s.done_at.slice(0, 10)})` : ""}`;
 	return `${quote(s.description, 200)} (no tool can do this)`;
 }
 

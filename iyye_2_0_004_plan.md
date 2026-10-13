@@ -269,6 +269,14 @@ The owner asked for a basic runc sandbox, "so Iyye can test hypotheses instead o
 - **Prerequisite on the Spark:** `/usr/bin/runc` (containerd.io) has no AppArmor profile, so Ubuntu refuses it user namespaces; the owner adds one (`/etc/apparmor.d/runc-usr-bin`, `userns`, unconfined).
 - **Tests:** `test/sandbox.test.ts` (a fake runc: the configuration, timeouts, aborts, one at a time, caps, leftovers, permissions, not evidence); `scripts/sandbox-smoke.ts` on the Spark (python, `/work`, the root, no network, memory, tasks, time, output, file size): all 13 checks pass on the Spark (2026-10-12), after provisioning (33 packages, python 3.14.8, tree `7153578a94e5`).
 
+### §10 The `monitor` toolkit (owner decision 2026-10-12)
+
+The owner asked for more resource monitoring ("nvidia-smi, powertop, etc."). Not in the sandbox (it must not see the host): typed read-only probes on the host, `tools/monitor.ts`, declared after the sandbox, always on in the owner's sessions. Effect `private` (the owner and Iyye's own work, never contacts: process names and system logs say what the owner is doing). Iyye's own work gets it only with `IYYE2_MONITOR_BACKGROUND=1` (it changes what investigations can observe: a new M4 trial period); `IYYE2_MONITOR=0` turns it off. These are observations, so evidence (unlike the sandbox).
+- `gpu_status` (nvidia-smi's fixed query: temperature, power draw, utilisation, clocks, performance state, throttling; programs on the GPU by file name), `temperatures` (hwmon and thermal zones), `pressure` (pressure stall information for CPU, memory, I/O), `top_processes` (over one second, top 10 by CPU and by memory, by program name, never command lines), `io_rates` (whole disks and interfaces over one second), `system_errors` (the system log's errors of the last 24 h, latest 20, long secret-like strings masked; failed system and user services).
+- Fixed commands and arguments, no shell, a minimal environment, 15 s and 1 MB caps; "not available here" without a source (the Mac).
+- Not possible without root: a whole-system power figure (PowerTOP and turbostat need root, and this ARM machine has no CPU power interface); the GPU's power draw is reported.
+- Checked on the Spark (2026-10-12): every probe answers (GB10 40 °C, 11.9 W; the 24 h log holds the sandbox smoke's intended memory kill). Tests: `test/monitor.test.ts` (6, a fake machine).
+
 ## 5. Risks
 
 - **Engines block SearXNG** (captchas, rate limits): quality varies, and Wikipedia is the always-available fallback.

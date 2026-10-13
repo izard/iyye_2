@@ -14,23 +14,28 @@ import type { PlanRunner, ProposedStep } from "../kernel/plans.ts";
 import type { IyyeTool, ToolContext, Toolkit } from "./broker.ts";
 
 interface StepParam {
-	kind: "investigate" | "remind" | "other";
+	kind: "investigate" | "remind" | "task" | "other";
 	text: string;
 	when?: string;
 }
 
-export function plansToolkit(runner: Pick<PlanRunner, "propose">): Toolkit {
+export function plansToolkit(runner: Pick<PlanRunner, "propose" | "markTaskDone">): Toolkit {
 	const propose: IyyeTool = {
 		name: "plan_propose",
 		label: "Propose a plan",
 		description:
-			'Propose a plan of several steps that Iyye carries out over time, in order. Step kinds: "investigate" (a question Iyye answers by looking with its read-only tools: this machine, its repositories), "remind" (send the person a reminder in this chat at a time; give "when"), "other" (anything else: no tool can do it, so the plan will stop there). Use it only when the person asks for something that takes several steps; a single reminder is reminder_create. The result says whether the plan runs now or waits for the owner\'s approval; tell the person exactly that.',
+			'Propose a plan of several steps kept over time. Step kinds: "investigate" (a question Iyye answers by looking with its read-only tools: this machine, its repositories), "remind" (send the person a reminder in this chat at a time; give "when"), "task" (something the person does themselves; Iyye keeps it on the list until they say it is done), "other" (anything else: no tool can do it, so the plan will stop there). Use it when the person asks for something that takes several steps, and when the person agrees to a list of things to do (yours or theirs, for example improvements they will make), so the list lasts beyond today; a single reminder is reminder_create. The result says whether the plan runs now or waits for the owner\'s approval; tell the person exactly that.',
 		summary: "propose a plan of several steps (look into something, remind at a time)",
 		parameters: Type.Object({
 			intent: Type.String({ minLength: 1, maxLength: 300, description: "What the plan is for, in a sentence" }),
 			steps: Type.Array(
 				Type.Object({
-					kind: Type.Union([Type.Literal("investigate"), Type.Literal("remind"), Type.Literal("other")]),
+					kind: Type.Union([
+						Type.Literal("investigate"),
+						Type.Literal("remind"),
+						Type.Literal("task"),
+						Type.Literal("other"),
+					]),
 					text: Type.String({
 						minLength: 1,
 						maxLength: 400,
@@ -57,6 +62,7 @@ export function plansToolkit(runner: Pick<PlanRunner, "propose">): Toolkit {
 						return `Not proposed: step ${i + 1} is a reminder without a time. Ask the person when; do not choose yourself.`;
 					steps.push({ kind: "remind", text: s.text, when: s.when });
 				} else if (s.kind === "investigate") steps.push({ kind: "investigate", question: s.text });
+				else if (s.kind === "task") steps.push({ kind: "task", description: s.text });
 				else steps.push({ kind: "other", description: s.text });
 			}
 			return runner.propose({
@@ -71,10 +77,27 @@ export function plansToolkit(runner: Pick<PlanRunner, "propose">): Toolkit {
 			});
 		},
 	};
+	// 2026-10-13: the person says one of their own tasks is done (only in their own conversation's plans).
+	const taskDone: IyyeTool = {
+		name: "plan_task_done",
+		label: "Mark a task done",
+		description:
+			"Mark a task step of a plan in this conversation as done, when the person says they did it. Give the plan's id (its first 8 characters) and the step's number. Only the person's own tasks; other steps are done only with their own evidence.",
+		summary: "mark a person's own task in a plan as done",
+		parameters: Type.Object({
+			plan: Type.String({ minLength: 4, maxLength: 40 }),
+			step: Type.Integer({ minimum: 1, maximum: 5 }),
+		}),
+		run: async (p: { plan: string; step: number }, ctx: ToolContext) => {
+			if (!ctx.turn || ctx.principal === "iyye") return "Only a person can mark their own task done.";
+			return runner.markTaskDone(p.plan, p.step, ctx.turn.contactId, ctx.scope);
+		},
+	};
 	return {
 		name: "plans",
-		description: "plans of several steps Iyye carries out over time",
+		description: "plans of several steps kept over time (Iyye's steps, reminders, and the person's own tasks)",
 		effect: "self",
-		tools: [propose] as IyyeTool[],
+		// Fixed order: propose first (as before), the 2026-10-13 tool after it.
+		tools: [propose, taskDone] as IyyeTool[],
 	};
 }

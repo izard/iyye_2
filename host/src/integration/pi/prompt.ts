@@ -31,7 +31,7 @@ export function operatingNote(toolkits: readonly ToolkitSummary[]): string {
 		? " When the person you are talking with asks you to write to someone you know, compose the message and send it with telegram_send. In your own work, write to someone only when they clearly need to know what you found. Then say exactly what the tool returned (delivered or not); never say a message was sent unless the tool said so."
 		: "";
 	const plans = toolkits.some((k) => k.name === "plans")
-		? " For something of several steps, call plan_propose; a plan that waits for the owner's approval arranges nothing yet, so say exactly what the tool returned."
+		? " For something of several steps, call plan_propose; a plan that waits for the owner's approval arranges nothing yet, so say exactly what the tool returned. When the person agrees to a list of things to do (theirs or yours), keep it with plan_propose (their own steps as tasks), so it is still known on later days; when they say one is done, call plan_task_done."
 		: "";
 	if (toolkits.length === 0) return `In this conversation you have no tools. ${cannot}`;
 	const readOnly = toolkits.every((k) => k.effect === "read" || k.effect === "private" || k.effect === "trusted");

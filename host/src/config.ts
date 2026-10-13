@@ -51,6 +51,11 @@ export interface Config {
 	 * (a new M4 trial period). Each run's wall-clock limit and memory.
 	 */
 	sandbox: { on: boolean; background: boolean; timeoutS: number; memoryMb: number };
+	/**
+	 * The `monitor` toolkit (owner decision 2026-10-12): the owner's turns (`IYYE2_MONITOR=0` turns it off), and
+	 * Iyye's own work only with `IYYE2_MONITOR_BACKGROUND=1` (a new M4 trial period).
+	 */
+	monitor: { on: boolean; background: boolean };
 	/** No background step starts this soon after chat activity, and steps are spaced this far apart. */
 	backgroundQuietS: number;
 	backgroundGapS: number;
@@ -277,6 +282,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		identityFile: absPath(env.IYYE2_IDENTITY || resolve(PROJECT_ROOT, "config/identity.md"), cwd),
 		modelsMax: int(env, "IYYE2_MODELS_MAX", 2, 1, 16),
 		backgroundModel: env.IYYE2_BACKGROUND_MODEL || "gemma-4-E4B",
+		monitor: { on: env.IYYE2_MONITOR !== "0", background: env.IYYE2_MONITOR_BACKGROUND === "1" },
 		sandbox: {
 			on: env.IYYE2_SANDBOX !== "0",
 			background: env.IYYE2_SANDBOX_BACKGROUND === "1",

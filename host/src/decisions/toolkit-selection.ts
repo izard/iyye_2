@@ -47,6 +47,8 @@ export const ALWAYS_ON: readonly string[] = [
 	"vision",
 	// The sandbox (2026-10-12): declared from a session's start, so testing a hypothesis needs no selection.
 	"sandbox",
+	// Detailed host readings (2026-10-12), owner's sessions only.
+	"monitor",
 ];
 
 export const TOOLKIT_SELECTION: Role = {

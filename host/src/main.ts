@@ -49,7 +49,7 @@ import { CommitmentClock } from "./kernel/commitments.ts";
 import { composeDaySummary } from "./kernel/day-summary.ts";
 import { DeviceSlot } from "./kernel/device.ts";
 import { focusReport } from "./kernel/focus.ts";
-import { PlanRunner } from "./kernel/plans.ts";
+import { openPlansNote, PlanRunner } from "./kernel/plans.ts";
 import { recover } from "./kernel/recovery.ts";
 import { ReminderCommands } from "./kernel/reminder-commands.ts";
 import { Rhythm } from "./kernel/rhythm.ts";
@@ -103,6 +103,7 @@ import { ToolBroker, type Toolkit } from "./tools/broker.ts";
 import { GuardedHttp } from "./tools/http.ts";
 import { memorySearchTool } from "./tools/memory-search.ts";
 import { iyyeMessenger, messagingToolkit } from "./tools/messaging.ts";
+import { monitorToolkit } from "./tools/monitor.ts";
 import { plansToolkit } from "./tools/plans.ts";
 import { currentTimeTool, systemStatusTool } from "./tools/probes.ts";
 import { projectToolkit } from "./tools/project.ts";
@@ -318,6 +319,7 @@ async function main(): Promise<number> {
 	const sandboxProblem = sandbox ? sandbox.init() : "off (IYYE2_SANDBOX=0)";
 	if (sandboxProblem) log.info("sandbox: not available", { why: sandboxProblem });
 	const sandboxKit = sandbox && !sandboxProblem ? sandboxToolkit(sandbox) : null;
+	const monitorKit = config.monitor.on ? monitorToolkit() : null;
 	const tools = new ToolBroker({
 		db,
 		log,
@@ -337,13 +339,18 @@ async function main(): Promise<number> {
 				restWindow: config.memory.sleepWindow,
 			}),
 			// After reminders, for the same reason (plan 0.006 C4). `plans` is created below; it is read only during a turn.
-			plansToolkit({ propose: (p) => plans.propose(p) }),
+			plansToolkit({
+				propose: (p) => plans.propose(p),
+				markTaskDone: (ref, step, by, scope) => plans.markTaskDone(ref, step, by, scope),
+			}),
 			// Last again (plan 0.008): messages to people Iyye knows (owner, trusted contacts, Iyye itself).
 			messaging,
 			// Last (2026-10-08): Iyye's own repositories, read-only, in the owner's turns only (effect `private`).
 			projectKit,
 			// Last (2026-10-12): the sandbox, effect `compute` (the owner and Iyye's own work, never contacts).
 			...(sandboxKit ? [sandboxKit] : []),
+			// Last (2026-10-12): detailed host readings, effect `private` (the owner and Iyye's own work).
+			...(monitorKit ? [monitorKit] : []),
 			// Last (2026-10-09): the reasoning model on the owner's other machine, owner-only.
 			...(thinkingKit ? [thinkingKit] : []),
 			// Last (2026-10-09): images sent in the conversation, the owner and trusted contacts.
@@ -369,6 +376,8 @@ async function main(): Promise<number> {
 			[
 				recentReminderNote(db, scope, new Date()),
 				recentSentNote(db, scope, new Date()),
+				// What this conversation planned and what is still open (2026-10-13): records, not memory.
+				openPlansNote(db, scope),
 				// The owner's notes shared with this person (plan 0.005 Stage 2); owner-only notes never.
 				personNoteFor(db, scope),
 				selfNoteFor(scope, selfModel, db),
@@ -451,6 +460,7 @@ async function main(): Promise<number> {
 				...(webToolkit ? [webToolkit] : []),
 				// Last (2026-10-12): the sandbox for Iyye's own work, only when switched on (a new M4 trial period).
 				...(sandboxKit && config.sandbox.background ? [sandboxKit] : []),
+				...(monitorKit && config.monitor.background ? [monitorKit] : []),
 			],
 		}),
 	});
@@ -479,6 +489,7 @@ async function main(): Promise<number> {
 		...(digest ? { character: digest } : {}),
 		// Iyye's own work with the sandbox changes what investigations can do: a new period when switched on.
 		...(sandboxKit && config.sandbox.background ? { sandbox: "background" } : {}),
+		...(monitorKit && config.monitor.background ? { monitor: "background" } : {}),
 	});
 	const trial = ensureTrial(db, behaviourFingerprint(trialSettings(liveControlsDigest(db))), new Date());
 	log.info("motivation: trial period", { since: trial.start, behaviour: trial.fingerprint });

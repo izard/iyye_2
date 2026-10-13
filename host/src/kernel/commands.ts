@@ -54,6 +54,7 @@ export interface CommandContext {
 		detail(ref: string): string;
 		approve(ref: string, by: string): string;
 		cancel(ref: string, by: string): string;
+		markTaskDone?(ref: string, step: number, by: string, scope: string | null): string;
 	} | null;
 	/** /sent: messages sent for the owner (plan 0.008). */
 	sentReport?: (() => string) | null;
@@ -134,7 +135,7 @@ const HELP = [
 	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened",
 	"/motivation report [days] — what each motivation opened, tried, resolved and was held back from (the trial period by default); /motivation trace <id>; /motivation useful <id> yes|no",
 	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts confirm <id>, /facts correct <id> <text>, /facts wrong <id>; /facts private|share <id>; /facts why <id>; /facts report; /facts orphans [restore | delete [confirm]]",
-	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps",
+	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps; /plan done <id> <step> — mark one of your own tasks in a plan done",
 	"/pause initiative, /resume initiative — stop or allow background work",
 	"/pause <motivation>, /resume <motivation> — self-preservation, curiosity, agency or social: stop or allow what it opens and does",
 	"/self questions — what Iyye asked about itself; /self accept <id> [answer], /self dismiss <id>; /self estimate misleading",
@@ -328,9 +329,11 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 					handled: true,
 					reply: sub === "approve" ? ctx.plans.approve(ref, ctx.issuer) : ctx.plans.cancel(ref, ctx.issuer),
 				};
-			if (sub && args.length === 1 && sub !== "approve" && sub !== "cancel")
+			if (sub === "done" && ref && args.length === 3 && /^\d$/.test(args[2]!) && ctx.plans.markTaskDone)
+				return { handled: true, reply: ctx.plans.markTaskDone(ref, Number(args[2]), ctx.issuer, null) };
+			if (sub && args.length === 1 && sub !== "approve" && sub !== "cancel" && sub !== "done")
 				return { handled: true, reply: ctx.plans.detail(sub) };
-			return usage("/plan <id> | /plan approve <id> | /plan cancel <id>");
+			return usage("/plan <id> | /plan approve <id> | /plan cancel <id> | /plan done <id> <step>");
 		}
 		case "/opportunities":
 			return {

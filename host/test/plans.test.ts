@@ -13,7 +13,7 @@ import { WebChatAdapter } from "../src/channels/web/adapter.ts";
 import { commitmentsOfReply } from "../src/decisions/reply-review.ts";
 import { handleOwnerCommand } from "../src/kernel/commands.ts";
 import { CommitmentClock } from "../src/kernel/commitments.ts";
-import { PLAN_ORIGIN, PlanRunner } from "../src/kernel/plans.ts";
+import { openPlansNote, PLAN_ORIGIN, PlanRunner } from "../src/kernel/plans.ts";
 import { silentLogger } from "../src/log.ts";
 import { MemoryControl } from "../src/memory/control.ts";
 import { forgetBusy, forgetTarget, planSessions } from "../src/memory/forget.ts";
@@ -487,10 +487,10 @@ describe("plans (plan 0.006 C4)", () => {
 			);
 			assert.match(linked, /only proposed/);
 
-			// The tool cannot name a route, a person or an approval; it only proposes.
+			// The tool cannot name a route, a person or an approval; it only proposes (and marks the person's own tasks done).
 			assert.deepEqual(
 				toolkit.tools.map((t) => t.name),
-				["plan_propose"],
+				["plan_propose", "plan_task_done"],
 			);
 			assert.deepEqual(Object.keys((tool.parameters as { properties: object }).properties).sort(), [
 				"intent",
@@ -504,7 +504,10 @@ describe("plans (plan 0.006 C4)", () => {
 			// Background work never gets it; outside a turn it refuses.
 			const broker = new ToolBroker({ db: h.db, log: silentLogger, toolkits: [toolkit] });
 			assert.deepEqual(broker.forSession({ scope: "iyye:bg:x", principal: "iyye" }).names, []);
-			assert.deepEqual(broker.forSession({ scope: "contact:c1", principal: "contact" }).names, ["plan_propose"]);
+			assert.deepEqual(broker.forSession({ scope: "contact:c1", principal: "contact" }).names, [
+				"plan_propose",
+				"plan_task_done",
+			]);
 			assert.match(
 				await tool.run(
 					{ intent: "x", steps: [{ kind: "other", text: "y" }] },
@@ -625,6 +628,88 @@ describe("plans (plan 0.006 C4)", () => {
 			});
 			assert.deepEqual(commitmentsOfReply(h.db, "a-e1"), [`plan:${full(h, planId(auto))}`]);
 			assert.deepEqual(commitmentsOfReply(h.db, "a-e2"), []);
+		} finally {
+			await h.cleanup();
+		}
+	});
+
+	test("2026-10-13: the owner's agreed list is kept as tasks on any owner channel, open in later turns, done by their word", async () => {
+		const h = harness();
+		try {
+			const [propose, done] = plansToolkit(h.runner).tools as unknown as [
+				{ run: (p: unknown, c: ToolContext, s: undefined) => Promise<string> },
+				{ run: (p: unknown, c: ToolContext, s: undefined) => Promise<string> },
+			];
+			const ownerTg: ToolContext = {
+				scope: "owner",
+				principal: "owner",
+				turn: { route: { channel: "telegram", chatId: 4242 }, contactId: OWNER_CONTACT_ID, eventId: null },
+			};
+			const r = await propose.run(
+				{
+					intent: "Iyye's tool upgrades the owner will add",
+					steps: [
+						{ kind: "task", text: "Execution: a sandbox to run code" },
+						{ kind: "task", text: "Write Access" },
+						{ kind: "task", text: "Active Monitoring" },
+					],
+				},
+				ownerTg,
+				undefined,
+			);
+			assert.match(
+				r,
+				/kept as a list of things the person does/,
+				"a list arranges nothing: authorized from Telegram too",
+			);
+			const id = full(h, planId(r));
+			await h.runner.tick();
+			assert.equal(h.plan(id).state, "active");
+			assert.match(h.plan(id).authorization ?? "", /the owner's own list/);
+			// Later turns of that conversation see it; another conversation does not.
+			const note = openPlansNote(h.db, "owner")!;
+			assert.match(note, /<open_plans>[\s\S]*1\. \[pending\] the person does: "Execution: a sandbox to run code"/);
+			assert.equal(openPlansNote(h.db, "contact:c1"), null);
+			// Done by the person's word, in their own conversation only; a contact cannot touch it.
+			const juliaCtx: ToolContext = {
+				scope: "contact:c1",
+				principal: "contact",
+				turn: { route: JULIA_TG, contactId: "c1", eventId: null },
+			};
+			assert.match(
+				await done.run({ plan: id.slice(0, 8), step: 1 }, juliaCtx, undefined),
+				/no plan .* in this conversation/,
+			);
+			assert.match(
+				await done.run({ plan: id.slice(0, 8), step: 1 }, ownerTg, undefined),
+				/done: step 1 .* 2 step\(s\) left/,
+			);
+			assert.match(await done.run({ plan: id.slice(0, 8), step: 1 }, ownerTg, undefined), /already done/);
+			const out = await handleOwnerCommand(`/plan done ${id.slice(0, 8)} 2`, {
+				db: h.db,
+				models: {} as never,
+				issuer: "owner_web",
+				plans: h.runner,
+			});
+			assert.match(out.reply, /done: step 2/);
+			assert.match(openPlansNote(h.db, "owner")!, /2\. \[done\] the person does: "Write Access" \(done /);
+			await done.run({ plan: id.slice(0, 8), step: 3 }, ownerTg, undefined);
+			await h.runner.tick();
+			assert.equal(h.plan(id).state, "completed");
+			assert.equal(openPlansNote(h.db, "owner"), null);
+			// A list with a reminder on Telegram still waits for approval: only tasks arrange nothing.
+			const mixed = await propose.run(
+				{
+					intent: "x",
+					steps: [
+						{ kind: "task", text: "a" },
+						{ kind: "remind", text: "b", when: "in 2 hours" },
+					],
+				},
+				ownerTg,
+				undefined,
+			);
+			assert.match(mixed, /only proposed/);
 		} finally {
 			await h.cleanup();
 		}
