@@ -90,6 +90,13 @@ const OBSERVATION_TOOLS = [
 	"git_status",
 	"read_file",
 	"list_dir",
+	// The monitor toolkit (2026-10-12): readings of the real machine.
+	"gpu_status",
+	"temperatures",
+	"pressure",
+	"top_processes",
+	"io_rates",
+	"system_errors",
 ];
 /** Another model's answer (owner decision 2): kept as provenance, never an observation. */
 const MODEL_TOOLS = ["ask_thinking_model", "look_at_image"];
@@ -133,8 +140,13 @@ export function docsFor(db: Db, e: StmEpisode): FactDoc[] {
 		];
 	}
 	const who = speakerOf(db, e);
+	const context = e.kind === "turn" ? previousReply(db, e) : null;
 	const out: FactDoc[] = [
-		{ docId: `${e.event_id}:said`, episode: e, doc: { kind: "person", text: e.user_text, ...who, at: e.said_at } },
+		{
+			docId: `${e.event_id}:said`,
+			episode: e,
+			doc: { kind: "person", text: e.user_text, ...who, at: e.said_at, ...(context ? { context } : {}) },
+		},
 	];
 	if (e.kind === "turn" && e.reply_text.trim())
 		out.push({
@@ -152,6 +164,23 @@ export function docsFor(db: Db, e: StmEpisode): FactDoc[] {
 			},
 		});
 	return out;
+}
+
+/**
+ * Iyye's reply delivered in the same conversation just before this message (within 12 hours), so the
+ * writer's references to it can be resolved (2026-10-13). A forgotten reply is never context.
+ */
+function previousReply(db: Db, e: StmEpisode): string | null {
+	const since = new Date(Date.parse(e.said_at) - 12 * 3_600_000).toISOString();
+	const row = db
+		.prepare(
+			`SELECT a.content FROM actions a JOIN events ev ON ev.id = a.event_id
+			 WHERE ev.scope = ? AND a.kind = 'reply' AND a.state = 'delivered' AND a.content IS NOT NULL
+			 AND a.event_id != ? AND a.created_at < ? AND a.created_at >= ?
+			 ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1`,
+		)
+		.get(e.scope, e.event_id, e.said_at, since) as { content: string } | undefined;
+	return row && row.content !== "[forgotten]" ? row.content : null;
 }
 
 function speakerOf(db: Db, e: StmEpisode): { speaker: string; speakerId: string } {

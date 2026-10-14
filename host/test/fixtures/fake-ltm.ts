@@ -246,6 +246,20 @@ export class FakeLtm {
 			}
 			return json(200, { success: true, bank_id: bank, items_count: 1, is_async: false });
 		}
+		if (method === "GET" && rest === "documents") {
+			if (!this.banks.has(bank)) return json(404, { detail: "bank not found" });
+			const q = new URLSearchParams(url.split("?")[1] ?? "");
+			const filter = (q.get("q") ?? "").toLowerCase();
+			const all = [...this.docs.values()].filter((d) => d.bank === bank && d.id.toLowerCase().includes(filter));
+			const offset = Number(q.get("offset") ?? 0);
+			const limit = Number(q.get("limit") ?? 100);
+			return json(200, {
+				items: all.slice(offset, offset + limit).map((d) => ({ id: d.id })),
+				total: all.length,
+				limit,
+				offset,
+			});
+		}
 		const doc = /^documents\/(.+)$/.exec(rest);
 		if (method === "DELETE" && doc) {
 			if (!this.docs.delete(`${bank}/${doc[1]}`)) return json(404, { detail: "document not found" });

@@ -54,6 +54,7 @@ export interface CommandContext {
 		detail(ref: string): string;
 		approve(ref: string, by: string): string;
 		cancel(ref: string, by: string): string;
+		markTaskDone?(ref: string, step: number, by: string, scope: string | null): string;
 	} | null;
 	/** /sent: messages sent for the owner (plan 0.008). */
 	sentReport?: (() => string) | null;
@@ -87,6 +88,12 @@ export interface CommandContext {
 	} | null;
 	/** /person, /note: what Iyye knows about a person, and the owner's notes (plan 0.005 Stage 2). */
 	people?: { person(args: string, by: string): string; note(args: string, by: string): string } | null;
+	/** /character [diff [n] | undo | freeze | unfreeze | reset [confirm]] (plan 0.009 CH1a). */
+	character?: { command(args: string[], by: string): string } | null;
+	/** /mood: the mood from records, with its sources (plan 0.009 CH2). */
+	moodReport?: (() => string) | null;
+	/** /voice …: the shadow voice's samples and the owner's labels (plan 0.009 CH3). */
+	voice?: { command(args: string[], by: string): string } | null;
 	/** /day and /night: day/night status (plan 0.002 L4). */
 	rhythmReport?: { day(): string; night(): string } | null;
 }
@@ -103,7 +110,7 @@ const HELP = [
 	"/models — list models, status and selection",
 	"/load <model> — load a model",
 	"/unload <model> — unload a model (refused while in use)",
-	"/use <model> [web|telegram|memory|background] — select the model for a channel (default: both chat channels), memory work or background work",
+	"/use <model> [web|telegram|memory|background|voice] — select the model for a channel (default: both chat channels), memory work, background work or the voice (shadow; it must be loaded, the host never loads it)",
 	"/router restart — restart the model router",
 	"/contacts — list contacts and their trust",
 	"/trust <contact> — mark a contact as trusted (name, Telegram user id, or id): they may then ask Iyye to message anyone it knows",
@@ -127,11 +134,14 @@ const HELP = [
 	"/self — what Iyye knows about itself (hardware, power, sleep, versions, place, people) and its gaps; /self set place|expected-hardware <text>, /self relation <contact> <text>",
 	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened",
 	"/motivation report [days] — what each motivation opened, tried, resolved and was held back from (the trial period by default); /motivation trace <id>; /motivation useful <id> yes|no",
-	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts confirm <id>, /facts correct <id> <text>, /facts wrong <id>; /facts private|share <id>",
-	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps",
+	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts confirm <id>, /facts correct <id> <text>, /facts wrong <id>; /facts private|share <id>; /facts why <id>; /facts report; /facts orphans [restore | delete [confirm]]",
+	"/plan approve <id> — let a proposed plan run; /plan cancel <id> — drop a plan and its coming steps; /plan done <id> <step> — mark one of your own tasks in a plan done",
 	"/pause initiative, /resume initiative — stop or allow background work",
 	"/pause <motivation>, /resume <motivation> — self-preservation, curiosity, agency or social: stop or allow what it opens and does",
 	"/self questions — what Iyye asked about itself; /self accept <id> [answer], /self dismiss <id>; /self estimate misleading",
+	"/mood — Iyye's mood, computed from records (energy, how the day is going, each conversation), with its sources",
+	"/voice — the voice: rephrasings of Telegram messages (shadow ones never sent), coverage and figures; /voice next [eval|dev] — one to label; /voice same|changed <id> — did it keep the meaning; /voice better|worse <id>, /voice correct <id> <text> — which Iyye you want; /voice show <id>; /voice eval — the sealed evaluation set (each look recorded); /voice act [on|off owner|contacts|all] — let the voice rephrase Telegram replies before they go out (only when the meaning check accepts; off by default)",
+	"/character — Iyye's character: temperament, style (asked of you), interests, each with its source; /character diff [n] — what changed; /character undo; /character freeze|unfreeze; /character reset [confirm]",
 	"/day — awake or asleep, day number, when the next night starts and why",
 	"/night — the night in progress (what it is doing, what is left) and the last night's result",
 	"/memory — memory status: short-term (today) and long-term, the last night",
@@ -174,6 +184,9 @@ const COMMANDS = new Set([
 	"/self",
 	"/motivation",
 	"/facts",
+	"/character",
+	"/mood",
+	"/voice",
 	"/plan",
 	"/domain",
 	"/pause",
@@ -214,9 +227,9 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			if (
 				args.length < 1 ||
 				args.length > 2 ||
-				(target !== undefined && !["web", "telegram", "memory", "background"].includes(target))
+				(target !== undefined && !["web", "telegram", "memory", "background", "voice"].includes(target))
 			) {
-				return usage("/use <model> [web|telegram|memory|background]");
+				return usage("/use <model> [web|telegram|memory|background|voice]");
 			}
 			const keys: SelectionKey[] = target === undefined ? ["web", "telegram"] : [target as SelectionKey];
 			const replies: string[] = [];
@@ -292,6 +305,18 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 				handled: true,
 				reply: ctx.facts ? await ctx.facts.command(args, ctx.issuer) : "facts are not available here",
 			};
+		case "/character":
+			return {
+				handled: true,
+				reply: ctx.character ? ctx.character.command(args, ctx.issuer) : "the character is not available here",
+			};
+		case "/mood":
+			return { handled: true, reply: ctx.moodReport ? ctx.moodReport() : "the mood is not available here" };
+		case "/voice":
+			return {
+				handled: true,
+				reply: ctx.voice ? ctx.voice.command(args, ctx.issuer) : "the voice is not available here",
+			};
 		case "/sent":
 			return { handled: true, reply: ctx.sentReport ? ctx.sentReport() : "sending is not available here" };
 		case "/plans":
@@ -304,9 +329,11 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 					handled: true,
 					reply: sub === "approve" ? ctx.plans.approve(ref, ctx.issuer) : ctx.plans.cancel(ref, ctx.issuer),
 				};
-			if (sub && args.length === 1 && sub !== "approve" && sub !== "cancel")
+			if (sub === "done" && ref && args.length === 3 && /^\d$/.test(args[2]!) && ctx.plans.markTaskDone)
+				return { handled: true, reply: ctx.plans.markTaskDone(ref, Number(args[2]), ctx.issuer, null) };
+			if (sub && args.length === 1 && sub !== "approve" && sub !== "cancel" && sub !== "done")
 				return { handled: true, reply: ctx.plans.detail(sub) };
-			return usage("/plan <id> | /plan approve <id> | /plan cancel <id>");
+			return usage("/plan <id> | /plan approve <id> | /plan cancel <id> | /plan done <id> <step>");
 		}
 		case "/opportunities":
 			return {

@@ -16,6 +16,9 @@
  *    one structured sentence in the bank of the scope it came from (document
  *    `fact:<id>`), tagged `structured-fact`, its speaker and modality. A fact
  *    that could not be stored is retried on the next night.
+ * 5. Compare the two stores (`orphans.ts`, plan §5): a stored fact whose text
+ *    is missing, or a `fact:` document no stored fact accounts for, is
+ *    reported (`/facts report`, the wake check), never repaired here.
  *
  * Hindsight remains storage and retrieval; the belief lives in SQLite.
  */
@@ -36,6 +39,7 @@ import { isForgotten } from "../state/tombstones.ts";
 import { type Belief, getBelief, mergeFact, rebuildAllTimelines } from "./beliefs.ts";
 import { factSentence } from "./extract.ts";
 import { type Complete, extractPendingAtNight } from "./extractor.ts";
+import { checkFactOrphans, orphanTotal, saveOrphanCheck } from "./orphans.ts";
 import type { StmFact } from "./store.ts";
 
 export { STRUCTURED_TAG };
@@ -54,6 +58,14 @@ export function queueFactDocDeletions(
 		const bank = bankFor(i.scope);
 		if (bank) queued.push({ bank, doc: factDocId(i.stmFactId) });
 	}
+	setKv(db, DOC_DELETIONS_KEY, JSON.stringify(queued), at);
+}
+
+/** Queue documents by bank and id (the orphan repair: documents no stored fact accounts for). */
+export function queueDocDeletions(db: Db, refs: readonly { bank: string; doc: string }[], at: string): void {
+	const queued = pendingFactDocDeletions(db);
+	const have = new Set(queued.map((q) => `${q.bank}/${q.doc}`));
+	for (const r of refs) if (!have.has(`${r.bank}/${r.doc}`)) queued.push({ bank: r.bank, doc: r.doc });
 	setKv(db, DOC_DELETIONS_KEY, JSON.stringify(queued), at);
 }
 
@@ -91,7 +103,8 @@ export async function deleteQueuedFactDocs(
 
 export interface FactNightDeps {
 	db: Db;
-	ltm: Pick<HindsightClient, "ensureBank" | "retain" | "recall" | "deleteDocument">;
+	ltm: Pick<HindsightClient, "ensureBank" | "retain" | "recall" | "deleteDocument"> &
+		Partial<Pick<HindsightClient, "listBanks" | "listDocuments">>;
 	gate: {
 		run<T>(
 			label: string,
@@ -207,7 +220,19 @@ export class FactNight {
 				this.d.log.warn("facts: storing a fact failed; it is retried next night", { id: f.id, error: err.message });
 			}
 		}
+		await this.checkOrphans();
 		return out;
+	}
+
+	/** Step 5: report what the two stores disagree on; a failure only says so. */
+	private async checkOrphans(): Promise<void> {
+		const { listBanks, listDocuments } = this.d.ltm;
+		if (!listBanks || !listDocuments) return;
+		const ltm = { listBanks: listBanks.bind(this.d.ltm), listDocuments: listDocuments.bind(this.d.ltm) };
+		const c = await checkFactOrphans(this.d.db, ltm, this.d.now().toISOString());
+		saveOrphanCheck(this.d.db, c);
+		if (c.error) this.d.log.warn("facts: the orphan check could not finish", { error: c.error });
+		else if (orphanTotal(c) > 0) this.d.log.warn("facts: SQLite and long-term memory disagree", { ...c.counts });
 	}
 
 	/** The fact as it is now, if it is still in the expected state and its scope was not forgotten since it was said. */

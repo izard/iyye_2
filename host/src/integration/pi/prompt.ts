@@ -31,7 +31,7 @@ export function operatingNote(toolkits: readonly ToolkitSummary[]): string {
 		? " When the person you are talking with asks you to write to someone you know, compose the message and send it with telegram_send. In your own work, write to someone only when they clearly need to know what you found. Then say exactly what the tool returned (delivered or not); never say a message was sent unless the tool said so."
 		: "";
 	const plans = toolkits.some((k) => k.name === "plans")
-		? " For something of several steps, call plan_propose; a plan that waits for the owner's approval arranges nothing yet, so say exactly what the tool returned."
+		? " For something of several steps, call plan_propose; a plan that waits for the owner's approval arranges nothing yet, so say exactly what the tool returned. When the person agrees to a list of things to do (theirs or yours), keep it with plan_propose (their own steps as tasks), so it is still known on later days; when they say one is done, call plan_task_done."
 		: "";
 	if (toolkits.length === 0) return `In this conversation you have no tools. ${cannot}`;
 	const readOnly = toolkits.every((k) => k.effect === "read" || k.effect === "private" || k.effect === "trusted");
@@ -47,12 +47,22 @@ export function operatingNote(toolkits: readonly ToolkitSummary[]): string {
 	].join("\n");
 }
 
+/**
+ * `mind` (owner decision 13): the owner's selected reasoning and perspective, rendered by the host from its
+ * own versioned definitions and bound for the turn. It enters only the owner's conversation, in the same
+ * words on every owner channel; contacts and background work never see it. Expression (style, sarcasm,
+ * mood) is never passed here (decision 8).
+ */
 export function composeSystemPrompt(
 	identity: string,
 	view: ScopeView,
 	toolkits: readonly ToolkitSummary[] = [],
+	mind: string | null = null,
 ): string {
-	return `${identity.trim()}\n\n${operatingNote(toolkits)}\n\n${conversationNote(view)}`;
+	const base = `${identity.trim()}\n\n${operatingNote(toolkits)}\n\n${conversationNote(view)}`;
+	return view.kind === "owner" && mind?.trim()
+		? `${base}\n\nHow your owner has asked you to reason with them:\n${mind.trim()}`
+		: base;
 }
 
 function conversationNote(view: ScopeView): string {

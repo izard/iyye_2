@@ -7,6 +7,7 @@
  * It returns only problems; nothing to say means no message.
  */
 
+import { lastOrphanCheck, orphanTotal } from "../facts/orphans.ts";
 import type { Db } from "../state/db.ts";
 
 export interface WakeState {
@@ -15,6 +16,7 @@ export interface WakeState {
 	services: Record<string, string>;
 	/** Models selected for the day but not loaded after waking. */
 	missingModels: string[];
+	now?: Date;
 }
 
 const QUIET_STATES = new Set(["up", "connected", "disabled", "not installed"]);
@@ -37,6 +39,14 @@ export function wakeProblems(s: WakeState): string[] {
 	if (suspended) out.push(`${suspended} background step(s) were suspended after too many interruptions (/focus)`);
 	const forgetting = n("SELECT count(*) AS n FROM bank_deletions_pending");
 	if (forgetting) out.push(`${forgetting} forgotten memory bank(s) could not be deleted yet (/memory)`);
+	// The fact ledger's orphan check of the night just ended (plan 0.011 §5).
+	const orphans = lastOrphanCheck(s.db);
+	if (orphans && Date.parse(orphans.at) >= (s.now ?? new Date()).getTime() - 86_400_000) {
+		if (orphans.error)
+			out.push(`the check of stored facts against long-term memory could not finish (/facts report)`);
+		else if (orphanTotal(orphans))
+			out.push(`${orphanTotal(orphans)} stored fact(s) and long-term memory disagree (/facts report)`);
+	}
 	return out;
 }
 

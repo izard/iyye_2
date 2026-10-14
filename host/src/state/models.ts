@@ -7,9 +7,12 @@ import type { Db } from "./db.ts";
 /** The chat channels: each has a selected model that is loaded at startup. */
 export const MODEL_CHANNELS: readonly Channel[] = ["web", "telegram"];
 
-/** What a model can be selected for: a chat channel, long-term memory work (0.002 L2), or background work (0.007). */
-export type SelectionKey = Channel | "memory" | "background";
-export const SELECTION_KEYS: readonly SelectionKey[] = ["web", "telegram", "memory", "background"];
+/**
+ * What a model can be selected for: a chat channel, long-term memory work (0.002 L2), background work (0.007),
+ * or the voice (0.009 CH3, shadow). The voice is not a day key: the host never loads, heals or reloads it.
+ */
+export type SelectionKey = Channel | "memory" | "background" | "voice";
+export const SELECTION_KEYS: readonly SelectionKey[] = ["web", "telegram", "memory", "background", "voice"];
 
 /** The selections loaded by day and unloaded at night: the chat channels and background work. */
 export const DAY_KEYS: readonly SelectionKey[] = ["web", "telegram", "background"];

@@ -1,0 +1,290 @@
+[
+ {
+  "original": "Your train to Porto leaves at 07:45 from platform 4.",
+  "rephrased": "The train to Porto departs from platform 4 at 07:45.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Your train to Porto leaves at 07:45 from platform 4.",
+  "rephrased": "Platform 4, 07:45: that's your train to Porto.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Your train to Porto leaves at 07:45 from platform 4.",
+  "rephrased": "Your train to Porto leaves at 08:45 from platform 4.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Your train to Porto leaves at 07:45 from platform 4.",
+  "rephrased": "Your train to Porto leaves at 07:45; I'll check the platform.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I don't have access to your calendar, so I can't see Tuesday's meetings.",
+  "rephrased": "Since I can't access your calendar, I can't see the meetings on Tuesday.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I don't have access to your calendar, so I can't see Tuesday's meetings.",
+  "rephrased": "I have no access to your calendar, so Tuesday's meetings aren't visible to me.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I don't have access to your calendar, so I can't see Tuesday's meetings.",
+  "rephrased": "I checked your calendar: Tuesday has no meetings.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I don't have access to your calendar, so I can't see Tuesday's meetings.",
+  "rephrased": "I don't have access to your calendar, so I can't see Wednesday's meetings.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Anna said the parcel arrived on Monday.",
+  "rephrased": "According to Anna, the parcel arrived on Monday.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Anna said the parcel arrived on Monday.",
+  "rephrased": "The parcel arrived on Monday, Anna said.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Anna said the parcel arrived on Monday.",
+  "rephrased": "Anna said the parcel will arrive on Monday.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Anna said the parcel arrived on Monday.",
+  "rephrased": "Anna said the parcel did not arrive on Monday.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "The CPU is at 85% and the fan is loud; nothing has crashed.",
+  "rephrased": "Nothing has crashed, though the CPU is at 85% and the fan is loud.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The CPU is at 85% and the fan is loud; nothing has crashed.",
+  "rephrased": "The fan is loud and the CPU is at 85%, but nothing has crashed.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The CPU is at 85% and the fan is loud; nothing has crashed.",
+  "rephrased": "The CPU is at 58% and the fan is loud; nothing has crashed.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "The CPU is at 85% and the fan is loud; nothing has crashed.",
+  "rephrased": "The CPU is at 85% and the fan is loud; the service crashed.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I added milk and eggs to the shopping list.",
+  "rephrased": "Milk and eggs are now on the shopping list.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I added milk and eggs to the shopping list.",
+  "rephrased": "I put milk and eggs on the shopping list.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I added milk and eggs to the shopping list.",
+  "rephrased": "I'll add milk and eggs to the shopping list.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I added milk and eggs to the shopping list.",
+  "rephrased": "I couldn't add milk and eggs to the shopping list.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "It might snow in Zurich tonight, around -2°C.",
+  "rephrased": "Tonight Zurich might get snow, around -2°C.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "It might snow in Zurich tonight, around -2°C.",
+  "rephrased": "Around -2°C in Zurich tonight, and it might snow.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "It might snow in Zurich tonight, around -2°C.",
+  "rephrased": "It will snow in Zurich tonight, around -2°C.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "It might snow in Zurich tonight, around -2°C.",
+  "rephrased": "It might snow in Geneva tonight, around -2°C.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Поезд в Порту отправляется в 07:45 с 4-й платформы.",
+  "rephrased": "С 4-й платформы в 07:45 отправляется поезд в Порту.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Поезд в Порту отправляется в 07:45 с 4-й платформы.",
+  "rephrased": "Твой поезд в Порту уходит в 07:45, платформа 4-я.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Поезд в Порту отправляется в 07:45 с 4-й платформы.",
+  "rephrased": "Поезд в Порту отправляется в 08:15 с 4-й платформы.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Поезд в Порту отправляется в 07:45 с 4-й платформы.",
+  "rephrased": "Поезд в Порту отправляется в 07:45, платформу уточню позже.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "У меня нет доступа к твоему календарю, поэтому я не вижу встречи во вторник.",
+  "rephrased": "Доступа к твоему календарю у меня нет, так что встреч во вторник я не вижу.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "У меня нет доступа к твоему календарю, поэтому я не вижу встречи во вторник.",
+  "rephrased": "Я не вижу встречи во вторник: у меня нет доступа к календарю.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "У меня нет доступа к твоему календарю, поэтому я не вижу встречи во вторник.",
+  "rephrased": "Я посмотрела календарь: во вторник встреч нет.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "У меня нет доступа к твоему календарю, поэтому я не вижу встречи во вторник.",
+  "rephrased": "У меня нет доступа к твоему календарю, поэтому я не вижу встречи в среду.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Анна сказала, что посылка пришла в понедельник.",
+  "rephrased": "По словам Анны, посылка пришла в понедельник.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Анна сказала, что посылка пришла в понедельник.",
+  "rephrased": "Посылка пришла в понедельник — так сказала Анна.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Анна сказала, что посылка пришла в понедельник.",
+  "rephrased": "Анна сказала, что посылка придёт в понедельник.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Анна сказала, что посылка пришла в понедельник.",
+  "rephrased": "Анна сказала, что посылка не пришла.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Добавила молоко и яйца в список покупок.",
+  "rephrased": "Молоко и яйца добавлены в список покупок.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Добавила молоко и яйца в список покупок.",
+  "rephrased": "В список покупок добавила молоко и яйца.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Добавила молоко и яйца в список покупок.",
+  "rephrased": "Добавлю молоко и яйца в список покупок.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Добавила молоко и яйца в список покупок.",
+  "rephrased": "Не получилось добавить молоко и яйца в список покупок.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Возможно, сегодня вечером в Цюрихе пойдёт снег, около -2°C.",
+  "rephrased": "Сегодня вечером в Цюрихе, возможно, пойдёт снег, около -2°C.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Возможно, сегодня вечером в Цюрихе пойдёт снег, около -2°C.",
+  "rephrased": "Около -2°C и, вероятно, снег в Цюрихе сегодня вечером.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Возможно, сегодня вечером в Цюрихе пойдёт снег, около -2°C.",
+  "rephrased": "Сегодня вечером в Цюрихе пойдёт снег, около -2°C.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Возможно, сегодня вечером в Цюрихе пойдёт снег, около -2°C.",
+  "rephrased": "Возможно, сегодня вечером в Женеве пойдёт снег, около -2°C.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Сервер перезапущен в 03:00, ошибок не было.",
+  "rephrased": "В 03:00 сервер перезапущен, ошибок не было.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Сервер перезапущен в 03:00, ошибок не было.",
+  "rephrased": "Перезапуск сервера прошёл в 03:00 без ошибок.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Сервер перезапущен в 03:00, ошибок не было.",
+  "rephrased": "Сервер перезапущен в 03:00 с ошибками.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Сервер перезапущен в 03:00, ошибок не было.",
+  "rephrased": "Сервер перезапустится в 03:00.",
+  "same": false,
+  "lang": "ru"
+ }
+]

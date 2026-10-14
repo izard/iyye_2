@@ -239,6 +239,26 @@ export class HindsightClient {
 		return { items: body.items ?? [], total: body.total ?? 0 };
 	}
 
+	/**
+	 * One page of a bank's documents, newest first, `q` a case-insensitive
+	 * substring of the document id (plan 0.011 §5: the fact ledger's orphan
+	 * check lists `fact:` documents). Makes no model call.
+	 */
+	async listDocuments(
+		bank: string,
+		opts: { q?: string; limit?: number; offset?: number } = {},
+	): Promise<{ items: { id: string }[]; total: number }> {
+		const params = new URLSearchParams({ limit: String(opts.limit ?? 100), offset: String(opts.offset ?? 0) });
+		if (opts.q) params.set("q", opts.q);
+		const body = (await this.call(
+			"GET",
+			`/v1/default/banks/${encodeURIComponent(bank)}/documents?${params}`,
+			undefined,
+			this.o.recallTimeoutMs * 10,
+		)) as { items?: { id: string }[]; total?: number };
+		return { items: body.items ?? [], total: body.total ?? 0 };
+	}
+
 	/** Delete one document with every memory extracted from it (plan 0.011: a structured fact `/facts wrong` removed). */
 	async deleteDocument(bank: string, documentId: string): Promise<void> {
 		await this.call(

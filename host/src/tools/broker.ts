@@ -114,10 +114,21 @@ export interface Toolkit {
 	 * Iyye's own work, never contacts.
 	 * "trusted": observes only what the asker sent in this conversation (images, 2026-10-09), but costs a
 	 * model call on the owner's machine: the owner and contacts the owner trusts, never Iyye's own work.
+	 * "compute": runs code Iyye writes in an isolated sandbox (owner decision 2026-10-12): the owner and Iyye's
+	 * own work, never contacts, and never a plan step (whose question a contact may have written).
 	 */
-	effect: "read" | "self" | "reach" | "act" | "private" | "trusted";
+	effect: "read" | "self" | "reach" | "act" | "private" | "trusted" | "compute";
 	tools: IyyeTool[];
+	/**
+	 * False: what its tools return is Iyye's own experiment, never evidence about the world. The model sees
+	 * it, but `tool_calls.result` keeps only a fixed note (no figures, hashes or file names), so no citation
+	 * check (investigations, plan steps, the fact ledger's `tool_ref`) can ever be satisfied by it.
+	 */
+	evidence?: boolean;
 }
+
+/** What `tool_calls.result` holds for a toolkit that is not evidence (the full output is kept elsewhere). */
+export const NOT_EVIDENCE_NOTE = "(the output of Iyye's own experiment: not evidence, not recorded here)";
 
 /** One toolkit as the system prompt lists it. */
 export interface ToolkitSummary {
@@ -188,6 +199,8 @@ export class ToolBroker {
 		if (kit.effect === "private") return principal === "owner" || principal === "iyye";
 		if (kit.effect === "self") return principal === "owner" || principal === "contact";
 		if (kit.effect === "trusted") return principal === "owner" || (principal === "contact" && trusted);
+		if (kit.effect === "compute")
+			return principal === "owner" || (principal === "iyye" && !scope.startsWith(PLAN_STEP_SCOPE));
 		// A plan step runs a question a contact may have written, approved as a read-only look (0.006 C4): never `reach`.
 		if (kit.effect === "reach")
 			// …nor an investigation: it reads web pages, and a page must never be able to make Iyye write to someone.
@@ -251,7 +264,7 @@ export class ToolBroker {
 						toolkit: this.kitOf.get(tool.name)?.name ?? null,
 						args_json: JSON.stringify(params ?? {}),
 						outcome,
-						result: result.slice(0, 2000),
+						result: this.kitOf.get(tool.name)?.evidence === false ? NOT_EVIDENCE_NOTE : result.slice(0, 2000),
 						started_at: startedAt,
 						finished_at: this.d.now().toISOString(),
 						// Plan 0.013 E3: the turn this result belongs to, from the host, and what the model saw.

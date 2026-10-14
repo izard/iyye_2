@@ -1,0 +1,290 @@
+[
+ {
+  "original": "Your dentist appointment is on Thursday at 10:30.",
+  "rephrased": "On Thursday at 10:30 you have the dentist.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Your dentist appointment is on Thursday at 10:30.",
+  "rephrased": "Don't forget: dentist, Thursday, 10:30.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Your dentist appointment is on Thursday at 10:30.",
+  "rephrased": "Your dentist appointment is on Tuesday at 10:30.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Your dentist appointment is on Thursday at 10:30.",
+  "rephrased": "Your dentist appointment was on Thursday at 10:30.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Julia's flight lands in March, not in February.",
+  "rephrased": "Julia's flight arrives in March rather than February.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Julia's flight lands in March, not in February.",
+  "rephrased": "Not February: Julia lands in March.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Julia's flight lands in March, not in February.",
+  "rephrased": "Julia's flight lands in May, not in February.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Julia's flight lands in March, not in February.",
+  "rephrased": "Julia's flight lands in March, and maybe in February.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I checked the logs: the router restarted twice yesterday.",
+  "rephrased": "The logs show the router restarted twice yesterday.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I checked the logs: the router restarted twice yesterday.",
+  "rephrased": "Looked at the logs, and the router restarted twice yesterday.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I checked the logs: the router restarted twice yesterday.",
+  "rephrased": "I checked the logs: the router will restart twice tomorrow.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I checked the logs: the router restarted twice yesterday.",
+  "rephrased": "I checked the logs: the router restarted twice today.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Jacob paid for the tickets, so you don't owe him anything.",
+  "rephrased": "You don't owe Jacob anything: he paid for the tickets.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Jacob paid for the tickets, so you don't owe him anything.",
+  "rephrased": "Jacob covered the tickets, so you owe him nothing.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Jacob paid for the tickets, so you don't owe him anything.",
+  "rephrased": "Jacob will pay for the tickets, so you don't owe him anything.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Jacob paid for the tickets, so you don't owe him anything.",
+  "rephrased": "Jacob paid for the tickets, so you owe him for them.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "The package was delivered this morning and is at the front door.",
+  "rephrased": "This morning the package was delivered; it's at the front door.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The package was delivered this morning and is at the front door.",
+  "rephrased": "Your package came this morning and is waiting at the front door.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "The package was delivered this morning and is at the front door.",
+  "rephrased": "The package will be delivered this morning to the front door.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "The package was delivered this morning and is at the front door.",
+  "rephrased": "The package was delivered this morning but isn't at the front door.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I don't know who sent that message; the number isn't in your contacts.",
+  "rephrased": "That number isn't in your contacts, so I don't know who sent the message.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I don't know who sent that message; the number isn't in your contacts.",
+  "rephrased": "No idea who sent it: the number isn't among your contacts.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "I don't know who sent that message; the number isn't in your contacts.",
+  "rephrased": "The message came from a number in your contacts.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "I don't know who sent that message; the number isn't in your contacts.",
+  "rephrased": "I don't know who sent that message, but the number is in your contacts.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Julia asked whether Saturday's dinner is still on.",
+  "rephrased": "Julia wants to know if the dinner on Saturday is still happening.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Julia asked whether Saturday's dinner is still on.",
+  "rephrased": "Is Saturday's dinner still on? Julia asked.",
+  "same": true,
+  "lang": "en"
+ },
+ {
+  "original": "Julia asked whether Saturday's dinner is still on.",
+  "rephrased": "Julia said Saturday's dinner is cancelled.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Julia asked whether Saturday's dinner is still on.",
+  "rephrased": "Julia asked whether Sunday's dinner is still on.",
+  "same": false,
+  "lang": "en"
+ },
+ {
+  "original": "Встреча с Юлей перенесена на среду, 17:00.",
+  "rephrased": "Встречу с Юлей перенесли на среду, на 17:00.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Встреча с Юлей перенесена на среду, 17:00.",
+  "rephrased": "Теперь встреча с Юлей в среду в 17:00.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Встреча с Юлей перенесена на среду, 17:00.",
+  "rephrased": "Встреча с Юлей перенесена на четверг, 17:00.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Встреча с Юлей перенесена на среду, 17:00.",
+  "rephrased": "Встреча с Юлей будет перенесена на среду, 17:00.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Я проверила: в субботу в Москве обещают снег.",
+  "rephrased": "Посмотрела прогноз: в субботу в Москве ожидается снег.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Я проверила: в субботу в Москве обещают снег.",
+  "rephrased": "В субботу в Москве обещают снег, я проверила.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Я проверила: в субботу в Москве обещают снег.",
+  "rephrased": "Я проверю, обещают ли в субботу снег в Москве.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Я проверила: в субботу в Москве обещают снег.",
+  "rephrased": "Я проверила: в воскресенье в Москве обещают снег.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Отчёт отправлен Якову вчера вечером.",
+  "rephrased": "Вчера вечером отчёт ушёл Якову.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Отчёт отправлен Якову вчера вечером.",
+  "rephrased": "Яков получил отчёт вчера вечером, я отправила.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Отчёт отправлен Якову вчера вечером.",
+  "rephrased": "Отчёт отправлю Якову сегодня вечером.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Отчёт отправлен Якову вчера вечером.",
+  "rephrased": "Отчёт не отправлен Якову вчера вечером.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Срок оплаты интернета — до 25 августа.",
+  "rephrased": "Интернет нужно оплатить до 25 августа.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Срок оплаты интернета — до 25 августа.",
+  "rephrased": "Оплатить интернет надо не позже 25 августа.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Срок оплаты интернета — до 25 августа.",
+  "rephrased": "Срок оплаты интернета — до 25 сентября.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Срок оплаты интернета — до 25 августа.",
+  "rephrased": "Интернет уже оплачен до 25 августа.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Сервер не отвечает с утра, поэтому я не могу проверить почту.",
+  "rephrased": "С утра сервер молчит, так что проверить почту я не могу.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Сервер не отвечает с утра, поэтому я не могу проверить почту.",
+  "rephrased": "Проверить почту не получается: сервер не отвечает с утра.",
+  "same": true,
+  "lang": "ru"
+ },
+ {
+  "original": "Сервер не отвечает с утра, поэтому я не могу проверить почту.",
+  "rephrased": "Сервер с утра отвечал, но почты нет.",
+  "same": false,
+  "lang": "ru"
+ },
+ {
+  "original": "Сервер не отвечает с утра, поэтому я не могу проверить почту.",
+  "rephrased": "Сервер не отвечает с утра, но почту я проверила: новых писем нет.",
+  "same": false,
+  "lang": "ru"
+ }
+]

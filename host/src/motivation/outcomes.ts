@@ -45,7 +45,8 @@ export type WithheldReason =
 	| "energy"
 	| "model unavailable"
 	| "another initiative job"
-	| "higher priority";
+	| "higher priority"
+	| "asleep";
 
 function localDay(at: Date): string {
 	const p = (n: number) => String(n).padStart(2, "0");

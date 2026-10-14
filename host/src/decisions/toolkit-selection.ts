@@ -38,7 +38,18 @@ export const CORE_TOOLKIT = "core";
  * `messaging` (plan 0.008, owner-only) likewise: a hidden one would make Iyye
  * refuse "send Jacob a greeting", the request that motivated it.
  */
-export const ALWAYS_ON: readonly string[] = [CORE_TOOLKIT, "reminders", "plans", "messaging", "thinking", "vision"];
+export const ALWAYS_ON: readonly string[] = [
+	CORE_TOOLKIT,
+	"reminders",
+	"plans",
+	"messaging",
+	"thinking",
+	"vision",
+	// The sandbox (2026-10-12): declared from a session's start, so testing a hypothesis needs no selection.
+	"sandbox",
+	// Detailed host readings (2026-10-12), owner's sessions only.
+	"monitor",
+];
 
 export const TOOLKIT_SELECTION: Role = {
 	name: "toolkit_selection",

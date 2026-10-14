@@ -67,6 +67,11 @@ export interface ExtractionDoc {
 	/** For a reply: whom Iyye answered, and what they had written. */
 	recipient?: string;
 	asked?: string;
+	/**
+	 * For a person's message (2026-10-13): Iyye's message just before it in the same conversation, so a
+	 * reference ("all 4", "the first three", "those") can be written out. Context only: never a fact itself.
+	 */
+	context?: string;
 	/** When it was said (ISO): relative dates resolve against it. */
 	at: string;
 	/**
@@ -169,6 +174,7 @@ export function extractionPrompt(kind: ExtractionDoc["kind"], predicates: "close
 					'When the writer speaks about themselves ("I", "me", "my"), the subject is the writer, by the name given below.',
 					'A question, a request or an instruction to Iyye states no fact: extract nothing from it, unless it also states something about someone ("Send Jacob, my son, a greeting" states that Jacob is the writer\'s son).',
 					"Do not extract greetings, thanks or small talk, and nothing about the conversation itself.",
+					'When the message refers to something in Iyye\'s message just before it ("all 4", "the first three", "those", "yes, do that", "все", "первые три"), write out what it refers to in the object or the details, using that message\'s words; the quote stays the writer\'s own words. Never extract a fact from Iyye\'s message itself.',
 				]
 			: kind === "reply"
 				? [
@@ -191,6 +197,10 @@ export function extractionInput(doc: ExtractionDoc): string {
 		lines.push(`Iyye replied to: ${doc.recipient ?? "?"}`);
 		if (doc.asked) lines.push(`They had written: ${JSON.stringify(doc.asked.slice(0, 400))}`);
 	}
+	if (doc.kind === "person" && doc.context)
+		lines.push(
+			`Iyye's message just before (context only, to resolve what the writer refers to; never a fact itself): ${JSON.stringify(doc.context.slice(0, CONTEXT_CHARS))}`,
+		);
 	lines.push("Text:", doc.text);
 	if (doc.kind === "reply" && doc.tools?.length) {
 		lines.push("", "Tool results Iyye had in this turn (to say which one a fact was taken from):");
@@ -384,15 +394,28 @@ const NOT_NAMES = new Set([
 	"utc",
 ]);
 
+/** How much of Iyye's previous message a person's document carries (2026-10-13). */
+export const CONTEXT_CHARS = 1500;
+
+/** Words that point back at something said before: only a quote with one may take names or figures from the context. */
+const REFERENCE =
+	/\b(all|both|each|every|those|these|them|that|this|it|they|the (first|second|third|last|other)|first|items?|points?|steps?|ones?|yes|ok|okay|agreed|sure)\b|\b\d+\s*[-–]\s*\d+\b|(?<![\p{L}])(все|всё|оба|обе|эти|этих|это|их|то|те|тот|та|первы\p{L}*|втор\p{L}*|последн\p{L}*|пункт\p{L}*|да|ок|согласен|согласна)(?![\p{L}])/iu;
+
 /** Why a fact is not grounded in its document, or null when it is. */
 export function groundingProblem(f: RawFact, doc: ExtractionDoc, people: readonly KnownPerson[]): string | null {
-	const source = normalizeText(doc.text);
 	const quote = normalizeText(f.quote);
 	if (quote.length < 2) return "no quote";
-	if (!source.includes(quote)) return "the quote is not in the source";
+	if (!normalizeText(doc.text).includes(quote)) return "the quote is not in the source";
+	// The quote is always the writer's; names and figures may also come from Iyye's previous message, but
+	// only for a quote that points back at it ("all 4 are important" → the four it listed).
+	const text =
+		doc.kind === "person" && doc.context && REFERENCE.test(f.quote)
+			? `${doc.text}\n${doc.context.slice(0, CONTEXT_CHARS)}`
+			: doc.text;
+	const source = normalizeText(text);
 	const claims = [f.subject, f.object, f.details ?? ""].join(" ");
 	// Numbers: in the source, except dates resolved near the time it was said ("tomorrow" → a date).
-	const digits = doc.text.replace(/\s/g, "");
+	const digits = text.replace(/\s/g, "");
 	const at = Date.parse(doc.at);
 	for (const d of claims.match(/\b\d{4}-\d{2}-\d{2}\b/g) ?? []) {
 		const t = Date.parse(d);
@@ -683,6 +706,20 @@ export function privateReason(
 	if (HEALTH.test(claim)) return "health";
 	if (MONEY.test(claim)) return "money";
 	if (normalizeTerm(f.predicate) === "lives_in" || ADDRESS.test(claim)) return "an address";
+	return null;
+}
+
+/**
+ * Why a whole text may hold a private fact, by the same rules (plan 0.009 CH3:
+ * the voice's training export screens masked prose with it, since masking
+ * names and numbers does not remove what a sentence says about someone).
+ */
+export function privateTextReason(text: string): string | null {
+	if (ASKED_PRIVATE.test(text)) return "asks to keep something private";
+	if (CREDENTIAL.test(text)) return "a credential";
+	if (HEALTH.test(text)) return "health";
+	if (MONEY.test(text)) return "money";
+	if (ADDRESS.test(text)) return "an address";
 	return null;
 }
 

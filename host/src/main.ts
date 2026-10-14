@@ -22,6 +22,10 @@ import { TelegramSender } from "./channels/telegram/sender.ts";
 import { WebChatAdapter } from "./channels/web/adapter.ts";
 import { ensureOwnerToken, WebSessions } from "./channels/web/auth.ts";
 import { WebServer } from "./channels/web/server.ts";
+import { Character, controlsOf, definitionsOf, type Revision } from "./character/character.ts";
+import { moodAt, moodReport, recordMood } from "./character/mood.ts";
+import { controlsDigest } from "./character/policy.ts";
+import { bindTurnProfile, liveControlsDigest } from "./character/profile.ts";
 import { ConfigError, loadConfig, PROJECT_ROOT } from "./config.ts";
 import { DecisionClient } from "./decisions/client.ts";
 import { FactRelation } from "./decisions/fact-relation.ts";
@@ -45,7 +49,7 @@ import { CommitmentClock } from "./kernel/commitments.ts";
 import { composeDaySummary } from "./kernel/day-summary.ts";
 import { DeviceSlot } from "./kernel/device.ts";
 import { focusReport } from "./kernel/focus.ts";
-import { PlanRunner } from "./kernel/plans.ts";
+import { openPlansNote, PlanRunner } from "./kernel/plans.ts";
 import { recover } from "./kernel/recovery.ts";
 import { ReminderCommands } from "./kernel/reminder-commands.ts";
 import { Rhythm } from "./kernel/rhythm.ts";
@@ -85,12 +89,13 @@ import { Observer } from "./observe/observer.ts";
 import { ensureWorkspace } from "./observe/workspace.ts";
 import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
 import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./people/people.ts";
+import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
 import { getJob } from "./state/jobs.ts";
 import { getKv } from "./state/kv.ts";
-import { DAY_KEYS } from "./state/models.ts";
+import { DAY_KEYS, seedSelectedModel } from "./state/models.ts";
 import { recentSentNote, sentReport } from "./state/sent.ts";
 import { recordIyyeEntry } from "./state/stm.ts";
 import { appendFeed } from "./state/web.ts";
@@ -98,14 +103,20 @@ import { ToolBroker, type Toolkit } from "./tools/broker.ts";
 import { GuardedHttp } from "./tools/http.ts";
 import { memorySearchTool } from "./tools/memory-search.ts";
 import { iyyeMessenger, messagingToolkit } from "./tools/messaging.ts";
+import { monitorToolkit } from "./tools/monitor.ts";
 import { plansToolkit } from "./tools/plans.ts";
 import { currentTimeTool, systemStatusTool } from "./tools/probes.ts";
 import { projectToolkit } from "./tools/project.ts";
 import { remindersToolkit } from "./tools/reminders.ts";
 import { toolsReport } from "./tools/report.ts";
+import { sandboxToolkit } from "./tools/sandbox.ts";
 import { thinkComplete, thinkingToolkit } from "./tools/thinking.ts";
 import { visionToolkit } from "./tools/vision.ts";
 import { WEB_TOOLKIT, webFetchTool, webSearchTool } from "./tools/web.ts";
+import { VoiceActor } from "./voice/act.ts";
+import { VoiceCommands } from "./voice/commands.ts";
+import { routerVoice } from "./voice/prompt.ts";
+import { VoiceShadow } from "./voice/shadow.ts";
 import { SearxngService } from "./web/searxng.ts";
 
 async function main(): Promise<number> {
@@ -296,6 +307,19 @@ async function main(): Promise<number> {
 					dailyMax: config.vision.dailyMax,
 				})
 			: null;
+	// The sandbox (owner decision 2026-10-12): rootless runc, no network, the owner's turns (and Iyye's own work
+	// with IYYE2_SANDBOX_BACKGROUND=1). Unavailable, and said so, unless provisioned on Linux.
+	const sandbox = config.sandbox.on
+		? new Sandbox({
+				stateDir: config.stateDir,
+				log,
+				limits: { timeoutS: config.sandbox.timeoutS, memoryMb: config.sandbox.memoryMb },
+			})
+		: null;
+	const sandboxProblem = sandbox ? sandbox.init() : "off (IYYE2_SANDBOX=0)";
+	if (sandboxProblem) log.info("sandbox: not available", { why: sandboxProblem });
+	const sandboxKit = sandbox && !sandboxProblem ? sandboxToolkit(sandbox) : null;
+	const monitorKit = config.monitor.on ? monitorToolkit() : null;
 	const tools = new ToolBroker({
 		db,
 		log,
@@ -315,11 +339,18 @@ async function main(): Promise<number> {
 				restWindow: config.memory.sleepWindow,
 			}),
 			// After reminders, for the same reason (plan 0.006 C4). `plans` is created below; it is read only during a turn.
-			plansToolkit({ propose: (p) => plans.propose(p) }),
+			plansToolkit({
+				propose: (p) => plans.propose(p),
+				markTaskDone: (ref, step, by, scope) => plans.markTaskDone(ref, step, by, scope),
+			}),
 			// Last again (plan 0.008): messages to people Iyye knows (owner, trusted contacts, Iyye itself).
 			messaging,
 			// Last (2026-10-08): Iyye's own repositories, read-only, in the owner's turns only (effect `private`).
 			projectKit,
+			// Last (2026-10-12): the sandbox, effect `compute` (the owner and Iyye's own work, never contacts).
+			...(sandboxKit ? [sandboxKit] : []),
+			// Last (2026-10-12): detailed host readings, effect `private` (the owner and Iyye's own work).
+			...(monitorKit ? [monitorKit] : []),
 			// Last (2026-10-09): the reasoning model on the owner's other machine, owner-only.
 			...(thinkingKit ? [thinkingKit] : []),
 			// Last (2026-10-09): images sent in the conversation, the owner and trusted contacts.
@@ -345,6 +376,8 @@ async function main(): Promise<number> {
 			[
 				recentReminderNote(db, scope, new Date()),
 				recentSentNote(db, scope, new Date()),
+				// What this conversation planned and what is still open (2026-10-13): records, not memory.
+				openPlansNote(db, scope),
 				// The owner's notes shared with this person (plan 0.005 Stage 2); owner-only notes never.
 				personNoteFor(db, scope),
 				selfNoteFor(scope, selfModel, db),
@@ -381,6 +414,8 @@ async function main(): Promise<number> {
 		reserve: config.adenosine.reserve,
 		windDown: config.adenosine.windDown,
 	});
+	let voiceActor: VoiceActor | null = null;
+	let character: Character | null = null;
 	const scheduler = new Scheduler({
 		db,
 		device,
@@ -389,6 +424,13 @@ async function main(): Promise<number> {
 		outbox,
 		log,
 		onDeviceTime: (jobId, ms) => adenosine.deviceTime("chat", ms, `${jobId}:${getJob(db, jobId)?.attempt ?? 0}`),
+		// Plan 0.009 CH4: the voice, off until the owner turns a surface on (built below, with the character).
+		rephrase: (event, text, signal, profile) =>
+			voiceActor
+				? voiceActor.rephrase(event, text, signal, (profile?.revision as Revision | undefined) ?? null)
+				: Promise.resolve({ content: text, record: () => {} }),
+		// Owner decision 13: the character bound once per turn (reasoning in the owner's prompt; the voice's preset).
+		bindProfile: (jobId, event) => (character ? bindTurnProfile(db, character, jobId, event, new Date()) : null),
 		rhythm: {
 			mode: () => rhythm.mode(),
 			wakeForOwner: (why) => rhythm.wakeForOwner(why),
@@ -416,6 +458,9 @@ async function main(): Promise<number> {
 				// Last (plan 0.010 M2): the web for curiosity's investigations, on Iyye's own daily budget.
 				// Investigation sessions never get `messaging` (ToolBroker.allowed): a page must not make Iyye write.
 				...(webToolkit ? [webToolkit] : []),
+				// Last (2026-10-12): the sandbox for Iyye's own work, only when switched on (a new M4 trial period).
+				...(sandboxKit && config.sandbox.background ? [sandboxKit] : []),
+				...(monitorKit && config.monitor.background ? [monitorKit] : []),
 			],
 		}),
 	});
@@ -430,20 +475,23 @@ async function main(): Promise<number> {
 		},
 	});
 	// M4's trial period: a new one whenever what decides behaviour changed.
-	const trial = ensureTrial(
-		db,
-		behaviourFingerprint({
-			threshold: config.self.motivationThreshold,
-			sustain: config.self.motivationSustain,
-			sweepS: config.self.motivationSweepS,
-			proposalsDaily: config.self.proposalsDaily,
-			socialDailyMax: config.self.socialDailyMax,
-			socialHours: config.self.socialHours,
-			budgetMin: config.self.initiativeBudgetMin,
-			shares: SHARES,
-		}),
-		new Date(),
-	);
+	// The behaviour's settings; the character's live reasoning and voice configuration join them only when
+	// something is selected (owner decision 13), so with everything off the fingerprint is unchanged.
+	const trialSettings = (digest: string | null) => ({
+		threshold: config.self.motivationThreshold,
+		sustain: config.self.motivationSustain,
+		sweepS: config.self.motivationSweepS,
+		proposalsDaily: config.self.proposalsDaily,
+		socialDailyMax: config.self.socialDailyMax,
+		socialHours: config.self.socialHours,
+		budgetMin: config.self.initiativeBudgetMin,
+		shares: SHARES,
+		...(digest ? { character: digest } : {}),
+		// Iyye's own work with the sandbox changes what investigations can do: a new period when switched on.
+		...(sandboxKit && config.sandbox.background ? { sandbox: "background" } : {}),
+		...(monitorKit && config.monitor.background ? { monitor: "background" } : {}),
+	});
+	const trial = ensureTrial(db, behaviourFingerprint(trialSettings(liveControlsDigest(db))), new Date());
 	log.info("motivation: trial period", { since: trial.start, behaviour: trial.fingerprint });
 	const background = new BackgroundWorker({
 		db,
@@ -567,6 +615,8 @@ async function main(): Promise<number> {
 			// resetAll retired every session row, background ones too: close the background conversations as well,
 			// or a paused step would continue its old in-memory conversation (plan 0.007 S1).
 			await backgroundConversations.disposeAll();
+			// The sandbox's workspaces last the day, like the conversations that wrote them.
+			sandbox?.wipeAll();
 			log.info("rhythm: conversations start afresh", { retired: n });
 		},
 		notify: (text) => appendFeed(db, { kind: "notice", text, at: new Date().toISOString() }),
@@ -656,6 +706,8 @@ async function main(): Promise<number> {
 		forgetBackground: (scopes) => backgroundConversations.forgetScopes(scopes),
 		retireConversations: (scopes) => conversations.retireScopes(scopes),
 		forgetQueued: (scopes) => {
+			// A workspace may hold anything a conversation wrote about the person: all of them go.
+			sandbox?.wipeAll();
 			selectionShadow.forgetScopes(scopes);
 			selector.forgetScopes(scopes);
 		},
@@ -772,7 +824,84 @@ async function main(): Promise<number> {
 			},
 		},
 	});
+	// Plan 0.009 CH1a: the character's records and character.json; nothing reads its values yet.
+	character = new Character({
+		db,
+		stateDir: config.stateDir,
+		// Every owner change (and undo, reset) of the live reasoning or voice is an M4 trial boundary.
+		onChange: (r) => {
+			const t = ensureTrial(
+				db,
+				behaviourFingerprint(trialSettings(controlsDigest(controlsOf(r.state), definitionsOf(r.state)))),
+				new Date(),
+			);
+			log.info("motivation: trial period", { since: t.start, behaviour: t.fingerprint });
+		},
+	});
+	character.init();
+	// Plan 0.009 CH2: mood from records, journaled every half hour while awake; read only by the voice.
+	const moodTimer = setInterval(() => {
+		if (rhythm.mode() !== "awake") return;
+		try {
+			const now = new Date();
+			recordMood(db, moodAt(db, null, now), "sweep", now);
+		} catch (err) {
+			log.warn("mood: sample failed", { error: (err as Error).message });
+		}
+	}, 30 * 60_000);
+	moodTimer.unref();
+	// Plan 0.009 CH3: the voice in shadow (built below, once the decision client exists).
+	if (registry.models.some((m) => m.name === config.voice.model && !m.remote))
+		seedSelectedModel(db, "voice", config.voice.model, new Date().toISOString());
+	const personNames = () =>
+		(db.prepare("SELECT display_name FROM contacts WHERE kind != 'owner'").all() as { display_name: string }[])
+			.map((r) => r.display_name)
+			.filter((n) => n && n.trim().length >= 2);
+	let voiceShadow: VoiceShadow | null = null;
+	voiceActor = new VoiceActor({
+		db,
+		log,
+		models,
+		complete: routerVoice(router.url),
+		character,
+		names: personNames,
+		effectToolkits: () =>
+			new Set(
+				tools.toolkits
+					.filter(
+						(k) => k.effect === "self" || k.effect === "reach" || k.effect === "act" || k.effect === "compute",
+					)
+					.map((k) => k.name),
+			),
+		deadlineMs: config.voice.deadlineS * 1000,
+	});
 	const commandExtras = {
+		character,
+		moodReport: () =>
+			moodReport(db, new Date(), (scope) => {
+				if (scope === "owner") return "you";
+				const id = /^contact:(.+)$/.exec(scope)?.[1];
+				const c = id
+					? (db.prepare("SELECT display_name FROM contacts WHERE id = ?").get(id) as
+							| { display_name: string }
+							| undefined)
+					: undefined;
+				return c?.display_name ?? scope;
+			}),
+		voice: new VoiceCommands({
+			db,
+			act: voiceActor,
+			names: personNames,
+			status: () => ({
+				model: models.selected("voice"),
+				pending: voiceShadow?.pending() ?? 0,
+				waiting: voiceShadow
+					? voiceShadow.lastReason
+					: config.voice.shadow
+						? "starting"
+						: "off (IYYE2_VOICE_SHADOW=0)",
+			}),
+		}),
 		commitments: new ReminderCommands({ db }),
 		plans,
 		sentReport: () => sentReport(db),
@@ -948,6 +1077,23 @@ async function main(): Promise<number> {
 		ready: () => decisions.checkpoint !== null,
 		log,
 	});
+	if (config.voice.shadow)
+		voiceShadow = new VoiceShadow({
+			db,
+			log,
+			device,
+			models,
+			background,
+			complete: routerVoice(router.url),
+			character,
+			names: personNames,
+			energy: adenosine,
+			decisions: {
+				client: decisionClient,
+				ready: () => decisions.checkpoint !== null,
+				chatPending: () => scheduler.hasRunnableJobs(),
+			},
+		});
 	const owner = ensureOwnerToken(config.stateDir);
 	const web = new WebServer({
 		port: config.webPort,
@@ -990,6 +1136,8 @@ async function main(): Promise<number> {
 				await memory.stop();
 				await selectionShadow.stop();
 				await replyReview.stop();
+				await voiceShadow?.stop();
+				clearInterval(moodTimer);
 				await factExtractor.stop();
 				await background.stop();
 				adenosine.stop();
@@ -1054,6 +1202,7 @@ async function main(): Promise<number> {
 	decisions.start(); // in the background too
 	selectionShadow.start();
 	replyReview.start();
+	voiceShadow?.start();
 	background.start();
 	factExtractor.start();
 	observer.start();

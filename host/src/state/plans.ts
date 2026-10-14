@@ -29,7 +29,9 @@ export type PlanStep =
 			evidence?: string;
 			reason?: string;
 	  }
-	| { kind: "other"; description: string; status: StepStatus; reason?: string };
+	| { kind: "other"; description: string; status: StepStatus; reason?: string }
+	/** Something the person does themselves (2026-10-13): Iyye only keeps it on the list; done when they say so. */
+	| { kind: "task"; description: string; status: StepStatus; done_by?: string; done_at?: string; reason?: string };
 
 export interface PlanRow {
 	id: string;

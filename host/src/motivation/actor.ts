@@ -51,6 +51,16 @@
  *   most `socialPerDay`. Settled `replied` when the person writes again, or
  *   `no reply` after `followUpWaitMs`; a follow-up with no reply holds the
  *   next one to that person for `suppressMs`.
+ *
+ * **Between the model call and the effect (M4 review):** a composition takes
+ * time, so everything that allowed it is checked again right before the
+ * effect: the opportunity is still open and the same episode, its message and
+ * person still exist and were not forgotten (a `/forget` during the call also
+ * cancels it), Iyye is awake, the motivation not paused, the hour still
+ * social, the person still not in a conversation. Anything changed: nothing is
+ * sent, and the opportunity stays pending. A reply is credited to a follow-up
+ * only when the outbox confirmed its delivery; a follow-up never sent, or
+ * failed, is never credited.
  */
 
 import { getBelief } from "../facts/beliefs.ts";
@@ -63,8 +73,9 @@ import { accountsOf, type Contact, getContact, OWNER_CONTACT_ID, resolvePerson, 
 import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
 import { getPlan } from "../state/plans.ts";
+import { isForgotten } from "../state/tombstones.ts";
 import type { InitiativeLedger } from "./budget.ts";
-import type { Composed } from "./compose.ts";
+import type { Cancelled, Composed } from "./compose.ts";
 import { type EventKind, type Outcome, recordEvent, settleOpportunity, type WithheldReason } from "./outcomes.ts";
 import { MOTIVATIONS, type Motivation, type Signal } from "./signals.ts";
 
@@ -104,6 +115,7 @@ export interface ActorDeps {
 				user: string,
 				motivation?: Motivation,
 				opportunityId?: string,
+				cancelled?: Cancelled,
 		  ) => Promise<Composed>)
 		| null;
 	/** M3: propose a plan for the owner (`PlanRunner.proposePlan`). */
@@ -304,7 +316,9 @@ export class MotivationActor {
 			)
 				this.d.db
 					.prepare(
-						`UPDATE opportunities SET status = 'open', answer = NULL, evidence_json = ?, evidence_text = ?, question = ?,
+						// A new episode: the last one's outcome, credit, attempts and references stay only in its journal.
+						`UPDATE opportunities SET status = 'open', answer = NULL, outcome = NULL, credited = 0, attempts = 0, ref = NULL,
+							attempt_started_at = NULL, evidence_json = ?, evidence_text = ?, question = ?,
 							signal_kind = ?, action_kind = ?, created_at = ?, updated_at = ? WHERE cluster = ?`,
 					)
 					.run(
@@ -458,7 +472,16 @@ export class MotivationActor {
 
 	/** A composed text, or null when it may not run now (left open) or failed (counted; settled after 3). */
 	private async compose(row: ActingRow, system: string, user: string): Promise<string | null> {
-		const r = await this.d.compose!(row.id.slice(0, 8), system, user, row.motivation, row.id);
+		const r = await this.d.compose!(row.id.slice(0, 8), system, user, row.motivation, row.id, () =>
+			this.notCurrent(row),
+		);
+		// Forgotten or settled while the model ran (the call was cancelled, or finished first): its words are
+		// dropped, and nothing is recorded against an opportunity that is gone.
+		const gone = this.notCurrent(row);
+		if (gone) {
+			this.d.log.info("motivation: composition dropped", { id: row.id, why: gone });
+			return null;
+		}
 		if ("notNow" in r && !r.ok) {
 			// Gave way to a person: the call ran and was discarded; otherwise it never started.
 			// It ran and was discarded (a person needed the device, the other machine was lost) or never started.
@@ -517,6 +540,12 @@ export class MotivationActor {
 		}
 		const raw = await this.compose(row, DRAFT_SYSTEM, draftInput(ep));
 		if (raw === null) return true;
+		// The call took time: what allowed it is checked again before anything reaches the owner.
+		const held = this.heldNow(row, () => this.ownerBusy(this.d.now()), "owner busy");
+		if (held) {
+			this.event(row, "withheld", held);
+			return true;
+		}
 		const draft = parseDraft(raw, ep, now);
 		if (typeof draft === "string") {
 			this.bumpOrSettle(row, `the draft was not usable: ${draft}`);
@@ -560,8 +589,7 @@ export class MotivationActor {
 
 	/** Social: ask a person how the event they mentioned went. Returns true if a model call was made. */
 	private async followUp(row: ActingRow, now: Date): Promise<boolean> {
-		const [from, to] = this.d.socialHours;
-		if (now.getHours() < from || now.getHours() >= to) {
+		if (!this.socialHour(now)) {
 			this.event(row, "withheld", "quiet hours");
 			return false;
 		}
@@ -572,8 +600,11 @@ export class MotivationActor {
 			return false;
 		}
 		const scopes = scopesOf(this.d.db, person);
-		if (person.kind === "owner" ? this.ownerBusy(now) : this.busy(scopes, now)) {
-			this.event(row, "withheld", person.kind === "owner" ? "owner busy" : "person busy");
+		const inConversation = () =>
+			person.kind === "owner" ? this.ownerBusy(this.d.now()) : this.busy(scopes, this.d.now());
+		const busyReason = person.kind === "owner" ? "owner busy" : "person busy";
+		if (inConversation()) {
+			this.event(row, "withheld", busyReason);
 			return false;
 		}
 		const today = startOfDay(now);
@@ -622,6 +653,13 @@ export class MotivationActor {
 		const text = checkFollowUp(raw, otherNames(this.d.db, person));
 		if (typeof text !== "string" || !text) {
 			this.bumpOrSettle(row, `the message was not usable: ${typeof text === "string" ? "empty" : text.why}`);
+			return true;
+		}
+		// Right before the effect: the hour, the pause, the mode and the person's activity as they are now
+		// (a composition started at 20:59 may finish after 21:00). Changed: nothing is sent, it stays pending.
+		const held = this.socialHour(this.d.now()) ? this.heldNow(row, inConversation, busyReason) : "quiet hours";
+		if (held) {
+			this.event(row, "withheld", held);
 			return true;
 		}
 		const at = this.iso();
@@ -691,16 +729,96 @@ export class MotivationActor {
 				this.settle(row.id, "gone", "its person is gone");
 				continue;
 			}
+			// A reply is Iyye's doing only if its message reached them (the durable records, not the row's word).
+			const delivery = this.delivery(row, person);
+			if (delivery.state === "failed") {
+				this.settle(row.id, "failed", delivery.why);
+				continue;
+			}
 			const scopes = scopesOf(this.d.db, person);
 			const replied = this.d.db
 				.prepare(
 					`SELECT 1 FROM events WHERE scope IN (${scopes.map(() => "?").join(", ")}) AND received_at > ? AND status != 'dropped' LIMIT 1`,
 				)
 				.get(...scopes, sentAt);
-			if (replied) this.settle(row.id, "resolved", "replied", true);
-			else if (now.getTime() - Date.parse(sentAt) >= this.d.followUpWaitMs)
-				this.settle(row.id, "expired", "no reply");
+			const waited = now.getTime() - Date.parse(sentAt) >= this.d.followUpWaitMs;
+			if (replied && delivery.state === "delivered") this.settle(row.id, "resolved", "replied", true);
+			else if (replied && delivery.state === "unconfirmed")
+				this.settle(row.id, "resolved", "replied; the delivery was not confirmed");
+			else if (waited)
+				// Only a delivered message's silence is "no reply" (which holds the next follow-up to them).
+				this.settle(row.id, "expired", delivery.state === "delivered" ? "no reply" : `no reply; ${delivery.why}`);
 		}
+	}
+
+	/** What the durable records say about a follow-up's message: the outbox action behind it. */
+	private delivery(
+		row: ActingRow,
+		person: Contact,
+	): { state: "delivered" | "pending" | "unconfirmed" | "failed"; why: string } {
+		let actionState: string | null;
+		if (person.kind === "owner") {
+			const a = this.d.db
+				.prepare("SELECT state FROM actions WHERE idempotency_key = ?")
+				.get(row.ref ?? `notice:followup:${row.id}`) as { state: string } | undefined;
+			if (!a) return { state: "failed", why: "never sent: no notice was recorded" };
+			actionState = a.state;
+		} else {
+			// The send's own record, by its id or (a restart between the send and this row) by its label.
+			const sent = this.d.db
+				.prepare("SELECT id, action_id FROM sent_messages WHERE id = ? OR requester_scope = ? LIMIT 1")
+				.get(row.ref ?? "", `iyye:social:${row.id}`) as { id: string; action_id: string | null } | undefined;
+			if (!sent) return { state: "failed", why: "never sent: interrupted before its record" };
+			if (row.ref !== sent.id)
+				this.d.db.prepare("UPDATE opportunities SET ref = ? WHERE id = ?").run(sent.id, row.id);
+			if (!sent.action_id) return { state: "pending", why: "never delivered" };
+			actionState =
+				(
+					this.d.db.prepare("SELECT state FROM actions WHERE id = ?").get(sent.action_id) as
+						| { state: string }
+						| undefined
+				)?.state ?? null;
+		}
+		if (actionState === "delivered") return { state: "delivered", why: "delivered" };
+		if (actionState === "unknown") return { state: "unconfirmed", why: "the delivery was not confirmed" };
+		if (actionState === "terminal_failure" || actionState === null) return { state: "failed", why: "not delivered" };
+		return { state: "pending", why: "never delivered" };
+	}
+
+	/** The local hour lets Iyye start a conversation. */
+	private socialHour(at: Date): boolean {
+		const [from, to] = this.d.socialHours;
+		return at.getHours() >= from && at.getHours() < to;
+	}
+
+	/**
+	 * Why an action whose model call just finished may not take effect now (M4 review), or null: the
+	 * opportunity changed, Iyye is no longer awake, its motivation was paused, or a conversation started.
+	 */
+	private heldNow(row: ActingRow, busy: () => boolean, busyReason: WithheldReason): string | null {
+		const gone = this.notCurrent(row);
+		if (gone) return gone;
+		if (this.d.mode() !== "awake") return "asleep";
+		if (this.paused(row.motivation)) return "paused";
+		if (busy()) return busyReason;
+		return null;
+	}
+
+	/**
+	 * Why a composing opportunity is no longer the one the call was for (null while it is): deleted
+	 * (`/forget`), settled or reopened meanwhile, or its message or person gone or forgotten.
+	 */
+	private notCurrent(row: ActingRow): string | null {
+		const o = this.d.db.prepare("SELECT status, created_at FROM opportunities WHERE id = ?").get(row.id) as
+			| { status: string; created_at: string }
+			| undefined;
+		if (!o) return "its opportunity is gone";
+		if (o.status !== "open" || o.created_at !== row.created_at) return "its opportunity changed";
+		const ep = this.episode(row.cluster);
+		if (!ep) return "its message is gone";
+		if (isForgotten(this.d.db, ep.scope, ep.said_at)) return "its person was forgotten";
+		if (!this.personOf(ep.scope)) return "its person is gone";
+		return null;
 	}
 
 	private bumpOrSettle(row: ActingRow, why: string): void {

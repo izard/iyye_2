@@ -83,6 +83,15 @@ interface Calls {
 	sends: { personId: string; text: string }[];
 }
 
+/** The outbox's record of a delivered message (M4: a reply is credited only to a delivered follow-up). */
+function delivered(db: Db, key: string, at: Date): string {
+	const id = `act-${crypto.randomUUID().slice(0, 8)}`;
+	db.prepare(
+		"INSERT OR IGNORE INTO actions (id, kind, route_json, content_hash, idempotency_key, state, created_at) VALUES (?, 'status', '{}', 'h', ?, 'delivered', ?)",
+	).run(id, key, at.toISOString());
+	return id;
+}
+
 function rig(
 	db: Db,
 	clock: { t: Date },
@@ -110,6 +119,7 @@ function rig(
 		mode: () => "awake",
 		notifyOwner: async (r) => {
 			calls.notices.push(r);
+			delivered(db, `notice:${r.key}`, clock.t);
 		},
 		self: { value: () => null, setFacet: () => undefined } as never,
 		now: () => clock.t,
@@ -119,9 +129,22 @@ function rig(
 			return answers.shift() ?? { ok: false, notNow: "nothing scripted" };
 		},
 		proposePlan: (p) => plans.proposePlan(p),
-		sendMessage: async (personId, text) => {
+		sendMessage: async (personId, text, via) => {
 			calls.sends.push({ personId, text });
-			return { text: "sent", sentId: `sent-${calls.sends.length}`, state: "delivered" };
+			const id = `sent-${calls.sends.length}`;
+			db.prepare(
+				"INSERT INTO sent_messages (id, dedup_key, recipient_contact_id, scope, route_json, text, requested_via, requested_by, requester_scope, created_at, action_id) VALUES (?, ?, ?, ?, '{}', ?, 'background', 'iyye', ?, ?, ?)",
+			).run(
+				id,
+				`k-${id}`,
+				personId,
+				`contact:${personId}`,
+				text,
+				via,
+				clock.t.toISOString(),
+				delivered(db, `notice:send:${id}`, clock.t),
+			);
+			return { text: "sent", sentId: id, state: "delivered" };
 		},
 		...o.extra,
 	});

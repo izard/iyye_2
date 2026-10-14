@@ -39,6 +39,23 @@ export interface Config {
 	modelsMax: number;
 	/** Background work (plan 0.007 S1): its model, loaded by day like the chat models. */
 	backgroundModel: string;
+	/**
+	 * The voice in shadow (plan 0.009 CH3): the model selected for it at first start (owner decision 7;
+	 * `/use <model> voice` changes it; it must be loaded, the host never loads it), whether the shadow runs, and
+	 * (CH4) how long a reply waits for its rephrasing.
+	 */
+	voice: { model: string; shadow: boolean; deadlineS: number };
+	/**
+	 * The sandbox (owner decision 2026-10-12): `sandbox_run` in the owner's turns when provisioned on Linux
+	 * (`IYYE2_SANDBOX=0` turns it off), and in Iyye's own work only with `IYYE2_SANDBOX_BACKGROUND=1`
+	 * (a new M4 trial period). Each run's wall-clock limit and memory.
+	 */
+	sandbox: { on: boolean; background: boolean; timeoutS: number; memoryMb: number };
+	/**
+	 * The `monitor` toolkit (owner decision 2026-10-12): the owner's turns (`IYYE2_MONITOR=0` turns it off), and
+	 * Iyye's own work only with `IYYE2_MONITOR_BACKGROUND=1` (a new M4 trial period).
+	 */
+	monitor: { on: boolean; background: boolean };
 	/** No background step starts this soon after chat activity, and steps are spaced this far apart. */
 	backgroundQuietS: number;
 	backgroundGapS: number;
@@ -265,6 +282,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		identityFile: absPath(env.IYYE2_IDENTITY || resolve(PROJECT_ROOT, "config/identity.md"), cwd),
 		modelsMax: int(env, "IYYE2_MODELS_MAX", 2, 1, 16),
 		backgroundModel: env.IYYE2_BACKGROUND_MODEL || "gemma-4-E4B",
+		monitor: { on: env.IYYE2_MONITOR !== "0", background: env.IYYE2_MONITOR_BACKGROUND === "1" },
+		sandbox: {
+			on: env.IYYE2_SANDBOX !== "0",
+			background: env.IYYE2_SANDBOX_BACKGROUND === "1",
+			timeoutS: int(env, "IYYE2_SANDBOX_TIMEOUT_S", 60, 1, 3600),
+			memoryMb: int(env, "IYYE2_SANDBOX_MEMORY_MB", 1024, 64, 65_536),
+		},
+		voice: {
+			model: env.IYYE2_VOICE_MODEL || "qwen35-4b-tak",
+			shadow: env.IYYE2_VOICE_SHADOW !== "0",
+			// CH4: how long a reply waits for its rephrasing before the original goes out (the answer is never lost).
+			deadlineS: int(env, "IYYE2_VOICE_DEADLINE_S", 15, 1, 600),
+		},
 		backgroundQuietS: int(env, "IYYE2_BACKGROUND_QUIET_S", 180, 0, 86_400),
 		backgroundGapS: int(env, "IYYE2_BACKGROUND_GAP_S", 30, 0, 86_400),
 		workspaceDir: absPath(

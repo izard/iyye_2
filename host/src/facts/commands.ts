@@ -22,7 +22,13 @@
  * - `/facts why <id>` — why a belief exists (plan 0.013 E5): its ranges, each
  *   piece of evidence, the structured fact and the message it came from, and
  *   the tool result it was traced to.
- * - `/facts report` — the ledger's integrity figures (plan 0.013 E6).
+ * - `/facts report` — the ledger's integrity figures (plan 0.013 E6) and the
+ *   last night's orphan check between SQLite and long-term memory (plan §5).
+ * - `/facts orphans` — the check run now, every orphan listed;
+ *   `/facts orphans restore` — facts whose stored text is missing are stored
+ *   again by the next night; `/facts orphans delete [confirm]` — documents no
+ *   stored fact accounts for, and those whose belief is gone, are deleted
+ *   (shown first, deleted only with `confirm`; it cannot be undone).
  */
 
 import type { FactRelation } from "../decisions/fact-relation.ts";
@@ -45,12 +51,21 @@ import {
 import { isPrivate } from "./disclosure.ts";
 import { factSentence, normalizeTerm } from "./extract.ts";
 import { deleteQueuedFactDocs, queueFactDocDeletions } from "./night.ts";
+import {
+	checkFactOrphans,
+	lastOrphanCheck,
+	orphanReport,
+	orphanTotal,
+	queueOrphanDeletions,
+	restoreMissing,
+	saveOrphanCheck,
+} from "./orphans.ts";
 import { factsIntegrity, factsTodayReport, integrityReport } from "./store.ts";
 
 export interface FactsCommandDeps {
 	db: Db;
 	log: Logger;
-	ltm: Pick<HindsightClient, "deleteDocument"> | null;
+	ltm: Pick<HindsightClient, "deleteDocument" | "listBanks" | "listDocuments"> | null;
 	extractorStatus: () => string;
 	relation?: Pick<FactRelation, "labelCorrection"> | null;
 	now?: () => Date;
@@ -73,8 +88,51 @@ export class FactsCommand {
 		if (sub === "wrong") return this.wrong(rest[0] ?? "", by);
 		if (sub === "private" || sub === "share") return this.disclose(rest[0] ?? "", sub);
 		if (sub === "why" && rest.length === 1) return this.why(rest[0]!);
-		if (sub === "report" && rest.length === 0) return integrityReport(factsIntegrity(this.d.db));
+		if (sub === "orphans") return this.orphans(rest);
+		if (sub === "report" && rest.length === 0)
+			return `${integrityReport(factsIntegrity(this.d.db))}\n${orphanReport(lastOrphanCheck(this.d.db))}`;
 		return this.lookup(args.join(" "));
+	}
+
+	/** `/facts orphans [restore | delete [confirm]]` (plan §5): a fresh check, then the owner's repair. */
+	private async orphans(rest: string[]): Promise<string> {
+		const usage = "usage: /facts orphans [restore | delete [confirm]]";
+		const [action, confirm, ...extra] = rest;
+		if (
+			extra.length ||
+			(action && action !== "restore" && action !== "delete") ||
+			(confirm && (action !== "delete" || confirm !== "confirm"))
+		)
+			return usage;
+		if (!this.d.ltm) return "long-term memory is not configured";
+		const at = this.d.now().toISOString();
+		const c = await checkFactOrphans(this.d.db, this.d.ltm, at, Number.POSITIVE_INFINITY);
+		if (c.error) return `the check could not finish: ${c.error}`;
+		// What /facts report and the wake check show is this check now, listed in full only here.
+		saveOrphanCheck(this.d.db, {
+			...c,
+			missing: c.missing.slice(0, 20),
+			unknown: c.unknown.slice(0, 20),
+			stale: c.stale.slice(0, 20),
+		});
+		const report = orphanReport(c).replace(/^ {2}/, "");
+		if (!action) {
+			if (orphanTotal(c) === 0) return report;
+			return `${report}\n/facts orphans restore — store the missing ones again next night; /facts orphans delete — delete the others`;
+		}
+		if (action === "restore") {
+			const n = restoreMissing(this.d.db, c);
+			return n
+				? `${n} fact(s) will be stored again at the next night`
+				: "nothing to restore: no stored fact is missing its text";
+		}
+		const n = c.counts.unknown + c.counts.stale;
+		if (n === 0) return "nothing to delete: every fact document has a stored fact with a belief";
+		if (!confirm)
+			return `${report}\nthis deletes ${n} document(s) from long-term memory and cannot be undone: /facts orphans delete confirm`;
+		queueOrphanDeletions(this.d.db, c, at);
+		const left = await deleteQueuedFactDocs(this.d.db, this.d.ltm, this.d.log).catch(() => n);
+		return `deleted ${n - Math.min(left, n)} document(s)${left ? `; ${left} queued deletion(s) are retried at the next chance` : ""}`;
 	}
 
 	private overview(): string {
