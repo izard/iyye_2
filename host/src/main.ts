@@ -40,7 +40,12 @@ import { auditUntracedCitations, ensureBeliefTimelines } from "./facts/beliefs.t
 import { FactsCommand } from "./facts/commands.ts";
 import { FactExtractor, routerComplete } from "./facts/extractor.ts";
 import { FactNight } from "./facts/night.ts";
-import { createLocalModelRuntime, outputCap, thinkingLevelFor } from "./integration/pi/runtime.ts";
+import {
+	createLocalModelRuntime,
+	MAX_OUTPUT_TOKENS_THINKING,
+	outputCap,
+	thinkingLevelFor,
+} from "./integration/pi/runtime.ts";
 import { PiConversations } from "./integration/pi/sessions.ts";
 import { Adenosine } from "./kernel/adenosine.ts";
 import { BackgroundWorker } from "./kernel/background.ts";
@@ -164,6 +169,18 @@ async function main(): Promise<number> {
 					log,
 				})
 			: null;
+	// The thinking tool's own model (2026-10-14): an OpenAI-compatible server, its own pass-through.
+	const thinkingConfig = config.remote.thinkingModel;
+	const thinkingRemote = thinkingConfig
+		? new RemoteModels({
+				config: thinkingConfig,
+				registry,
+				port: config.remote.thinkingProxyPort,
+				cert: secretFile(join(config.stateDir, "remote", thinkingConfig.endpoint, "cert.pem")),
+				key: secretFile(join(config.stateDir, "remote", thinkingConfig.endpoint, "api_key")),
+				log,
+			})
+		: null;
 	const router = new RouterProcess({
 		command: config.llamaServer,
 		argsPrefix: config.llamaServerArgsPrefix,
@@ -277,20 +294,41 @@ async function main(): Promise<number> {
 		: null;
 	// Owner decision 2026-10-09: the owner's turns may ask the other machine's reasoning model one question
 	// (effect `act`, owner-only). `remoteDevice` and `adenosine` are created below and read only when it runs.
+	// IYYE2_THINKING_MODEL, when set, is the thinking tool's model instead; on the background model's machine it
+	// shares that machine's device slot, elsewhere it has its own.
 	const remoteSpec = remote ? registry.models.find((m) => m.name === remote.name) : undefined;
+	const thinkingEnergy = {
+		deviceTime: (kind: "chat", ms: number, ref: string) => adenosine.deviceTime(kind, ms, ref),
+	};
 	const thinkingKit =
-		remote && remoteSpec && config.remote.thinkingDailyMax > 0
-			? thinkingToolkit({
-					db,
-					model: remote.name,
-					machine: remote.endpoint,
-					models,
-					device: { acquire: (label) => remoteDevice.acquire(label) },
-					complete: thinkComplete(() => remote.proxyUrl, outputCap(registry.defaults, remoteSpec)),
-					dailyMax: config.remote.thinkingDailyMax,
-					energy: { deviceTime: (kind, ms, ref) => adenosine.deviceTime(kind, ms, ref) },
-				})
-			: null;
+		config.remote.thinkingDailyMax <= 0
+			? null
+			: thinkingRemote
+				? thinkingToolkit({
+						db,
+						model: thinkingRemote.name,
+						machine: thinkingRemote.endpoint,
+						models: { acquire: async (name) => thinkingRemote.acquire(name) },
+						device: {
+							acquire: (label) =>
+								(remote?.endpoint === thinkingRemote.endpoint ? remoteDevice : thinkingDevice).acquire(label),
+						},
+						complete: thinkComplete(() => thinkingRemote.proxyUrl, MAX_OUTPUT_TOKENS_THINKING),
+						dailyMax: config.remote.thinkingDailyMax,
+						energy: thinkingEnergy,
+					})
+				: remote && remoteSpec
+					? thinkingToolkit({
+							db,
+							model: remote.name,
+							machine: remote.endpoint,
+							models,
+							device: { acquire: (label) => remoteDevice.acquire(label) },
+							complete: thinkComplete(() => remote.proxyUrl, outputCap(registry.defaults, remoteSpec)),
+							dailyMax: config.remote.thinkingDailyMax,
+							energy: thinkingEnergy,
+						})
+					: null;
 	// Images people send on Telegram (owner decision 2026-10-09): the owner and trusted contacts (effect `trusted`).
 	const visionSpec = config.vision.model ? registry.models.find((m) => m.name === config.vision.model) : undefined;
 	const visionKit =
@@ -403,6 +441,8 @@ async function main(): Promise<number> {
 	const device = new DeviceSlot();
 	// Plan 0.012: the other machine's own device. Work there never holds this one's, nor waits for it.
 	const remoteDevice = new DeviceSlot();
+	// The thinking model's machine, when it is not the background model's.
+	const thinkingDevice = new DeviceSlot();
 	const deviceFor = (model: string) => (models.isRemote(model) ? remoteDevice : device);
 	const modelUrl = (model: string) => (remote?.has(model) ? remote.proxyUrl : router.url);
 	// Adenosine (plan 0.007 S2): one writer of energy charges; `rhythm` is created below and read later.
@@ -800,6 +840,7 @@ async function main(): Promise<number> {
 				Telegram: poller ? poller.status : { state: "disabled" },
 				// Plan 0.012: an outage of the other machine is one visible service state, not stalled work.
 				...(remote ? { [`the background model on ${remote.endpoint}`]: remote.status } : {}),
+				...(thinkingRemote ? { [`the thinking model on ${thinkingRemote.endpoint}`]: thinkingRemote.status } : {}),
 			}),
 			new Date(),
 		);
@@ -1153,6 +1194,7 @@ async function main(): Promise<number> {
 				await conversations.disposeAll();
 				await backgroundConversations.disposeAll();
 				await remote?.stop();
+				await thinkingRemote?.stop();
 				await models.stop();
 			} catch (err) {
 				log.error("stopping models failed", { error: (err as Error).message });
@@ -1215,6 +1257,7 @@ async function main(): Promise<number> {
 	searxng.start();
 	// Plan 0.012: the pass-through to the other machine, and its first health check.
 	await remote?.start();
+	await thinkingRemote?.start();
 	// After every service has started (one still "stopped" here would be recorded as an outage).
 	watchServices();
 	serviceTimer = setInterval(watchServices, 60_000);
