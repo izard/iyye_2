@@ -102,6 +102,26 @@ describe("ask_thinking_model", () => {
 		assert.equal(toolCallsForScope(r.db, "owner").length, 4);
 	});
 
+	test("cut off while still reasoning (rapid-mlx's notice): no answer, its scratch work never passed on", async () => {
+		const r = rig({
+			complete: async () => ({
+				text: "[truncated — reasoning incomplete; raise max_tokens]\n\nd maybe include Top 5. Let's ensure",
+				truncated: true,
+			}),
+		});
+		const out = (await r.ask("q")).content[0]!.text;
+		assert.match(
+			out,
+			/^The thinking model on mbp ran out of room while still reasoning \(after \d+ s\) and reached no answer/,
+		);
+		assert.ok(!out.includes("Let's ensure"));
+		const partial = rig({ complete: async () => ({ text: "Five", truncated: true }) });
+		assert.match(
+			(await partial.ask("q")).content[0]!.text,
+			/ran out of room; the answer may be incomplete\):\nFive$/,
+		);
+	});
+
 	test("an unavailable or lost machine is said plainly, never retried", async () => {
 		const away = rig({
 			models: { acquire: async (): Promise<OpResult> => ({ ok: false, busy: true, message: "mbp is unreachable" }) },

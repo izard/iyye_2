@@ -42,6 +42,11 @@ export interface Config {
 		 */
 		thinkingModel: RemoteModelConfig | null;
 		thinkingProxyPort: number;
+		/**
+		 * `max_tokens` for one thinking question, reasoning included (IYYE2_THINKING_MAX_TOKENS). Null: 65536 for
+		 * `thinkingModel`, the registry's output cap for `model`. There is no time limit; this bounds only length.
+		 */
+		thinkingMaxTokens: number | null;
 	};
 	routerPort: number;
 	modelsRegistry: string;
@@ -290,6 +295,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			thinkingDailyMax: int(env, "IYYE2_THINKING_DAILY_MAX", 20, 0, 1000),
 			thinkingModel: remoteModel(() => parseThinkingModel(env.IYYE2_THINKING_MODEL)),
 			thinkingProxyPort: int(env, "IYYE2_THINKING_PROXY_PORT", 8189, 1, 65535),
+			thinkingMaxTokens: env.IYYE2_THINKING_MAX_TOKENS
+				? int(env, "IYYE2_THINKING_MAX_TOKENS", 0, 1024, 1_000_000)
+				: null,
 		},
 		routerPort,
 		modelsRegistry: absPath(env.IYYE2_MODELS_REGISTRY || resolve(PROJECT_ROOT, "config/models.json"), cwd),

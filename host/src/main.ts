@@ -40,12 +40,7 @@ import { auditUntracedCitations, ensureBeliefTimelines } from "./facts/beliefs.t
 import { FactsCommand } from "./facts/commands.ts";
 import { FactExtractor, routerComplete } from "./facts/extractor.ts";
 import { FactNight } from "./facts/night.ts";
-import {
-	createLocalModelRuntime,
-	MAX_OUTPUT_TOKENS_THINKING,
-	outputCap,
-	thinkingLevelFor,
-} from "./integration/pi/runtime.ts";
+import { createLocalModelRuntime, outputCap, thinkingLevelFor } from "./integration/pi/runtime.ts";
 import { PiConversations } from "./integration/pi/sessions.ts";
 import { Adenosine } from "./kernel/adenosine.ts";
 import { BackgroundWorker } from "./kernel/background.ts";
@@ -296,6 +291,8 @@ async function main(): Promise<number> {
 	// (effect `act`, owner-only). `remoteDevice` and `adenosine` are created below and read only when it runs.
 	// IYYE2_THINKING_MODEL, when set, is the thinking tool's model instead; on the background model's machine it
 	// shares that machine's device slot, elsewhere it has its own.
+	// 2026-10-14: a hard question took 16384 tokens of reasoning (874 s) without reaching an answer.
+	const THINKING_MODEL_MAX_TOKENS = 65_536;
 	const remoteSpec = remote ? registry.models.find((m) => m.name === remote.name) : undefined;
 	const thinkingEnergy = {
 		deviceTime: (kind: "chat", ms: number, ref: string) => adenosine.deviceTime(kind, ms, ref),
@@ -313,7 +310,10 @@ async function main(): Promise<number> {
 							acquire: (label) =>
 								(remote?.endpoint === thinkingRemote.endpoint ? remoteDevice : thinkingDevice).acquire(label),
 						},
-						complete: thinkComplete(() => thinkingRemote.proxyUrl, MAX_OUTPUT_TOKENS_THINKING),
+						complete: thinkComplete(
+							() => thinkingRemote.proxyUrl,
+							config.remote.thinkingMaxTokens ?? THINKING_MODEL_MAX_TOKENS,
+						),
 						dailyMax: config.remote.thinkingDailyMax,
 						energy: thinkingEnergy,
 					})
@@ -324,7 +324,10 @@ async function main(): Promise<number> {
 							machine: remote.endpoint,
 							models,
 							device: { acquire: (label) => remoteDevice.acquire(label) },
-							complete: thinkComplete(() => remote.proxyUrl, outputCap(registry.defaults, remoteSpec)),
+							complete: thinkComplete(
+								() => remote.proxyUrl,
+								config.remote.thinkingMaxTokens ?? outputCap(registry.defaults, remoteSpec),
+							),
 							dailyMax: config.remote.thinkingDailyMax,
 							energy: thinkingEnergy,
 						})

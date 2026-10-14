@@ -27,7 +27,7 @@ export const IYYE_PROVIDER = "iyye-local";
 /** Output tokens a reply may use; replies are conversational, not documents. */
 /** Output tokens per model reply; a thinking model needs room for its reasoning and its answer. */
 const MAX_OUTPUT_TOKENS = 4096;
-export const MAX_OUTPUT_TOKENS_THINKING = 16_384;
+const MAX_OUTPUT_TOKENS_THINKING = 16_384;
 
 export class LocalOnlyViolation extends Error {}
 

@@ -31,6 +31,11 @@ export const ASK_THINKING_TOOL = "ask_thinking_model";
 const ANSWERED = "The thinking model answered";
 const MAX_QUESTION_CHARS = 8000;
 const MAX_ANSWER_CHARS = 8000;
+/**
+ * rapid-mlx, cut off by `max_tokens` while still reasoning, puts this notice and the tail of its reasoning in
+ * the answer: scratch work, never an answer.
+ */
+const CUT_OFF_MID_THOUGHT = "[truncated — reasoning incomplete";
 
 /** One streamed completion with thinking on: the answer text (reasoning dropped) and whether it was cut off. */
 export type ThinkComplete = (
@@ -93,6 +98,8 @@ export function thinkingToolkit(d: ThinkingDeps): Toolkit {
 				const text = r.text.trim();
 				if (!text)
 					return `The thinking model on ${d.machine} gave no answer (after ${secs} s). Answer yourself, and say so.`;
+				if (r.truncated && text.startsWith(CUT_OFF_MID_THOUGHT))
+					return `The thinking model on ${d.machine} ran out of room while still reasoning (after ${secs} s) and reached no answer. Answer yourself, and say so.`;
 				const clipped = text.length > MAX_ANSWER_CHARS ? `${text.slice(0, MAX_ANSWER_CHARS)} […]` : text;
 				return `${q.note}${ANSWERED} after ${secs} s${r.truncated ? " (it ran out of room; the answer may be incomplete)" : ""}:\n${clipped}`;
 			} catch (err) {
