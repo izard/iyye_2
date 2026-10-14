@@ -130,7 +130,7 @@ test("system_errors: capped, long secrets masked, failed services", async () => 
 	const d = fake(
 		{},
 		{
-			"journalctl -p err": `2026-10-12T21:15:09+0200 spark kernel: Memory cgroup out of memory: Killed process 1 (python3)\n2026-10-12T21:16:00+0200 spark app: bad token FAKE-TEST-SECRET-0123456789abcd\n`,
+			"journalctl -p err": `2026-10-12T21:15:09+0200 spark kernel: Memory cgroup out of memory: Killed process 1 (python3)\n2026-10-12T21:16:00+0200 spark app: bad token ${"Ab9".repeat(12)}\n`,
 			"systemctl --failed": "foo.service loaded failed failed Foo\n",
 			"systemctl --user --failed": "",
 		},
