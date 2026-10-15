@@ -16,6 +16,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { EmailSender } from "./channels/email/sender.ts";
+import { emailDir, emailSettingsProblem, loadEmailSettings } from "./channels/email/settings.ts";
 import { TelegramFiles } from "./channels/telegram/files.ts";
 import { MAX_IMAGE_BYTES, TelegramPoller } from "./channels/telegram/poller.ts";
 import { TelegramSender } from "./channels/telegram/sender.ts";
@@ -100,6 +102,7 @@ import { recentSentNote, sentReport } from "./state/sent.ts";
 import { recordIyyeEntry } from "./state/stm.ts";
 import { appendFeed } from "./state/web.ts";
 import { ToolBroker, type Toolkit } from "./tools/broker.ts";
+import { emailToolkit } from "./tools/email.ts";
 import { GuardedHttp } from "./tools/http.ts";
 import { memorySearchTool } from "./tools/memory-search.ts";
 import { iyyeMessenger, messagingToolkit } from "./tools/messaging.ts";
@@ -361,6 +364,18 @@ async function main(): Promise<number> {
 	if (sandboxProblem) log.info("sandbox: not available", { why: sandboxProblem });
 	const sandboxKit = sandbox && !sandboxProblem ? sandboxToolkit(sandbox) : null;
 	const monitorKit = config.monitor.on ? monitorToolkit() : null;
+	// Email (plan 0.014): only while Iyye's own mailbox is configured (read again at each send).
+	const mailDir = emailDir(config.stateDir);
+	const emailProblem = config.email.on ? emailSettingsProblem(mailDir) : "off (IYYE2_EMAIL=0)";
+	if (emailProblem) log.info("email: not available", { why: emailProblem });
+	const emailKit = emailProblem
+		? null
+		: emailToolkit({
+				db,
+				outbox: { sendOwn: (req) => outbox.sendOwn(req), notifyOwner: (req) => outbox.notifyOwner(req) },
+				maxPerDay: config.email.dailyMax,
+				contactMaxPerDay: config.email.contactDailyMax,
+			});
 	const tools = new ToolBroker({
 		db,
 		log,
@@ -396,6 +411,8 @@ async function main(): Promise<number> {
 			...(thinkingKit ? [thinkingKit] : []),
 			// Last (2026-10-09): images sent in the conversation, the owner and trusted contacts.
 			...(visionKit ? [visionKit] : []),
+			// Last (plan 0.014): email from Iyye's own mailbox, the owner and trusted contacts.
+			...(emailKit ? [emailKit] : []),
 		],
 	});
 	const runtime = await createLocalModelRuntime({ routerUrl: router.url, registry });
@@ -438,6 +455,10 @@ async function main(): Promise<number> {
 	// Without a token the Telegram route has no adapter: such actions fail at once (no fallback to web).
 	const adapters: ChannelAdapter[] = [new WebChatAdapter({ db, log })];
 	if (config.telegramBotToken) adapters.push(new TelegramSender({ token: config.telegramBotToken, log }));
+	// Email (plan 0.014): the adapter is always there, so a mail queued earlier still settles if email is now off.
+	adapters.push(
+		new EmailSender({ load: () => (config.email.on ? loadEmailSettings(mailDir) : "off (IYYE2_EMAIL=0)"), log }),
+	);
 	// Asleep, retries wait until waking (HLD §15 #11). `rhythm` is created below; this runs later.
 	const outbox = new Outbox({ db, log, adapters, held: () => rhythm.mode() === "asleep" });
 	// One device-consuming task at a time (HLD §5.1): chat jobs, console turns and memory work share it.
@@ -913,7 +934,12 @@ async function main(): Promise<number> {
 			new Set(
 				tools.toolkits
 					.filter(
-						(k) => k.effect === "self" || k.effect === "reach" || k.effect === "act" || k.effect === "compute",
+						(k) =>
+							k.effect === "self" ||
+							k.effect === "reach" ||
+							k.effect === "act" ||
+							k.effect === "compute" ||
+							k.effect === "send",
 					)
 					.map((k) => k.name),
 			),

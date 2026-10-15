@@ -46,7 +46,7 @@
 import { HOST_NOTE_PREFIX } from "../integration/pi/context.ts";
 import type { Logger } from "../log.ts";
 import { checkCitations } from "../observe/citations.ts";
-import type { Route } from "../outbox/outbox.ts";
+import type { ChatRoute } from "../outbox/outbox.ts";
 import type { BackgroundJob } from "../state/background.ts";
 import { getCommitment, insertCommitment } from "../state/commitments.ts";
 import { getContact, OWNER_CONTACT_ID } from "../state/contacts.ts";
@@ -85,7 +85,7 @@ export interface Proposal {
 	/** `iyye`: Iyye proposes for the owner, from their words (never authorized at once). */
 	principal: "owner" | "contact" | "iyye";
 	scope: string;
-	route: Route;
+	route: ChatRoute;
 	eventId: string | null;
 	via: string;
 }
@@ -316,7 +316,7 @@ export class PlanRunner {
 	detail(ref: string): string {
 		const p = this.find(ref);
 		if (typeof p === "string") return p;
-		const route = JSON.parse(p.route_json) as Route;
+		const route = JSON.parse(p.route_json) as ChatRoute;
 		return [
 			`plan ${p.id.slice(0, 8)}: ${quote(p.intent)}`,
 			`  ${p.state}${p.reason ? ` (${p.reason})` : ""} · proposed by ${proposedBy(this.d.db, p)}${p.proposed_via === IYYE_PROPOSED_VIA ? " (from your words)" : ` via ${p.proposed_via}`}, ${describeAt(new Date(p.created_at))}`,

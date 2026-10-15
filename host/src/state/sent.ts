@@ -4,6 +4,7 @@
 /** Messages Iyye sends to contacts for the owner (plan 0.008, migration 023). */
 
 import type { Db } from "./db.ts";
+import { emailReportLines } from "./emails.ts";
 
 export interface SentMessage {
 	id: string;
@@ -103,7 +104,9 @@ export function recentSentNote(db: Db, scope: string, now: Date, hours = 12): st
 /** `/sent`: the latest messages sent for the owner, with what their state rests on (the action and its receipt). */
 export function sentReport(db: Db): string {
 	const rows = recentSent(db, 20);
-	if (rows.length === 0) return "no messages sent yet";
+	const emails = emailReportLines(db);
+	if (rows.length === 0)
+		return emails.length ? ["no messages sent yet", ...emails].join("\n") : "no messages sent yet";
 	return [
 		"messages Iyye sent to people (latest 20; delivered = confirmed by Telegram):",
 		...rows.map((r) => {
@@ -124,6 +127,7 @@ export function sentReport(db: Db): string {
 						: `asked by ${JSON.stringify((r.requester ?? "a contact").slice(0, 64))} on ${r.requested_via}`;
 			return `  ${r.created_at.slice(0, 10)} ${at} to ${to} (${asked}) · ${r.state ?? "not sent"}${receipt ? `, receipt ${receipt.level}` : ""} · ${JSON.stringify(r.text.replace(/\s+/g, " ").slice(0, 100))}`;
 		}),
+		...emails,
 	].join("\n");
 }
 

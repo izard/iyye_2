@@ -37,7 +37,13 @@ import { type EventRow, getEvent } from "../state/events.ts";
 import { recordEpisode } from "../state/stm.ts";
 import { splitOffsets } from "./split.ts";
 
-export type Route = { channel: "web"; contact: "owner" } | { channel: "telegram"; chatId: number };
+/** A conversation's route: where a turn came from and where its reply goes. */
+export type ChatRoute = { channel: "web"; contact: "owner" } | { channel: "telegram"; chatId: number };
+/** An email (plan 0.014): outbound only, one address and its subject; never a turn's route. */
+export type EmailRoute = { channel: "email"; to: string; subject: string };
+export type Route = ChatRoute | EmailRoute;
+/** Channels the outbox delivers on: the conversation channels, and email (which nothing arrives on). */
+export type OutboundChannel = Channel | "email";
 export type ActionKind = "reply" | "failure_notice";
 export type ActionState = "prepared" | "queued" | "sending" | "delivered" | "failed" | "unknown" | "terminal_failure";
 
@@ -69,7 +75,7 @@ export interface SendResult {
 }
 
 export interface ChannelAdapter {
-	readonly channel: Channel;
+	readonly channel: OutboundChannel;
 	/** Longest chunk the channel accepts, in UTF-16 code units (Infinity: never split). */
 	readonly maxChunkChars: number;
 	/** Return ok:false for a definite non-delivery; throw only when the outcome is uncertain. */
@@ -142,7 +148,7 @@ export interface OutboxDeps {
 
 export class Outbox {
 	private readonly d: Required<OutboxDeps>;
-	private readonly adapters = new Map<Channel, ChannelAdapter>();
+	private readonly adapters = new Map<OutboundChannel, ChannelAdapter>();
 	private dispatcher: NodeJS.Timeout | null = null;
 	private readonly inFlight = new Set<Promise<unknown>>();
 	private dispatching = false;
@@ -162,7 +168,7 @@ export class Outbox {
 	}
 
 	/** The only route a reply to this event may take: the channel and chat it came from. */
-	static routeFor(event: EventRow): Route {
+	static routeFor(event: EventRow): ChatRoute {
 		if (event.channel === "web") return { channel: "web", contact: "owner" };
 		const payload = JSON.parse(event.payload_json) as { message?: { chatId?: unknown } };
 		const chatId = payload.message?.chatId;
@@ -549,6 +555,17 @@ export class Outbox {
 			void this.notifyOwner({
 				key: `send-failed:${sentId}`,
 				content: `Your message to ${JSON.stringify((to?.display_name ?? "a contact").slice(0, 64))} could not be delivered: ${error.slice(0, 200)}`,
+			}).catch(() => undefined);
+		}
+		if (row.idempotency_key.startsWith("notice:email:")) {
+			// An email (plan 0.014) failed for good: the owner is told, once (also for a mail a contact asked for).
+			const mailId = row.idempotency_key.slice("notice:email:".length);
+			const m = this.d.db.prepare("SELECT address FROM sent_emails WHERE id = ?").get(mailId) as
+				| { address: string }
+				| undefined;
+			void this.notifyOwner({
+				key: `email-failed:${mailId}`,
+				content: `The email to ${m?.address ?? "an address"} could not be delivered: ${error.slice(0, 200)}`,
 			}).catch(() => undefined);
 		}
 		if (row.commitment_id) {

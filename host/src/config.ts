@@ -107,6 +107,11 @@ export interface Config {
 	facts: { extract: boolean; merge: boolean; maxStep: number; minP: number; turns: "hindsight" | "ledger" };
 	/** Messages Iyye sends to people per day (plan 0.008): in all, per trusted contact, on Iyye's own. */
 	send: { dailyMax: number; contactDailyMax: number; iyyeDailyMax: number };
+	/**
+	 * Email (plan 0.014): `email_send` for the owner and trusted contacts while `<state>/email/` holds Iyye's own
+	 * mailbox (`IYYE2_EMAIL=0` turns it off); mails per day in all and per trusted contact.
+	 */
+	email: { on: boolean; dailyMax: number; contactDailyMax: number };
 	defaultModel: string;
 	/** Seconds between router health checks. */
 	healthIntervalS: number;
@@ -356,6 +361,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			dailyMax: int(env, "IYYE2_SEND_DAILY_MAX", 20, 0, 1000),
 			contactDailyMax: int(env, "IYYE2_SEND_CONTACT_DAILY_MAX", 10, 0, 1000),
 			iyyeDailyMax: int(env, "IYYE2_SEND_IYYE_DAILY_MAX", 5, 0, 1000),
+		},
+		email: {
+			on: env.IYYE2_EMAIL !== "0",
+			dailyMax: int(env, "IYYE2_EMAIL_DAILY_MAX", 20, 0, 1000),
+			contactDailyMax: int(env, "IYYE2_EMAIL_CONTACT_DAILY_MAX", 5, 0, 1000),
 		},
 		adenosine: {
 			perHour: fraction(env, "IYYE2_ADENOSINE_PER_HOUR", 0.02),

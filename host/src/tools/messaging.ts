@@ -302,7 +302,7 @@ function telegramRoute(db: Db, person: Contact): Route | null {
 }
 
 /** The owner's name from their linked Telegram account, if any. */
-function ownerName(db: Db): string {
+export function ownerName(db: Db): string {
 	const owner = getContact(db, OWNER_CONTACT_ID);
 	const linked = accountsOf(db, OWNER_CONTACT_ID)[0]?.display_name;
 	return linked ?? (owner && owner.display_name !== "Owner" ? owner.display_name : "the owner");
