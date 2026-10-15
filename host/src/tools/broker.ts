@@ -31,7 +31,7 @@ import { createHash } from "node:crypto";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 import type { Logger } from "../log.ts";
-import type { Route } from "../outbox/outbox.ts";
+import type { ChatRoute } from "../outbox/outbox.ts";
 import type { Db } from "../state/db.ts";
 import { recordToolCall } from "../state/tool-calls.ts";
 
@@ -74,7 +74,7 @@ export const WEB_TOOLKIT = "web";
  * effect (a reminder) may reach only this route.
  */
 export interface TurnContext {
-	route: Route;
+	route: ChatRoute;
 	contactId: string;
 	eventId: string | null;
 }
@@ -114,10 +114,12 @@ export interface Toolkit {
 	 * Iyye's own work, never contacts.
 	 * "trusted": observes only what the asker sent in this conversation (images, 2026-10-09), but costs a
 	 * model call on the owner's machine: the owner and contacts the owner trusts, never Iyye's own work.
+	 * "send": an outward effect for the owner and contacts the owner trusts, never Iyye's own work (email,
+	 * plan 0.014, owner decision 2026-10-15).
 	 * "compute": runs code Iyye writes in an isolated sandbox (owner decision 2026-10-12): the owner and Iyye's
 	 * own work, never contacts, and never a plan step (whose question a contact may have written).
 	 */
-	effect: "read" | "self" | "reach" | "act" | "private" | "trusted" | "compute";
+	effect: "read" | "self" | "reach" | "act" | "private" | "trusted" | "compute" | "send";
 	tools: IyyeTool[];
 	/**
 	 * False: what its tools return is Iyye's own experiment, never evidence about the world. The model sees
@@ -198,7 +200,8 @@ export class ToolBroker {
 		if (kit.effect === "read") return true;
 		if (kit.effect === "private") return principal === "owner" || principal === "iyye";
 		if (kit.effect === "self") return principal === "owner" || principal === "contact";
-		if (kit.effect === "trusted") return principal === "owner" || (principal === "contact" && trusted);
+		if (kit.effect === "trusted" || kit.effect === "send")
+			return principal === "owner" || (principal === "contact" && trusted);
 		if (kit.effect === "compute")
 			return principal === "owner" || (principal === "iyye" && !scope.startsWith(PLAN_STEP_SCOPE));
 		// A plan step runs a question a contact may have written, approved as a read-only look (0.006 C4): never `reach`.

@@ -6,7 +6,12 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseWindow, type RestWindow } from "./kernel/rhythm.ts";
-import { parseRemoteModel, RemoteConfigError, type RemoteModelConfig } from "./models/remote-config.ts";
+import {
+	parseRemoteModel,
+	parseThinkingModel,
+	RemoteConfigError,
+	type RemoteModelConfig,
+} from "./models/remote-config.ts";
 
 /** iyye_2/ — the project root holding config/ and the host package. */
 export const PROJECT_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -30,6 +35,18 @@ export interface Config {
 		proxyPort: number;
 		/** Questions the owner's turns may hand to it a day (`ask_thinking_model`, IYYE2_THINKING_DAILY_MAX; 0 turns it off). */
 		thinkingDailyMax: number;
+		/**
+		 * The thinking tool's own model (IYYE2_THINKING_MODEL, 2026-10-14): any OpenAI-compatible server on another
+		 * of the owner's machines, through its own pass-through on 127.0.0.1:`thinkingProxyPort`, with the key and
+		 * certificate in `<state>/remote/<endpoint>/`. Unset: the thinking tool uses `model`.
+		 */
+		thinkingModel: RemoteModelConfig | null;
+		thinkingProxyPort: number;
+		/**
+		 * `max_tokens` for one thinking question, reasoning included (IYYE2_THINKING_MAX_TOKENS). Null: 65536 for
+		 * `thinkingModel`, the registry's output cap for `model`. There is no time limit; this bounds only length.
+		 */
+		thinkingMaxTokens: number | null;
 	};
 	routerPort: number;
 	modelsRegistry: string;
@@ -90,6 +107,23 @@ export interface Config {
 	facts: { extract: boolean; merge: boolean; maxStep: number; minP: number; turns: "hindsight" | "ledger" };
 	/** Messages Iyye sends to people per day (plan 0.008): in all, per trusted contact, on Iyye's own. */
 	send: { dailyMax: number; contactDailyMax: number; iyyeDailyMax: number };
+	/**
+	 * Email (plan 0.014): `email_send` for the owner and trusted contacts while `<state>/email/` holds Iyye's own
+	 * mailbox (`IYYE2_EMAIL=0` turns it off); mails per day in all and per trusted contact.
+	 */
+	email: {
+		on: boolean;
+		dailyMax: number;
+		contactDailyMax: number;
+		/**
+		 * Receiving (plan 0.015; `IYYE2_EMAIL_INBOUND=0` turns it off): mails a day admitted from untrusted
+		 * senders in all, from one untrusted sender, and from one trusted sender.
+		 */
+		inbound: boolean;
+		untrustedDailyMax: number;
+		senderDailyMax: number;
+		trustedSenderDailyMax: number;
+	};
 	defaultModel: string;
 	/** Seconds between router health checks. */
 	healthIntervalS: number;
@@ -273,9 +307,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		llamaServerArgsPrefix: [],
 		llamaLoadMode: loadMode(env.IYYE2_LLAMA_LOAD_MODE),
 		remote: {
-			model: remoteModel(env.IYYE2_REMOTE_MODEL),
+			model: remoteModel(() => parseRemoteModel(env.IYYE2_REMOTE_MODEL)),
 			proxyPort: int(env, "IYYE2_REMOTE_PROXY_PORT", 8183, 1, 65535),
 			thinkingDailyMax: int(env, "IYYE2_THINKING_DAILY_MAX", 20, 0, 1000),
+			thinkingModel: remoteModel(() => parseThinkingModel(env.IYYE2_THINKING_MODEL)),
+			thinkingProxyPort: int(env, "IYYE2_THINKING_PROXY_PORT", 8189, 1, 65535),
+			thinkingMaxTokens: env.IYYE2_THINKING_MAX_TOKENS
+				? int(env, "IYYE2_THINKING_MAX_TOKENS", 0, 1024, 1_000_000)
+				: null,
 		},
 		routerPort,
 		modelsRegistry: absPath(env.IYYE2_MODELS_REGISTRY || resolve(PROJECT_ROOT, "config/models.json"), cwd),
@@ -334,6 +373,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			dailyMax: int(env, "IYYE2_SEND_DAILY_MAX", 20, 0, 1000),
 			contactDailyMax: int(env, "IYYE2_SEND_CONTACT_DAILY_MAX", 10, 0, 1000),
 			iyyeDailyMax: int(env, "IYYE2_SEND_IYYE_DAILY_MAX", 5, 0, 1000),
+		},
+		email: {
+			on: env.IYYE2_EMAIL !== "0",
+			dailyMax: int(env, "IYYE2_EMAIL_DAILY_MAX", 20, 0, 1000),
+			contactDailyMax: int(env, "IYYE2_EMAIL_CONTACT_DAILY_MAX", 5, 0, 1000),
+			inbound: env.IYYE2_EMAIL !== "0" && env.IYYE2_EMAIL_INBOUND !== "0",
+			untrustedDailyMax: int(env, "IYYE2_EMAIL_UNTRUSTED_DAILY_MAX", 20, 0, 10_000),
+			senderDailyMax: int(env, "IYYE2_EMAIL_SENDER_DAILY_MAX", 5, 0, 10_000),
+			trustedSenderDailyMax: int(env, "IYYE2_EMAIL_TRUSTED_SENDER_DAILY_MAX", 50, 0, 10_000),
 		},
 		adenosine: {
 			perHour: fraction(env, "IYYE2_ADENOSINE_PER_HOUR", 0.02),
@@ -398,9 +446,9 @@ function loadMode(v: string | undefined): string | null {
 	return m;
 }
 
-function remoteModel(v: string | undefined): RemoteModelConfig | null {
+function remoteModel(parse: () => RemoteModelConfig | null): RemoteModelConfig | null {
 	try {
-		return parseRemoteModel(v);
+		return parse();
 	} catch (err) {
 		if (err instanceof RemoteConfigError) throw new ConfigError(err.message);
 		throw err;

@@ -58,6 +58,8 @@ export interface CommandContext {
 	} | null;
 	/** /sent: messages sent for the owner (plan 0.008). */
 	sentReport?: (() => string) | null;
+	/** `/email` (plan 0.015): mail received and what was decided. */
+	emailReport?: (() => string) | null;
 	/** /self, /motivation (plan 0.010 M0b, M0). */
 	self?: { command(args: string[], by: string): string } | null;
 	/** /pause|/resume <motivation>, /self questions|accept|dismiss (plan 0.010 M1). */
@@ -116,7 +118,7 @@ const HELP = [
 	"/trust <contact> — mark a contact as trusted (name, Telegram user id, or id): they may then ask Iyye to message anyone it knows",
 	"/link <account> owner|<person> — this account is you (owner) or that person: shared conversation and memory",
 	"/unlink <account> — the account is its own contact again",
-	'/person <person> — what Iyye knows about someone: accounts, trust, your notes, relationship hypotheses; /person add <name> ["note"] — someone who has not written yet',
+	'/person <person> — what Iyye knows about someone: accounts, trust, your notes, relationship hypotheses; /person add <name> ["note"] — someone who has not written yet; /person email <person|me> <address|none> — the address email_send uses',
 	"/note <person> <text> — a note about someone, for your conversations only; /note share|private|delete <id> — let them see it too (Iyye may repeat it to them), or not",
 	"/untrust <contact> — remove a contact's trust",
 	"/tools — toolkits, who may use them, and the latest tool calls",
@@ -131,6 +133,7 @@ const HELP = [
 	"/cancel <id> — cancel a reminder (yours or a contact's)",
 	"/plans — plans and their states; /plan <id> — its steps and evidence",
 	"/sent — messages Iyye sent to people for you, with their delivery",
+	"/email — mail Iyye received, and whether it answered",
 	"/self — what Iyye knows about itself (hardware, power, sleep, versions, place, people) and its gaps; /self set place|expected-hardware <text>, /self relation <contact> <text>",
 	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened",
 	"/motivation report [days] — what each motivation opened, tried, resolved and was held back from (the trial period by default); /motivation trace <id>; /motivation useful <id> yes|no",
@@ -181,6 +184,7 @@ const COMMANDS = new Set([
 	"/cancel",
 	"/plans",
 	"/sent",
+	"/email",
 	"/self",
 	"/motivation",
 	"/facts",
@@ -319,6 +323,8 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 			};
 		case "/sent":
 			return { handled: true, reply: ctx.sentReport ? ctx.sentReport() : "sending is not available here" };
+		case "/email":
+			return { handled: true, reply: ctx.emailReport ? ctx.emailReport() : "receiving email is not set up" };
 		case "/plans":
 		case "/plan": {
 			if (!ctx.plans) return { handled: true, reply: "plans are not available here" };

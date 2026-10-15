@@ -102,7 +102,15 @@ export function commitmentsOfReply(db: Db, actionId: string): string[] {
 			)
 			.all(actionId) as { id: string }[]
 	).map((r) => `send:${r.id}`);
-	return [...reminders, ...plans, ...sends];
+	// …and an email it sent (plan 0.014): "I emailed Bob" is supported.
+	const mails = (
+		db
+			.prepare(
+				"SELECT m.id FROM sent_emails m JOIN actions a ON a.event_id = m.requested_event_id WHERE a.id = ? ORDER BY m.created_at",
+			)
+			.all(actionId) as { id: string }[]
+	).map((r) => `email:${r.id}`);
+	return [...reminders, ...plans, ...sends, ...mails];
 }
 
 const SINCE_KEY = "decisions.reply_review.since";

@@ -98,7 +98,15 @@ export interface SchedulerDeps {
 	 * voice. A later owner change applies from the next turn. Never throws into the scheduler.
 	 */
 	bindProfile?: ((jobId: string, event: EventRow) => BoundProfile | null) | null;
+	/**
+	 * Mail (plan 0.015): answered by one direct model call with no tools, never a Pi turn. `NO_REPLY` from it
+	 * means Iyye read the mail and decided not to answer. Without it, mail jobs fail (and send nothing).
+	 */
+	email?: { turn(event: EventRow, model: string, signal: AbortSignal): Promise<TurnResult> } | null;
 }
+
+/** What the email responder returns for a mail it decided not to answer. */
+export const EMAIL_NO_REPLY = "NO_REPLY";
 
 /** A turn's bound profile; the scheduler passes it through without reading more than `mind`. */
 export interface BoundProfile {
@@ -134,6 +142,7 @@ export class Scheduler {
 			onDeviceTime: null,
 			rephrase: null,
 			bindProfile: null,
+			email: null,
 			...deps,
 		};
 		this.d.models.onRouterLost(() => this.abortCurrent("router_lost"));
@@ -228,7 +237,8 @@ export class Scheduler {
 				failJob(this.d.db, job.id, this.iso());
 				continue;
 			}
-			const model = this.d.models.selected(event.channel);
+			// A mail is answered with the Telegram model (plan 0.015): email has no model of its own.
+			const model = this.d.models.selected(event.channel === "email" ? "telegram" : event.channel);
 			const lease = model
 				? await this.d.models.acquire(model)
 				: { ok: false, message: `no model is selected for ${event.channel}` };
@@ -247,7 +257,8 @@ export class Scheduler {
 				const releaseDevice = await this.d.device.acquire(`chat:${job.id}`);
 				const t0 = this.d.now().getTime();
 				try {
-					await this.run(job, event, lease);
+					if (event.channel === "email") await this.runEmail(job, event, lease);
+					else await this.run(job, event, lease);
 				} finally {
 					releaseDevice();
 					try {
@@ -264,11 +275,92 @@ export class Scheduler {
 		return false;
 	}
 
-	/** Owner first, oldest first, with aged contact jobs ahead of everything else. */
+	/**
+	 * Owner first, oldest first, with aged contact jobs ahead of everything else. Mail from a sender the owner
+	 * does not trust (plan 0.015) comes after everything and never ages ahead: anyone may write, and a burst
+	 * of mail must not hold up a conversation. A trusted sender's mail is ordered as their chats are.
+	 */
 	ordered(jobs: JobRow[]): JobRow[] {
 		const now = this.d.now().getTime();
-		const rank = (j: JobRow) => (j.scope === "owner" ? 1 : now - Date.parse(j.created_at) > this.d.agingMs ? 2 : 0);
+		const untrustedMail = new Set(
+			(
+				this.d.db
+					.prepare(
+						`SELECT j.id FROM jobs j JOIN events e ON e.id = j.trigger_event_id
+						 LEFT JOIN contacts c ON c.id = e.principal_contact_id
+						 WHERE j.status = 'queued' AND e.channel = 'email' AND coalesce(c.trusted, 0) = 0`,
+					)
+					.all() as { id: string }[]
+			).map((r) => r.id),
+		);
+		const rank = (j: JobRow) =>
+			untrustedMail.has(j.id)
+				? -1
+				: j.scope === "owner"
+					? 1
+					: now - Date.parse(j.created_at) > this.d.agingMs
+						? 2
+						: 0;
 		return [...jobs].sort((a, b) => rank(b) - rank(a) || Date.parse(a.created_at) - Date.parse(b.created_at));
+	}
+
+	/** A mail (plan 0.015): one direct model call, then a reply on the mail's thread, or nothing. */
+	private async runEmail(job: JobRow, event: EventRow, lease: ModelLease): Promise<void> {
+		if (!this.d.email) {
+			await this.fail(job, event, "receiving email is not set up");
+			return;
+		}
+		markJobRunning(this.d.db, job.id, lease.model, new Date(this.d.now().getTime() + this.d.leaseMs).toISOString());
+		const abort = new AbortController();
+		this.current = { jobId: job.id, abort, reason: null };
+		const renew = setInterval(
+			() => renewLease(this.d.db, job.id, new Date(this.d.now().getTime() + this.d.leaseMs).toISOString()),
+			Math.max(1000, Math.floor(this.d.leaseMs / 3)),
+		);
+		renew.unref();
+		let result: TurnResult;
+		let reason: "router_lost" | "shutdown" | null = null;
+		try {
+			result = await this.d.email.turn(event, lease.model, abort.signal);
+		} finally {
+			clearInterval(renew);
+			reason = this.current?.reason ?? null;
+			this.current = null;
+		}
+		if (reason === "shutdown") {
+			requeueJob(this.d.db, job.id);
+			return;
+		}
+		if (reason === "router_lost" || !lease.valid()) {
+			await this.fail(getJob(this.d.db, job.id)!, event, "the model stopped while answering");
+			return;
+		}
+		if (!result.ok) {
+			await this.fail(job, event, `${result.reason}: ${result.message}`);
+			return;
+		}
+		const at = this.iso();
+		if (result.text === EMAIL_NO_REPLY) {
+			this.d.db.transaction(() => {
+				this.d.db
+					.prepare("UPDATE jobs SET status = 'settled', settled_at = ?, lease_until = NULL WHERE id = ?")
+					.run(at, job.id);
+				this.d.db
+					.prepare("UPDATE events SET status = 'ignored' WHERE id = ? AND status = 'admitted'")
+					.run(event.id);
+				this.d.db
+					.prepare(
+						"UPDATE email_inbox SET verdict = 'ignored', reason = 'no reply needed', decided_at = ? WHERE event_id = ?",
+					)
+					.run(at, event.id);
+			})();
+			this.d.log.info("scheduler: a mail needed no reply", { jobId: job.id });
+			return;
+		}
+		this.d.db
+			.prepare("UPDATE email_inbox SET verdict = 'replied', reason = NULL, decided_at = ? WHERE event_id = ?")
+			.run(at, event.id);
+		await this.d.outbox.deliver({ jobId: job.id, event, kind: "reply", content: result.text });
 	}
 
 	private async run(job: JobRow, event: EventRow, lease: ModelLease): Promise<void> {
@@ -301,7 +393,7 @@ export class Scheduler {
 				signal: abort.signal,
 				// Who asked and the exact route back: a reminder made in this turn can reach only this chat.
 				turn: {
-					route: Outbox.routeFor(event),
+					route: Outbox.chatRouteFor(event),
 					contactId: event.principal_contact_id ?? "",
 					eventId: event.id,
 				},
@@ -358,6 +450,28 @@ export class Scheduler {
 	}
 
 	async fail(job: JobRow, event: EventRow, reason: string): Promise<void> {
+		if (event.channel === "email") {
+			// Never "sorry" by mail (plan 0.015): the owner sees the failure in /email. A trusted sender's mail
+			// left unanswered is a failed job like any conversation's (it counts in the motivations and the day);
+			// a stranger's is only recorded, so spam can never raise a need.
+			const at = this.iso();
+			this.d.db.transaction(() => {
+				if (getContact(this.d.db, event.principal_contact_id ?? "")?.trusted === 1) failJob(this.d.db, job.id, at);
+				else {
+					this.d.db
+						.prepare("UPDATE jobs SET status = 'settled', settled_at = ?, lease_until = NULL WHERE id = ?")
+						.run(at, job.id);
+					this.d.db
+						.prepare("UPDATE events SET status = 'ignored' WHERE id = ? AND status = 'admitted'")
+						.run(event.id);
+				}
+				this.d.db
+					.prepare("UPDATE email_inbox SET verdict = 'failed', reason = ?, decided_at = ? WHERE event_id = ?")
+					.run(reason.slice(0, 300), at, event.id);
+			})();
+			this.d.log.warn("scheduler: a mail could not be answered", { jobId: job.id, reason });
+			return;
+		}
 		failJob(this.d.db, job.id, this.iso());
 		this.d.log.warn("scheduler: job failed", { jobId: job.id, reason });
 		// A notice is not the reply: it never marks the event answered.

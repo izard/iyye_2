@@ -37,7 +37,16 @@ import { type EventRow, getEvent } from "../state/events.ts";
 import { recordEpisode } from "../state/stm.ts";
 import { splitOffsets } from "./split.ts";
 
-export type Route = { channel: "web"; contact: "owner" } | { channel: "telegram"; chatId: number };
+/** A conversation's route: where a turn came from and where its reply goes. */
+export type ChatRoute = { channel: "web"; contact: "owner" } | { channel: "telegram"; chatId: number };
+/**
+ * An email (plan 0.014): one address and its subject; a reply to a mail (plan 0.015) also names the mail it
+ * answers. Never the route of a turn with tools: a mail's turn has none.
+ */
+export type EmailRoute = { channel: "email"; to: string; subject: string; inReplyTo?: string; references?: string };
+export type Route = ChatRoute | EmailRoute;
+/** Channels the outbox delivers on. */
+export type OutboundChannel = Channel;
 export type ActionKind = "reply" | "failure_notice";
 export type ActionState = "prepared" | "queued" | "sending" | "delivered" | "failed" | "unknown" | "terminal_failure";
 
@@ -69,7 +78,7 @@ export interface SendResult {
 }
 
 export interface ChannelAdapter {
-	readonly channel: Channel;
+	readonly channel: OutboundChannel;
 	/** Longest chunk the channel accepts, in UTF-16 code units (Infinity: never split). */
 	readonly maxChunkChars: number;
 	/** Return ok:false for a definite non-delivery; throw only when the outcome is uncertain. */
@@ -140,9 +149,34 @@ export interface OutboxDeps {
 	held?: () => boolean;
 }
 
+/** A reply to a mail: to its sender, "Re: " its subject, threaded by its Message-ID. */
+function emailReplyRoute(event: EventRow): EmailRoute {
+	const p = JSON.parse(event.payload_json) as {
+		from?: { address?: unknown };
+		subject?: unknown;
+		messageId?: unknown;
+		references?: unknown;
+	};
+	const to = typeof p.from?.address === "string" ? p.from.address : "";
+	if (!to) throw new Error(`mail ${event.id} has no sender to reply to`);
+	const subject = typeof p.subject === "string" && p.subject.trim() ? p.subject.trim() : "your message";
+	const id = typeof p.messageId === "string" ? p.messageId : null;
+	const refs = [...(typeof p.references === "string" ? p.references.split(/\s+/) : []), ...(id ? [id] : [])]
+		.filter(Boolean)
+		.slice(-10)
+		.join(" ");
+	return {
+		channel: "email",
+		to,
+		subject: /^re:/i.test(subject) ? subject : `Re: ${subject}`,
+		...(id ? { inReplyTo: id } : {}),
+		...(refs ? { references: refs } : {}),
+	};
+}
+
 export class Outbox {
 	private readonly d: Required<OutboxDeps>;
-	private readonly adapters = new Map<Channel, ChannelAdapter>();
+	private readonly adapters = new Map<OutboundChannel, ChannelAdapter>();
 	private dispatcher: NodeJS.Timeout | null = null;
 	private readonly inFlight = new Set<Promise<unknown>>();
 	private dispatching = false;
@@ -161,9 +195,19 @@ export class Outbox {
 		for (const a of deps.adapters) this.adapters.set(a.channel, a);
 	}
 
-	/** The only route a reply to this event may take: the channel and chat it came from. */
+	/**
+	 * The only route a reply to this event may take: the channel and chat it came from; for a mail (plan
+	 * 0.015), its sender's address, in the same thread.
+	 */
 	static routeFor(event: EventRow): Route {
+		if (event.channel === "email") return emailReplyRoute(event);
+		return Outbox.chatRouteFor(event);
+	}
+
+	/** The route of a conversation turn (web or Telegram); a mail's event has none. */
+	static chatRouteFor(event: EventRow): ChatRoute {
 		if (event.channel === "web") return { channel: "web", contact: "owner" };
+		if (event.channel !== "telegram") throw new Error(`event ${event.id} is not a conversation turn`);
 		const payload = JSON.parse(event.payload_json) as { message?: { chatId?: unknown } };
 		const chatId = payload.message?.chatId;
 		if (typeof chatId !== "number") throw new Error(`event ${event.id} has no Telegram chat to reply to`);
@@ -529,10 +573,30 @@ export class Outbox {
 					"UPDATE actions SET state = 'terminal_failure', last_error = ?, next_attempt_at = NULL WHERE id = ?",
 				)
 				.run(error, row.id);
+			// A reply to a mail (plan 0.015) that could not go out: recorded in the inbox. A stranger's is only
+			// recorded (the job settled, the event `ignored`), so a bounce from a stranger never raises a need.
+			const mail = row.kind === "reply" && JSON.parse(row.route_json).channel === "email";
+			const stranger =
+				mail &&
+				(
+					this.d.db
+						.prepare(
+							"SELECT coalesce(c.trusted, 0) AS t FROM events e LEFT JOIN contacts c ON c.id = e.principal_contact_id WHERE e.id = ?",
+						)
+						.get(row.event_id) as { t: number } | undefined
+				)?.t !== 1;
+			if (mail)
+				this.d.db
+					.prepare("UPDATE email_inbox SET verdict = 'failed', reason = ?, decided_at = ? WHERE event_id = ?")
+					.run(`the reply could not be sent: ${error.slice(0, 200)}`, at, row.event_id);
 			if (row.kind === "reply" && row.job_id) {
 				this.d.db
-					.prepare("UPDATE jobs SET status = 'failed', settled_at = ?, lease_until = NULL WHERE id = ?")
-					.run(at, row.job_id);
+					.prepare(`UPDATE jobs SET status = ?, settled_at = ?, lease_until = NULL WHERE id = ?`)
+					.run(stranger ? "settled" : "failed", at, row.job_id);
+				if (stranger)
+					this.d.db
+						.prepare("UPDATE events SET status = 'ignored' WHERE id = ? AND status = 'admitted'")
+						.run(row.event_id);
 			}
 			if (row.commitment_id) settleCommitment(this.d.db, row.commitment_id, "failed", at, error);
 		})();
@@ -549,6 +613,17 @@ export class Outbox {
 			void this.notifyOwner({
 				key: `send-failed:${sentId}`,
 				content: `Your message to ${JSON.stringify((to?.display_name ?? "a contact").slice(0, 64))} could not be delivered: ${error.slice(0, 200)}`,
+			}).catch(() => undefined);
+		}
+		if (row.idempotency_key.startsWith("notice:email:")) {
+			// An email (plan 0.014) failed for good: the owner is told, once (also for a mail a contact asked for).
+			const mailId = row.idempotency_key.slice("notice:email:".length);
+			const m = this.d.db.prepare("SELECT address FROM sent_emails WHERE id = ?").get(mailId) as
+				| { address: string }
+				| undefined;
+			void this.notifyOwner({
+				key: `email-failed:${mailId}`,
+				content: `The email to ${m?.address ?? "an address"} could not be delivered: ${error.slice(0, 200)}`,
 			}).catch(() => undefined);
 		}
 		if (row.commitment_id) {

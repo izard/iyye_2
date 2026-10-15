@@ -20,6 +20,7 @@
 
 import type { NightOutcome } from "../memory/night.ts";
 import type { Db } from "../state/db.ts";
+import { emailDayLine } from "../state/email-inbox.ts";
 
 export interface DayWindow {
 	day: number;
@@ -148,6 +149,34 @@ export function buildDigest(db: Db, w: DayWindow): string {
 		for (const r of sent) askers.set(r.asker, (askers.get(r.asker) ?? 0) + 1);
 		lines.push(
 			`Messages Iyye sent to people: ${parts.join("; ")} (asked by ${[...askers].map(([a, n]) => `${a} ${n}`).join(", ")}).`,
+		);
+	}
+	// Mail received (plan 0.015): counts only.
+	const received = emailDayLine(db, w.from, w.to);
+	if (received) lines.push(received);
+	// Emails (plan 0.014): counts and who asked, never the words or the addresses.
+	const mails = db
+		.prepare(
+			`SELECT a.state, CASE m.requested_by WHEN 'owner' THEN 'the owner' ELSE coalesce(r.display_name, '?') END AS asker
+			 FROM sent_emails m JOIN actions a ON a.idempotency_key = 'notice:email:' || m.id
+			 LEFT JOIN contacts r ON r.id = m.requester_contact_id
+			 WHERE m.created_at >= ? AND m.created_at < ?`,
+		)
+		.all(w.from, w.to) as { state: string; asker: string }[];
+	if (mails.length) {
+		const n = (states: string[]) => mails.filter((m) => states.includes(m.state)).length;
+		const parts = [
+			n(["delivered"]) ? `accepted by the mail server ${n(["delivered"])}` : "",
+			n(["terminal_failure"]) ? `could not be sent ${n(["terminal_failure"])}` : "",
+			n(["unknown"]) ? `may not have gone out ${n(["unknown"])}` : "",
+			n(["queued", "sending", "failed", "prepared"])
+				? `still on the way ${n(["queued", "sending", "failed", "prepared"])}`
+				: "",
+		].filter(Boolean);
+		const askers = new Map<string, number>();
+		for (const m of mails) askers.set(m.asker, (askers.get(m.asker) ?? 0) + 1);
+		lines.push(
+			`Emails Iyye sent: ${parts.join("; ")} (asked by ${[...askers].map(([a, k]) => `${a} ${k}`).join(", ")}).`,
 		);
 	}
 	const low = db

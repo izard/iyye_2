@@ -20,6 +20,7 @@ import { silentLogger } from "../src/log.ts";
 import { renderPreset, serverCliArgs } from "../src/models/preset.ts";
 import { parseRegistry, type Registry } from "../src/models/registry.ts";
 import { addRemoteModel, parseRemoteModel, RemoteModels } from "../src/models/remote.ts";
+import { parseThinkingModel } from "../src/models/remote-config.ts";
 import { getBackgroundJob, insertBackgroundJob } from "../src/state/background.ts";
 import { openDb } from "../src/state/db.ts";
 import { freePort, managerRig, type Sandbox, sandbox } from "./model-helpers.ts";
@@ -33,6 +34,8 @@ interface FakeEndpoint {
 	requests: { auth: string | undefined; body: Record<string, unknown> }[];
 	/** What /props reports. */
 	props: { file: string; ctx: number };
+	/** What /v1/models lists (an OpenAI-compatible server's models). */
+	models: Record<string, unknown>[];
 	/** Drop the next completion's connection after its first chunk. */
 	dropNext: boolean;
 	server: Server;
@@ -45,6 +48,7 @@ async function fakeEndpoint(cert = "remote"): Promise<FakeEndpoint> {
 		url: `https://127.0.0.1:${port}`,
 		requests: [],
 		props: { file: "tak.gguf", ctx: 8192 },
+		models: [{ id: "/Users/owner/Downloads/flash-q4", reasoning_parser: "qwen3" }],
 		dropNext: false,
 		server: null as unknown as Server,
 		close: () => new Promise((r) => ep.server.close(() => r())),
@@ -60,6 +64,7 @@ async function fakeEndpoint(cert = "remote"): Promise<FakeEndpoint> {
 				return;
 			}
 			if (req.url === "/health") return void res.writeHead(200).end('{"status":"ok"}');
+			if (req.url === "/v1/models") return void res.writeHead(200).end(JSON.stringify({ data: ep.models }));
 			if (req.url === "/props")
 				return void res.writeHead(200).end(
 					JSON.stringify({
@@ -139,6 +144,7 @@ function post(port: number, body: unknown): Promise<{ status: number; text: stri
 
 test("IYYE2_REMOTE_MODEL names a registry model, a machine and an https URL", () => {
 	assert.deepEqual(parseRemoteModel("qwen38-27b-tak@mbp=https://192.168.1.177:8190"), {
+		kind: "llama",
 		model: "qwen38-27b-tak",
 		endpoint: "mbp",
 		url: "https://192.168.1.177:8190",
@@ -400,5 +406,80 @@ describe("background work on another machine's model", () => {
 		const step = getBackgroundJob(db, id)!;
 		assert.equal(step.status, "paused");
 		assert.equal(step.pauses, 0);
+	});
+});
+
+describe("the thinking model: any OpenAI-compatible server, for the thinking tool only (2026-10-14)", () => {
+	let ep: FakeEndpoint;
+	let remote: RemoteModels;
+	let port: number;
+
+	async function start(endpoint: FakeEndpoint, model = "flash-q4") {
+		ep = endpoint;
+		const c = parseThinkingModel(`${model}@mbp=${ep.url}`)!;
+		port = await freePort();
+		remote = new RemoteModels({
+			config: c,
+			registry: { models_dir: "/", defaults: {}, models: [] } as unknown as Registry,
+			port,
+			cert: () => CERT,
+			key: () => KEY,
+			log: silentLogger,
+			healthIntervalMs: 60_000,
+			healthTimeoutMs: 2000,
+		});
+		await remote.start();
+	}
+
+	afterEach(async () => {
+		await remote?.stop();
+		await ep?.close();
+	});
+
+	test("IYYE2_THINKING_MODEL has the same shape, never plain HTTP", () => {
+		assert.deepEqual(parseThinkingModel("qwen3.8-flash-next-q4@mbp=https://192.168.1.177:8191"), {
+			kind: "openai",
+			model: "qwen3.8-flash-next-q4",
+			endpoint: "mbp",
+			url: "https://192.168.1.177:8191",
+		});
+		assert.equal(parseThinkingModel(undefined), null);
+		assert.throws(() => parseThinkingModel("x@mbp=http://192.168.1.177:8000"), /IYYE2_THINKING_MODEL must look like/);
+	});
+
+	test("up when /v1/models lists it (a path id by its last part); the call goes out under the server's own id", async () => {
+		await start(await fakeEndpoint());
+		assert.equal(remote.status.state, "up", remote.status.detail);
+		assert.equal(remote.name, "flash-q4@mbp");
+		const lease = remote.acquire("flash-q4@mbp");
+		assert.ok("release" in lease);
+		const r = await post(port, { model: "flash-q4@mbp", stream: true, messages: [{ role: "user", content: "hi" }] });
+		assert.equal(r.status, 200);
+		assert.equal(ep.requests[0]!.body.model, "/Users/owner/Downloads/flash-q4");
+		assert.equal(ep.requests[0]!.auth, `Bearer ${KEY}`);
+		lease.release();
+	});
+
+	test("refused: another model, or a server that leaves reasoning in the answer", async () => {
+		await start(await fakeEndpoint(), "other");
+		assert.equal(remote.status.state, "misconfigured");
+		assert.match(remote.status.detail, /serves flash-q4, not other/);
+		assert.ok(!("release" in remote.acquire("other@mbp")));
+		await remote.stop();
+		await ep.close();
+
+		const mixed = await fakeEndpoint();
+		mixed.models = [{ id: "flash-q4", reasoning_parser: null }];
+		await start(mixed);
+		assert.equal(remote.status.state, "misconfigured");
+		assert.match(remote.status.detail, /does not separate the model's reasoning/);
+		await remote.stop();
+		await ep.close();
+
+		// A server that does not report a reasoning parser at all is taken at its word.
+		const plain = await fakeEndpoint();
+		plain.models = [{ id: "flash-q4" }];
+		await start(plain);
+		assert.equal(remote.status.state, "up");
 	});
 });

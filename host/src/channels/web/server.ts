@@ -312,7 +312,9 @@ export class WebServer {
 					recipient:
 						route.channel === "web"
 							? "owner (web chat)"
-							: `${contact?.display_name ?? "unknown contact"} (Telegram)`,
+							: route.channel === "email"
+								? `${route.to} (email)`
+								: `${contact?.display_name ?? "unknown contact"} (Telegram)`,
 					created_at: a.created_at,
 					attempts: a.attempts,
 					next_attempt_at: a.next_attempt_at,

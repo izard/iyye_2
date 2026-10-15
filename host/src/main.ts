@@ -16,6 +16,10 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { EmailPoller } from "./channels/email/poller.ts";
+import { EMAIL_REPLY_MAX_TOKENS, EmailResponder } from "./channels/email/responder.ts";
+import { EmailSender } from "./channels/email/sender.ts";
+import { emailDir, emailSettingsProblem, loadEmailSettings, loadInboundSettings } from "./channels/email/settings.ts";
 import { TelegramFiles } from "./channels/telegram/files.ts";
 import { MAX_IMAGE_BYTES, TelegramPoller } from "./channels/telegram/poller.ts";
 import { TelegramSender } from "./channels/telegram/sender.ts";
@@ -43,6 +47,7 @@ import { FactNight } from "./facts/night.ts";
 import { createLocalModelRuntime, outputCap, thinkingLevelFor } from "./integration/pi/runtime.ts";
 import { PiConversations } from "./integration/pi/sessions.ts";
 import { Adenosine } from "./kernel/adenosine.ts";
+import { admitEmail } from "./kernel/admission.ts";
 import { BackgroundWorker } from "./kernel/background.ts";
 import { type CommandExtras, handleOwnerCommand, isCommand } from "./kernel/commands.ts";
 import { CommitmentClock } from "./kernel/commitments.ts";
@@ -93,6 +98,7 @@ import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
+import { emailInboxReport, spoofNoticesToday } from "./state/email-inbox.ts";
 import { getJob } from "./state/jobs.ts";
 import { getKv } from "./state/kv.ts";
 import { DAY_KEYS, seedSelectedModel } from "./state/models.ts";
@@ -100,6 +106,7 @@ import { recentSentNote, sentReport } from "./state/sent.ts";
 import { recordIyyeEntry } from "./state/stm.ts";
 import { appendFeed } from "./state/web.ts";
 import { ToolBroker, type Toolkit } from "./tools/broker.ts";
+import { emailToolkit } from "./tools/email.ts";
 import { GuardedHttp } from "./tools/http.ts";
 import { memorySearchTool } from "./tools/memory-search.ts";
 import { iyyeMessenger, messagingToolkit } from "./tools/messaging.ts";
@@ -164,6 +171,18 @@ async function main(): Promise<number> {
 					log,
 				})
 			: null;
+	// The thinking tool's own model (2026-10-14): an OpenAI-compatible server, its own pass-through.
+	const thinkingConfig = config.remote.thinkingModel;
+	const thinkingRemote = thinkingConfig
+		? new RemoteModels({
+				config: thinkingConfig,
+				registry,
+				port: config.remote.thinkingProxyPort,
+				cert: secretFile(join(config.stateDir, "remote", thinkingConfig.endpoint, "cert.pem")),
+				key: secretFile(join(config.stateDir, "remote", thinkingConfig.endpoint, "api_key")),
+				log,
+			})
+		: null;
 	const router = new RouterProcess({
 		command: config.llamaServer,
 		argsPrefix: config.llamaServerArgsPrefix,
@@ -277,20 +296,49 @@ async function main(): Promise<number> {
 		: null;
 	// Owner decision 2026-10-09: the owner's turns may ask the other machine's reasoning model one question
 	// (effect `act`, owner-only). `remoteDevice` and `adenosine` are created below and read only when it runs.
+	// IYYE2_THINKING_MODEL, when set, is the thinking tool's model instead; on the background model's machine it
+	// shares that machine's device slot, elsewhere it has its own.
+	// 2026-10-14: a hard question took 16384 tokens of reasoning (874 s) without reaching an answer.
+	const THINKING_MODEL_MAX_TOKENS = 65_536;
 	const remoteSpec = remote ? registry.models.find((m) => m.name === remote.name) : undefined;
+	const thinkingEnergy = {
+		deviceTime: (kind: "chat", ms: number, ref: string) => adenosine.deviceTime(kind, ms, ref),
+	};
 	const thinkingKit =
-		remote && remoteSpec && config.remote.thinkingDailyMax > 0
-			? thinkingToolkit({
-					db,
-					model: remote.name,
-					machine: remote.endpoint,
-					models,
-					device: { acquire: (label) => remoteDevice.acquire(label) },
-					complete: thinkComplete(() => remote.proxyUrl, outputCap(registry.defaults, remoteSpec)),
-					dailyMax: config.remote.thinkingDailyMax,
-					energy: { deviceTime: (kind, ms, ref) => adenosine.deviceTime(kind, ms, ref) },
-				})
-			: null;
+		config.remote.thinkingDailyMax <= 0
+			? null
+			: thinkingRemote
+				? thinkingToolkit({
+						db,
+						model: thinkingRemote.name,
+						machine: thinkingRemote.endpoint,
+						models: { acquire: async (name) => thinkingRemote.acquire(name) },
+						device: {
+							acquire: (label) =>
+								(remote?.endpoint === thinkingRemote.endpoint ? remoteDevice : thinkingDevice).acquire(label),
+						},
+						complete: thinkComplete(
+							() => thinkingRemote.proxyUrl,
+							config.remote.thinkingMaxTokens ?? THINKING_MODEL_MAX_TOKENS,
+						),
+						dailyMax: config.remote.thinkingDailyMax,
+						energy: thinkingEnergy,
+					})
+				: remote && remoteSpec
+					? thinkingToolkit({
+							db,
+							model: remote.name,
+							machine: remote.endpoint,
+							models,
+							device: { acquire: (label) => remoteDevice.acquire(label) },
+							complete: thinkComplete(
+								() => remote.proxyUrl,
+								config.remote.thinkingMaxTokens ?? outputCap(registry.defaults, remoteSpec),
+							),
+							dailyMax: config.remote.thinkingDailyMax,
+							energy: thinkingEnergy,
+						})
+					: null;
 	// Images people send on Telegram (owner decision 2026-10-09): the owner and trusted contacts (effect `trusted`).
 	const visionSpec = config.vision.model ? registry.models.find((m) => m.name === config.vision.model) : undefined;
 	const visionKit =
@@ -320,6 +368,18 @@ async function main(): Promise<number> {
 	if (sandboxProblem) log.info("sandbox: not available", { why: sandboxProblem });
 	const sandboxKit = sandbox && !sandboxProblem ? sandboxToolkit(sandbox) : null;
 	const monitorKit = config.monitor.on ? monitorToolkit() : null;
+	// Email (plan 0.014): only while Iyye's own mailbox is configured (read again at each send).
+	const mailDir = emailDir(config.stateDir);
+	const emailProblem = config.email.on ? emailSettingsProblem(mailDir) : "off (IYYE2_EMAIL=0)";
+	if (emailProblem) log.info("email: not available", { why: emailProblem });
+	const emailKit = emailProblem
+		? null
+		: emailToolkit({
+				db,
+				outbox: { sendOwn: (req) => outbox.sendOwn(req), notifyOwner: (req) => outbox.notifyOwner(req) },
+				maxPerDay: config.email.dailyMax,
+				contactMaxPerDay: config.email.contactDailyMax,
+			});
 	const tools = new ToolBroker({
 		db,
 		log,
@@ -355,6 +415,8 @@ async function main(): Promise<number> {
 			...(thinkingKit ? [thinkingKit] : []),
 			// Last (2026-10-09): images sent in the conversation, the owner and trusted contacts.
 			...(visionKit ? [visionKit] : []),
+			// Last (plan 0.014): email from Iyye's own mailbox, the owner and trusted contacts.
+			...(emailKit ? [emailKit] : []),
 		],
 	});
 	const runtime = await createLocalModelRuntime({ routerUrl: router.url, registry });
@@ -397,12 +459,18 @@ async function main(): Promise<number> {
 	// Without a token the Telegram route has no adapter: such actions fail at once (no fallback to web).
 	const adapters: ChannelAdapter[] = [new WebChatAdapter({ db, log })];
 	if (config.telegramBotToken) adapters.push(new TelegramSender({ token: config.telegramBotToken, log }));
+	// Email (plan 0.014): the adapter is always there, so a mail queued earlier still settles if email is now off.
+	adapters.push(
+		new EmailSender({ load: () => (config.email.on ? loadEmailSettings(mailDir) : "off (IYYE2_EMAIL=0)"), log }),
+	);
 	// Asleep, retries wait until waking (HLD §15 #11). `rhythm` is created below; this runs later.
 	const outbox = new Outbox({ db, log, adapters, held: () => rhythm.mode() === "asleep" });
 	// One device-consuming task at a time (HLD §5.1): chat jobs, console turns and memory work share it.
 	const device = new DeviceSlot();
 	// Plan 0.012: the other machine's own device. Work there never holds this one's, nor waits for it.
 	const remoteDevice = new DeviceSlot();
+	// The thinking model's machine, when it is not the background model's.
+	const thinkingDevice = new DeviceSlot();
 	const deviceFor = (model: string) => (models.isRemote(model) ? remoteDevice : device);
 	const modelUrl = (model: string) => (remote?.has(model) ? remote.proxyUrl : router.url);
 	// Adenosine (plan 0.007 S2): one writer of energy charges; `rhythm` is created below and read later.
@@ -416,6 +484,14 @@ async function main(): Promise<number> {
 	});
 	let voiceActor: VoiceActor | null = null;
 	let character: Character | null = null;
+	// Mail (plan 0.015): one direct completion per mail, no tools, the same scoped recall as chats.
+	const emailResponder = new EmailResponder({
+		db,
+		log,
+		identity,
+		complete: routerComplete(modelUrl, EMAIL_REPLY_MAX_TOKENS),
+		recall: (reader, query) => gateway.contextBlock(reader, query),
+	});
 	const scheduler = new Scheduler({
 		db,
 		device,
@@ -423,6 +499,7 @@ async function main(): Promise<number> {
 		conversations,
 		outbox,
 		log,
+		email: emailResponder,
 		onDeviceTime: (jobId, ms) => adenosine.deviceTime("chat", ms, `${jobId}:${getJob(db, jobId)?.attempt ?? 0}`),
 		// Plan 0.009 CH4: the voice, off until the owner turns a surface on (built below, with the character).
 		rephrase: (event, text, signal, profile) =>
@@ -544,6 +621,42 @@ async function main(): Promise<number> {
 						void outbox
 							.notifyOwner({ key: newContactKey(id), content })
 							.catch((err: unknown) => log.warn("people: new-contact notice failed", { error: String(err) }));
+				},
+			})
+		: null;
+	// Receiving mail (plan 0.015): Iyye's own mailbox over IMAP, admitted like Telegram updates.
+	const emailOpts = {
+		ownAddress: "",
+		untrustedDailyMax: config.email.untrustedDailyMax,
+		senderDailyMax: config.email.senderDailyMax,
+		trustedSenderDailyMax: config.email.trustedSenderDailyMax,
+	};
+	const emailPoller = config.email.inbound
+		? new EmailPoller({
+				db,
+				log,
+				load: () => {
+					const s = loadInboundSettings(mailDir);
+					if (typeof s !== "string") emailOpts.ownAddress = s.ownAddress;
+					return s;
+				},
+				admit: (input) => {
+					const r = admitEmail(admission, emailOpts, input);
+					if (r.outcome === "admitted") scheduler.wake();
+					// Owner decision 1 (plan 0.015): a new sender is told like a new Telegram account (shared daily cap).
+					if (r.outcome === "admitted" && r.newContactId) {
+						const content = newContactNoticeToday(db, r.newContactId, new Date());
+						if (content)
+							void outbox.notifyOwner({ key: newContactKey(r.newContactId), content }).catch(() => undefined);
+					}
+					// Someone Iyye knows, or someone pretending: the owner hears about it (a few a day at most).
+					if (r.spoofed && spoofNoticesToday(db) < 3)
+						void outbox
+							.notifyOwner({
+								key: `email-unverified:${r.inboxId}`,
+								content: `A mail claiming to be from ${r.spoofed} was not verified by the mail server, so Iyye did not read or answer it (/email).`,
+							})
+							.catch(() => undefined);
 				},
 			})
 		: null;
@@ -800,6 +913,7 @@ async function main(): Promise<number> {
 				Telegram: poller ? poller.status : { state: "disabled" },
 				// Plan 0.012: an outage of the other machine is one visible service state, not stalled work.
 				...(remote ? { [`the background model on ${remote.endpoint}`]: remote.status } : {}),
+				...(thinkingRemote ? { [`the thinking model on ${thinkingRemote.endpoint}`]: thinkingRemote.status } : {}),
 			}),
 			new Date(),
 		);
@@ -869,7 +983,12 @@ async function main(): Promise<number> {
 			new Set(
 				tools.toolkits
 					.filter(
-						(k) => k.effect === "self" || k.effect === "reach" || k.effect === "act" || k.effect === "compute",
+						(k) =>
+							k.effect === "self" ||
+							k.effect === "reach" ||
+							k.effect === "act" ||
+							k.effect === "compute" ||
+							k.effect === "send",
 					)
 					.map((k) => k.name),
 			),
@@ -905,6 +1024,8 @@ async function main(): Promise<number> {
 		commitments: new ReminderCommands({ db }),
 		plans,
 		sentReport: () => sentReport(db),
+		emailReport: () =>
+			emailInboxReport(db, emailPoller ? emailPoller.status() : "receiving is off (IYYE2_EMAIL_INBOUND=0)"),
 		self: selfModel,
 		motivationReport: (args: string[] = []) => {
 			const [sub, a, b] = args;
@@ -1130,6 +1251,7 @@ async function main(): Promise<number> {
 			try {
 				await web.stop();
 				await poller?.stop();
+				await emailPoller?.stop();
 				await rhythm.stop();
 				await scheduler.stop();
 				await outbox.stop();
@@ -1153,6 +1275,7 @@ async function main(): Promise<number> {
 				await conversations.disposeAll();
 				await backgroundConversations.disposeAll();
 				await remote?.stop();
+				await thinkingRemote?.stop();
 				await models.stop();
 			} catch (err) {
 				log.error("stopping models failed", { error: (err as Error).message });
@@ -1185,6 +1308,7 @@ async function main(): Promise<number> {
 	scheduler.start();
 	rhythm.start();
 	poller?.start();
+	emailPoller?.start();
 	if (config.memory.enabled) await passthrough.start(); // before Hindsight, which calls it
 	memory.start(); // in the background: chat works while memory comes up
 	if (ltm) {
@@ -1215,6 +1339,7 @@ async function main(): Promise<number> {
 	searxng.start();
 	// Plan 0.012: the pass-through to the other machine, and its first health check.
 	await remote?.start();
+	await thinkingRemote?.start();
 	// After every service has started (one still "stopped" here would be recorded as an outage).
 	watchServices();
 	serviceTimer = setInterval(watchServices, 60_000);

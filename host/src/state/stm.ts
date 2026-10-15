@@ -57,6 +57,13 @@ export interface StmHit extends StmEpisode {
  */
 export function recordEpisode(db: Db, event: EventRow, action: { id: string; content: string | null }, at: string) {
 	if (!event.scope || !event.principal_contact_id) return;
+	// Mail enters short-term memory only from trusted senders (plan 0.015, owner decision 3): anyone may write.
+	if (event.channel === "email") {
+		const c = db.prepare("SELECT trusted FROM contacts WHERE id = ?").get(event.principal_contact_id) as
+			| { trusted: number }
+			| undefined;
+		if (c?.trusted !== 1) return;
+	}
 	// A forgotten scope's earlier words never return, not even through a delivery that completes late.
 	if (isForgotten(db, event.scope, event.received_at)) return;
 	const userText = messageText(event);

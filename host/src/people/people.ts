@@ -32,6 +32,7 @@ import {
 	resolvePerson,
 } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
+import { clearEmail, contactByEmail, emailOf, setEmail, validAddress } from "../state/emails.ts";
 import {
 	addNote,
 	deleteNote,
@@ -96,7 +97,8 @@ export class People {
 	person(args: string, by: string): string {
 		const t = args.trim();
 		if (/^add(\s|$)/.test(t)) return this.add(t.slice(3).trim(), by);
-		if (!t) return 'usage: /person <person> | /person add <name> ["note"]';
+		if (/^email(\s|$)/.test(t)) return this.email(t.slice(5).trim(), by);
+		if (!t) return 'usage: /person <person> | /person add <name> ["note"] | /person email <person|me> <address|none>';
 		const p = onePerson(this.d.db, unquote(t));
 		return typeof p === "string" ? p : this.view(p);
 	}
@@ -146,6 +148,35 @@ export class People {
 		return `Added ${name} (id ${short(id)}), not trusted, with no account yet${noteText ? ", and your note (for your conversations only)" : ""}. When their account first writes, you will be told, and /link <account> ${short(id)} makes it theirs.`;
 	}
 
+	/**
+	 * `/person email <person|me> <address|none>` (plan 0.014): the address Iyye's `email_send` uses for a
+	 * person; `me` is the owner. Only here, from the owner's own surfaces: nothing a person writes stores one.
+	 */
+	private email(args: string, by: string): string {
+		const usage = "usage: /person email <person|me> <address|none>";
+		const { ref, rest } = splitRef(args);
+		const address = rest.trim();
+		if (!ref || !address || /\s/.test(address)) return usage;
+		let p: Contact | string;
+		if (ref.toLowerCase() === "me" || ref.toLowerCase() === "owner") {
+			const owner = getContact(this.d.db, OWNER_CONTACT_ID);
+			p = owner ?? "no owner record";
+		} else p = onePerson(this.d.db, ref);
+		if (typeof p === "string") return p;
+		const name = p.id === OWNER_CONTACT_ID ? "you" : p.display_name;
+		if (address.toLowerCase() === "none")
+			return clearEmail(this.d.db, p.id) ? `Removed the email address of ${name}.` : `${name} had no email address.`;
+		if (!validAddress(address))
+			return `refused: ${JSON.stringify(address.slice(0, 100))} is not one plain email address`;
+		const other = contactByEmail(this.d.db, address);
+		if (other && other !== p.id) {
+			const o = getContact(this.d.db, other);
+			return `refused: ${address} is already ${o?.id === OWNER_CONTACT_ID ? "yours" : `${o?.display_name ?? "someone else"}'s`} (/person email ${o?.id === OWNER_CONTACT_ID ? "me" : short(other)} none first)`;
+		}
+		setEmail(this.d.db, p.id, address, by, this.d.now().toISOString());
+		return `Iyye emails ${name} at ${address} when ${p.id === OWNER_CONTACT_ID ? "you ask" : "you or a trusted contact asks"} (email_send).`;
+	}
+
 	private change(action: "share" | "private" | "delete", ref: string): string {
 		const found = findNotes(this.d.db, ref);
 		if (found.length !== 1)
@@ -184,11 +215,12 @@ export class People {
 				.get(...accounts.map((a) => a.id)) as { at: string | null }
 		).at;
 		const notes = notesAbout(db, p.id);
+		const email = emailOf(db, p.id);
 		const hypotheses = relationHypotheses(db, p, this.d.now());
 		return [
 			`${p.display_name} — id ${short(p.id)} · ${p.trusted ? "trusted" : "not trusted"} · ${
 				bindings.length ? bindings.map((b) => `${b.channel}:${b.external_id}`).join(", ") : "no account yet"
-			}${lastSeen ? ` · last message ${lastSeen.slice(0, 16).replace("T", " ")}` : ""}`,
+			}${email ? ` · email ${email}` : ""}${lastSeen ? ` · last message ${lastSeen.slice(0, 16).replace("T", " ")}` : ""}`,
 			...(accounts.length > 1
 				? [
 						`accounts: ${accounts
@@ -281,15 +313,18 @@ export function newContactNoticeToday(db: Db, contactId: string, now: Date): str
 }
 
 /**
- * The owner's notice when a new Telegram account first writes (plan 0.005 Stage 2), with link suggestions:
+ * The owner's notice when a new Telegram account first writes (plan 0.005 Stage 2), or a new address first
+ * emails (plan 0.015), with link suggestions:
  * people of the same name, and people the owner added who have no account yet. Suggestions only; nothing links.
  */
 export function newContactNotice(db: Db, contactId: string): string | null {
 	const c = getContact(db, contactId);
 	if (!c || linkOf(db, c.id)) return null;
 	const binding = db
-		.prepare("SELECT external_id FROM channel_bindings WHERE contact_id = ? AND channel = 'telegram'")
-		.get(c.id) as { external_id: string } | undefined;
+		.prepare(
+			"SELECT channel, external_id FROM channel_bindings WHERE contact_id = ? AND channel IN ('telegram', 'email')",
+		)
+		.get(c.id) as { channel: string; external_id: string } | undefined;
 	const persons = db
 		.prepare(
 			`SELECT c.* FROM contacts c WHERE c.kind = 'contact' AND c.id <> ?
@@ -308,7 +343,9 @@ export function newContactNotice(db: Db, contactId: string): string | null {
 		.slice(0, 5);
 	const name = neutral(c.display_name.slice(0, 64));
 	return [
-		`Someone new wrote to Iyye on Telegram: ${name}${binding ? ` (Telegram user id ${binding.external_id})` : ""}, id ${short(c.id)}, not trusted.`,
+		binding?.channel === "email"
+			? `Someone new emailed Iyye: ${name} (${neutral(binding.external_id.slice(0, 100))}), id ${short(c.id)}, not trusted.`
+			: `Someone new wrote to Iyye on Telegram: ${name}${binding ? ` (Telegram user id ${binding.external_id})` : ""}, id ${short(c.id)}, not trusted.`,
 		...sameName.map(
 			(p) =>
 				`Possibly ${neutral(p.display_name)} (id ${short(p.id)}), same name: if so, /link ${short(c.id)} ${short(p.id)}`,

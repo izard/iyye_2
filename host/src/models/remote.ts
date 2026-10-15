@@ -20,6 +20,13 @@
  *   `healthIntervalMs`) and serves what the registry describes: the same GGUF
  *   file name and the same context per slot. It is never loaded, unloaded or
  *   healed by the host; it is the owner's machine.
+ * - **The thinking model** (`IYYE2_THINKING_MODEL`, kind `openai`, 2026-10-14)
+ *   is any OpenAI-compatible server, used only by the thinking tool: never in
+ *   the registry, never for background work. It is available while `/health`
+ *   answers and `/v1/models` lists the configured model (its id, or the last
+ *   part of a path id); a server that says it does not separate reasoning
+ *   (`reasoning_parser: null`, rapid-mlx) is refused, since its scratch work
+ *   would come back as the answer.
  * - **A lost connection is not a failure** of the work on it: the leases taken
  *   before it become invalid (`valid()` false), and callers treat that as
  *   "not now", as for a model lost with the router.
@@ -77,7 +84,10 @@ export interface RemoteModelsOptions {
 
 export class RemoteModels {
 	private readonly o: Required<RemoteModelsOptions>;
-	private readonly spec: ModelSpec;
+	/** The registry entry (kind `llama`); none for the thinking model. */
+	private readonly spec: ModelSpec | null;
+	/** The endpoint's own id for the model (kind `openai`: from `/v1/models`, set by the health check). */
+	private servedId: string | null = null;
 	private server: Server | null = null;
 	private timer: NodeJS.Timeout | null = null;
 	private current: { state: RemoteState; detail: string } = { state: "starting", detail: "not checked yet" };
@@ -89,13 +99,17 @@ export class RemoteModels {
 
 	constructor(opts: RemoteModelsOptions) {
 		this.o = { healthIntervalMs: 30_000, healthTimeoutMs: 10_000, ...opts };
+		if (opts.config.kind === "openai") {
+			this.spec = null;
+			return;
+		}
 		const spec = findModel(opts.registry, remoteName(opts.config));
 		if (!spec?.remote) throw new RemoteConfigError(`${remoteName(opts.config)} is not registered (addRemoteModel)`);
 		this.spec = spec;
 	}
 
 	get name(): string {
-		return this.spec.name;
+		return remoteName(this.o.config);
 	}
 
 	get endpoint(): string {
@@ -107,7 +121,7 @@ export class RemoteModels {
 	}
 
 	has(name: string): boolean {
-		return name === this.spec.name;
+		return name === this.name;
 	}
 
 	/** The endpoint's state as the owner sees it (`/models`, service status). */
@@ -170,6 +184,7 @@ export class RemoteModels {
 		try {
 			const health = await this.get("/health");
 			if (health.status !== 200) return this.lost("unreachable", `health answered HTTP ${health.status}`);
+			if (!this.spec) return this.checkOpenAi();
 			const props = await this.get("/props");
 			if (props.status !== 200) return this.lost("unreachable", `props answered HTTP ${props.status}`);
 			const p = JSON.parse(props.body) as {
@@ -182,11 +197,35 @@ export class RemoteModels {
 			const want = slotContext(this.o.registry.defaults, this.spec);
 			const ctx = p.default_generation_settings?.n_ctx;
 			if (ctx !== want) return this.lost("misconfigured", `context per slot is ${ctx}, the registry says ${want}`);
-			if (this.current.state !== "up") this.o.log.info("remote: up", { endpoint: this.endpoint, model: this.name });
-			this.current = { state: "up", detail: `${this.name} at ${this.o.config.url}` };
+			this.up();
 		} catch (err) {
 			this.lost("unreachable", (err as Error).message);
 		}
+	}
+
+	/** Kind `openai`: the configured model is listed, and the server does not say it mixes reasoning into answers. */
+	private async checkOpenAi(): Promise<void> {
+		const list = await this.get("/v1/models");
+		if (list.status !== 200) return this.lost("unreachable", `/v1/models answered HTTP ${list.status}`);
+		const data = (JSON.parse(list.body) as { data?: { id?: unknown; reasoning_parser?: unknown }[] }).data ?? [];
+		const want = this.o.config.model;
+		const m = data.find((d) => typeof d.id === "string" && (d.id === want || d.id.split("/").pop() === want));
+		if (!m) {
+			const ids = data.map((d) => String(d.id).split("/").pop()).join(", ");
+			return this.lost("misconfigured", `serves ${ids || "no model"}, not ${want}`);
+		}
+		if ("reasoning_parser" in m && m.reasoning_parser === null)
+			return this.lost(
+				"misconfigured",
+				"it does not separate the model's reasoning from its answer (start it with a reasoning parser)",
+			);
+		this.servedId = m.id as string;
+		this.up();
+	}
+
+	private up(): void {
+		if (this.current.state !== "up") this.o.log.info("remote: up", { endpoint: this.endpoint, model: this.name });
+		this.current = { state: "up", detail: `${this.name} at ${this.o.config.url}` };
 	}
 
 	private lost(state: RemoteState, detail: string): void {
@@ -267,7 +306,7 @@ export class RemoteModels {
 			return reply(res, 400, "body must be JSON");
 		}
 		if (payload.model !== this.name) return reply(res, 400, `only ${this.name} is served here`);
-		payload.model = this.o.config.model; // the endpoint's own name for it
+		payload.model = this.servedId ?? this.o.config.model; // the endpoint's own name for it
 		const gen = this.generation;
 		const abort = new AbortController();
 		this.inflight.add(abort);

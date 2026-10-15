@@ -24,6 +24,13 @@ export function openDb(path: string): Db {
 }
 
 /**
+ * A migration whose first line is this rebuilds a table other tables reference (SQLite cannot change a CHECK
+ * in place): it runs with foreign keys off, SQLite's documented table-rebuild procedure, and commits only if
+ * `PRAGMA foreign_key_check` then finds nothing.
+ */
+export const FOREIGN_KEYS_OFF = "-- iyye: foreign_keys off";
+
+/**
  * Apply every migration in `migrations/` not yet recorded, in filename order.
  * Each file and its bookkeeping row commit in one transaction, so a failed
  * migration leaves no partial schema behind. Re-running is a no-op.
@@ -42,10 +49,22 @@ export function migrate(db: Db): string[] {
 	const record = db.prepare("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)");
 	for (const name of pending) {
 		const sql = readFileSync(new URL(name, MIGRATIONS_DIR), "utf8");
-		db.transaction(() => {
-			db.exec(sql);
-			record.run(name, new Date().toISOString());
-		})();
+		const rebuild = sql.startsWith(FOREIGN_KEYS_OFF);
+		// Outside the transaction: SQLite ignores this pragma inside one.
+		if (rebuild) db.pragma("foreign_keys = OFF");
+		try {
+			db.transaction(() => {
+				db.exec(sql);
+				if (rebuild) {
+					const broken = db.prepare("PRAGMA foreign_key_check").all();
+					if (broken.length)
+						throw new Error(`${name}: foreign keys broken: ${JSON.stringify(broken.slice(0, 5))}`);
+				}
+				record.run(name, new Date().toISOString());
+			})();
+		} finally {
+			if (rebuild) db.pragma("foreign_keys = ON");
+		}
 	}
 	return pending;
 }

@@ -49,6 +49,8 @@ export const ALWAYS_ON: readonly string[] = [
 	"sandbox",
 	// Detailed host readings (2026-10-12), owner's sessions only.
 	"monitor",
+	// Email (plan 0.014): like `messaging`, a hidden one would make Iyye refuse "email this to Bob".
+	"email",
 ];
 
 export const TOOLKIT_SELECTION: Role = {

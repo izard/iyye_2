@@ -156,6 +156,17 @@ export function forgetBusy(db: Db, scopes: readonly string[]): string | null {
 			.get(...scopes) as { n: number }
 	).n;
 	if (sends > 0) return `${sends} message(s) to them are still being delivered`;
+	// An email to them, or asked for by them (plan 0.014), still on its way.
+	const mails = (
+		db
+			.prepare(
+				`SELECT count(*) AS n FROM actions a JOIN sent_emails m ON a.idempotency_key = 'notice:email:' || m.id
+				 WHERE (m.recipient_scope IN (${marks}) OR m.requester_scope IN (${marks}))
+				 AND a.state IN ('prepared', 'queued', 'sending', 'failed')`,
+			)
+			.get(...scopes, ...scopes) as { n: number }
+	).n;
+	if (mails > 0) return `${mails} email(s) to or for them are still being sent`;
 	// A step of their plan running right now (plan 0.006 C4) would write their words back after the deletion.
 	const steps = (
 		db
@@ -208,6 +219,29 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			 AND trim(json_extract(args_json, '$.text')) IN (SELECT text FROM sent_messages WHERE id IN (${mine}))`,
 		).run(JSON.stringify(FORGOTTEN), ...both);
 		db.prepare(`UPDATE sent_messages SET text = ? WHERE id IN (${mine})`).run(FORGOTTEN, ...both);
+		// Emails to them or asked for by them (plan 0.014): the words, the subject and the address go, from the
+		// record, the action (content and route), the owner's notices and the tool call; their stored address too.
+		const mails = `SELECT id FROM sent_emails WHERE recipient_scope IN (${marks}) OR requester_scope IN (${marks})`;
+		const mailKeys = `SELECT 'notice:email:' || id FROM (${mails}) UNION SELECT 'notice:email-failed:' || id FROM (${mails})
+			UNION SELECT 'notice:emailed-by:' || id FROM (${mails})`;
+		db.prepare(`UPDATE actions SET content = ? WHERE content IS NOT NULL AND idempotency_key IN (${mailKeys})`).run(
+			FORGOTTEN,
+			...all3,
+		);
+		db.prepare(
+			`UPDATE actions SET route_json = ? WHERE idempotency_key IN (SELECT 'notice:email:' || id FROM (${mails}))`,
+		).run(JSON.stringify({ channel: "email", to: FORGOTTEN, subject: FORGOTTEN }), ...both);
+		db.prepare(
+			`UPDATE web_feed SET text = ? WHERE action_id IN (SELECT id FROM actions WHERE idempotency_key IN (${mailKeys}))`,
+		).run(FORGOTTEN, ...all3);
+		db.prepare(
+			`UPDATE tool_calls SET args_json = ?, result = NULL WHERE tool = 'email_send'
+			 AND trim(json_extract(args_json, '$.text')) IN (SELECT text FROM sent_emails WHERE id IN (${mails}))`,
+		).run(JSON.stringify(FORGOTTEN), ...both);
+		db.prepare(
+			`UPDATE sent_emails SET text = ?, subject = ?, address = ?, dedup_key = 'forgotten:' || id WHERE id IN (${mails})`,
+		).run(FORGOTTEN, FORGOTTEN, FORGOTTEN, ...both);
+		// (Their stored address is deleted below, after their received mail is redacted by it.)
 		// Their plans (plan 0.006 C4): abandoned, their words gone, and so are the steps' prompts, answers and tool calls.
 		const plans = db.prepare(`SELECT id, state FROM plans WHERE scope IN (${marks})`).all(...t.scopes) as {
 			id: string;
@@ -328,6 +362,26 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			`UPDATE actions SET content = ? WHERE content IS NOT NULL
 			 AND event_id IN (SELECT id FROM events WHERE scope IN (${marks}))`,
 		).run(FORGOTTEN, ...t.scopes);
+		// Their mail (plan 0.015): the subject goes from the event, the replies' routes, and the inbox record,
+		// with the address, for every mail from one of their addresses (also those dropped before admission).
+		db.prepare(
+			`UPDATE events SET payload_json = json_set(payload_json, '$.subject', ?, '$.from', json('null'),
+				'$.messageId', json('null'), '$.inReplyTo', json('null'), '$.references', json('null'))
+			 WHERE scope IN (${marks}) AND channel = 'email'`,
+		).run(FORGOTTEN, ...t.scopes);
+		db.prepare(
+			`UPDATE actions SET route_json = ? WHERE json_extract(route_json, '$.channel') = 'email'
+			 AND event_id IN (SELECT id FROM events WHERE scope IN (${marks}))`,
+		).run(JSON.stringify({ channel: "email", to: FORGOTTEN, subject: FORGOTTEN }), ...t.scopes);
+		const accounts = [t.person.id, ...accountsOf(db, t.person.id).map((a) => a.id)];
+		const am = accounts.map(() => "?").join(", ");
+		db.prepare(
+			`UPDATE email_inbox SET subject = ?, from_name = NULL, from_address = ?, message_id = NULL
+			 WHERE contact_id IN (${am}) OR from_address IN (
+				SELECT external_id FROM channel_bindings WHERE channel = 'email' AND contact_id IN (${am})
+				UNION SELECT address FROM contact_emails WHERE contact_id IN (${am}))`,
+		).run(FORGOTTEN, FORGOTTEN, ...accounts, ...accounts, ...accounts);
+		db.prepare(`DELETE FROM contact_emails WHERE contact_id IN (${am})`).run(...accounts);
 		// Reminders sent to them (no event; their commitment says whose), and the owner's notices that quote one.
 		db.prepare(
 			`UPDATE actions SET content = ? WHERE content IS NOT NULL

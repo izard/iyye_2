@@ -1,7 +1,7 @@
 // Copyright 2026 Alexander Komarov
 // SPDX-License-Identifier: Apache-2.0
 
-export type Channel = "web" | "telegram";
+export type Channel = "web" | "telegram" | "email";
 
 /**
  * A message typed by the owner into the local web chat. It carries no

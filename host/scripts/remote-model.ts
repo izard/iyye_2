@@ -23,20 +23,17 @@
  *   while idle. A closed lid on battery still sleeps: keep it on power.
  *
  * The first run prints what to copy to the Spark: `cert.pem` and `api_key`
- * into `~/.iyye2/remote/<endpoint>/` (0600), and IYYE2_REMOTE_MODEL.
+ * into `~/.iyye2/remote/<endpoint>/` (0600), and IYYE2_REMOTE_MODEL. The
+ * certificate, key and front are shared with `remote-thinking.ts`
+ * (`remote-front.ts`).
  */
 
-import { execFileSync, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { request } from "node:http";
-import { createServer } from "node:https";
-import { isIP, createServer as netServer } from "node:net";
-import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { isIP } from "node:net";
 import { loadConfig } from "../src/config.ts";
 import { serverCliArgs } from "../src/models/preset.ts";
 import { findModel, loadRegistry } from "../src/models/registry.ts";
+import { copyHint, ensureSecrets, freeLocalPort, startFront } from "./remote-front.ts";
 
 const args = process.argv.slice(2);
 const opt = (name: string) => {
@@ -66,48 +63,9 @@ if (!spec.available) {
 	process.exit(2);
 }
 
-const dir = join(homedir(), ".iyye-remote-model");
-mkdirSync(dir, { recursive: true, mode: 0o700 });
-const keyFile = join(dir, "api_key");
-const certFile = join(dir, "cert.pem");
-const certKeyFile = join(dir, "cert-key.pem");
-if (!existsSync(keyFile)) writeFileSync(keyFile, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600 });
-if (!existsSync(certFile) || !existsSync(certKeyFile)) {
-	const local = `${hostname().replace(/\.local$/, "")}.local`;
-	execFileSync(
-		"openssl",
-		[
-			"req",
-			"-x509",
-			"-newkey",
-			"ec",
-			"-pkeyopt",
-			"ec_paramgen_curve:prime256v1",
-			"-nodes",
-			"-days",
-			"3650",
-			"-subj",
-			`/CN=iyye-remote-model ${endpoint}`,
-			"-addext",
-			`subjectAltName=IP:${listen},DNS:${local}`,
-			"-keyout",
-			certKeyFile,
-			"-out",
-			certFile,
-		],
-		{ stdio: ["ignore", "ignore", "inherit"] },
-	);
-	chmodSync(certKeyFile, 0o600);
-	console.log(`made a certificate for ${listen} and ${local}`);
-}
-
-// llama-server on a free port of 127.0.0.1, reachable from the LAN only through the HTTPS front below.
-const innerPort = await new Promise<number>((resolve) => {
-	const s = netServer().listen(0, "127.0.0.1", () => {
-		const p = (s.address() as { port: number }).port;
-		s.close(() => resolve(p));
-	});
-});
+const secrets = ensureSecrets(endpoint, listen);
+// llama-server on a free port of 127.0.0.1, reachable from the LAN only through the HTTPS front.
+const innerPort = await freeLocalPort();
 const serverArgs = [
 	"--model",
 	spec.path,
@@ -119,12 +77,10 @@ const serverArgs = [
 	"--port",
 	String(innerPort),
 	"--api-key-file",
-	keyFile,
+	secrets.keyFile,
 ];
 console.log(`
-On the Spark (once): copy ${certFile} and ${keyFile} to ~/.iyye2/remote/${endpoint}/ (mode 0600), e.g.
-  ssh <spark> 'mkdir -p -m 700 ~/.iyye2/remote/${endpoint}'
-  scp ${certFile} ${keyFile} <spark>:.iyye2/remote/${endpoint}/
+${copyHint(secrets, endpoint)}
 and start the host with IYYE2_REMOTE_MODEL=${spec.name}@${endpoint}=https://${listen}:${port}
 Then: /use ${spec.name}@${endpoint} background
 
@@ -140,36 +96,13 @@ child.on("exit", (code, signal) => {
 	console.error(`${new Date().toISOString()} llama-server exited (${signal ? `signal ${signal}` : `code ${code}`})`);
 	process.exit(code ?? (signal ? 1 : 0));
 });
-// Whatever happens to one connection must not take the server down: say what it was, keep serving.
-process.on("uncaughtException", (err) => console.error(`${new Date().toISOString()} front: ${err.stack ?? err}`));
-
-// The HTTPS front: each request forwarded as it is (llama-server checks the key), the answer streamed back,
-// the upstream request aborted when the caller goes away. No time limit: a slow answer beats a timed-out one.
-const front = createServer({ key: readFileSync(certKeyFile), cert: readFileSync(certFile) }, (req, res) => {
-	const up = request(
-		{ host: "127.0.0.1", port: innerPort, method: req.method, path: req.url, headers: req.headers },
-		(upRes) => {
-			res.writeHead(upRes.statusCode ?? 502, upRes.headers);
-			upRes.pipe(res);
-		},
-	);
-	req.on("error", () => up.destroy());
-	up.on("error", () => {
-		if (!res.headersSent) res.writeHead(502).end();
-		else res.destroy();
-	});
-	res.on("close", () => {
-		if (!res.writableFinished) up.destroy();
-	});
-	req.pipe(up);
+startFront({
+	secrets,
+	listen,
+	port,
+	innerPort,
+	onFail: () => {
+		child.kill("SIGTERM");
+		process.exit(1);
+	},
 });
-front.requestTimeout = 0;
-front.headersTimeout = 60_000;
-front.on("clientError", (_err, socket) => socket.destroy());
-front.once("error", (err) => {
-	// The address is taken (another copy of this script?) or gone: nothing would be served.
-	console.error(`front: cannot listen on ${listen}:${port}: ${err.message}`);
-	child.kill("SIGTERM");
-	process.exit(1);
-});
-front.listen(port, listen, () => console.log(`HTTPS front on https://${listen}:${port} -> 127.0.0.1:${innerPort}`));
