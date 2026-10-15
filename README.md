@@ -1,7 +1,6 @@
 # Iyye: A Resident Agentic Assistant
 
-Iyye is a personal, local-first AI assistant designed to exist as an integrated part of your computing environment rather than a distant service.
-Named after the Chuvash home deity, she is built on the principle that true utility comes from presence, continuity, and deep integration with your local tools and hardware.
+Iyye is a personal, local-first AI assistant. Named after the Chuvash home deity, it is built on the principle that true utility comes from presence, continuity, and deep integration with your local tools and hardware.
 
 ## 🏗️ The Architecture of Presence
 
@@ -14,10 +13,10 @@ Iyye's intelligence is an orchestration of the following components:
 | **Pi** | **The Orchestration Layer** | The central agentic harness (the "prefrontal cortex") that receives high-level intent, decomposes requests into actionable plans, and orchestrates tool/model calls. |
 
 ### 🛠️ Specialized Intelligence (Multi-Model Routing)
-Iyye does not rely on a single model for all tasks. Instead, she routes queries to an optimized ensemble of local models:
+Iyye does not rely on a single model for all tasks. Instead, it routes queries to an optimized ensemble of local models:
 * **Reasoning & Complex Logic:** High-parameter reasoning models via `ask_thinking_model`.
 * **Chat & Interaction:** Lightweight, low-latency models for seamless Telegram and web communication.
-* **Background Tasks:** Small, efficient models (e.g., Qwen) managing continuous monitoring and system housekeeping.
+* **Background Tasks:** Small, efficient models managing continuous monitoring and system housekeeping.
 
 ## 🏠 Why Local?
 
