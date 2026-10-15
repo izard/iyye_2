@@ -241,8 +241,7 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 		db.prepare(
 			`UPDATE sent_emails SET text = ?, subject = ?, address = ?, dedup_key = 'forgotten:' || id WHERE id IN (${mails})`,
 		).run(FORGOTTEN, FORGOTTEN, FORGOTTEN, ...both);
-		const ids = [t.person.id, ...accountsOf(db, t.person.id).map((a) => a.id)];
-		db.prepare(`DELETE FROM contact_emails WHERE contact_id IN (${ids.map(() => "?").join(", ")})`).run(...ids);
+		// (Their stored address is deleted below, after their received mail is redacted by it.)
 		// Their plans (plan 0.006 C4): abandoned, their words gone, and so are the steps' prompts, answers and tool calls.
 		const plans = db.prepare(`SELECT id, state FROM plans WHERE scope IN (${marks})`).all(...t.scopes) as {
 			id: string;
@@ -363,6 +362,26 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			`UPDATE actions SET content = ? WHERE content IS NOT NULL
 			 AND event_id IN (SELECT id FROM events WHERE scope IN (${marks}))`,
 		).run(FORGOTTEN, ...t.scopes);
+		// Their mail (plan 0.015): the subject goes from the event, the replies' routes, and the inbox record,
+		// with the address, for every mail from one of their addresses (also those dropped before admission).
+		db.prepare(
+			`UPDATE events SET payload_json = json_set(payload_json, '$.subject', ?, '$.from', json('null'),
+				'$.messageId', json('null'), '$.inReplyTo', json('null'), '$.references', json('null'))
+			 WHERE scope IN (${marks}) AND channel = 'email'`,
+		).run(FORGOTTEN, ...t.scopes);
+		db.prepare(
+			`UPDATE actions SET route_json = ? WHERE json_extract(route_json, '$.channel') = 'email'
+			 AND event_id IN (SELECT id FROM events WHERE scope IN (${marks}))`,
+		).run(JSON.stringify({ channel: "email", to: FORGOTTEN, subject: FORGOTTEN }), ...t.scopes);
+		const accounts = [t.person.id, ...accountsOf(db, t.person.id).map((a) => a.id)];
+		const am = accounts.map(() => "?").join(", ");
+		db.prepare(
+			`UPDATE email_inbox SET subject = ?, from_name = NULL, from_address = ?, message_id = NULL
+			 WHERE contact_id IN (${am}) OR from_address IN (
+				SELECT external_id FROM channel_bindings WHERE channel = 'email' AND contact_id IN (${am})
+				UNION SELECT address FROM contact_emails WHERE contact_id IN (${am}))`,
+		).run(FORGOTTEN, FORGOTTEN, ...accounts, ...accounts, ...accounts);
+		db.prepare(`DELETE FROM contact_emails WHERE contact_id IN (${am})`).run(...accounts);
 		// Reminders sent to them (no event; their commitment says whose), and the owner's notices that quote one.
 		db.prepare(
 			`UPDATE actions SET content = ? WHERE content IS NOT NULL

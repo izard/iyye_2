@@ -46,6 +46,8 @@ export class EmailSender implements ChannelAdapter {
 		const r: SmtpResult = await (this.d.send ?? sendMail)(s, {
 			to: route.to,
 			subject: route.subject,
+			...(route.inReplyTo ? { inReplyTo: route.inReplyTo } : {}),
+			...(route.references ? { references: route.references } : {}),
 			text: chunk.text,
 			messageId,
 			date: (this.d.now ?? (() => new Date()))(),

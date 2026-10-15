@@ -16,6 +16,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { validAddress } from "../../state/emails.ts";
+import type { ImapSettings } from "./imap.ts";
 import type { SmtpSettings } from "./smtp.ts";
 
 export function emailDir(stateDir: string): string {
@@ -52,6 +53,43 @@ export function loadEmailSettings(dir: string): SmtpSettings | string {
 	const password = readFileSync(passwordFile, "utf8").replace(/\r?\n$/, "");
 	if (!password) return `${passwordFile} is empty`;
 	return { host, port, security, user, password, from, fromName: name || "Iyye" };
+}
+
+/**
+ * Receiving (plan 0.015): the IMAP server (`imapHost`, default the SMTP host with `smtp.` → `imap.`;
+ * `imapPort`, default 993, TLS) with the same login, and `authserv`, the receiving server's own domain in
+ * the `Authentication-Results` it adds (default `hostinger.io` for Hostinger; without one no sender is
+ * authenticated, so nothing is admitted).
+ */
+export interface InboundSettings {
+	imap: ImapSettings;
+	authserv: string | null;
+	ownAddress: string;
+}
+
+export function loadInboundSettings(dir: string): InboundSettings | string {
+	const smtp = loadEmailSettings(dir);
+	if (typeof smtp === "string") return smtp;
+	const c = JSON.parse(readFileSync(join(dir, "config.json"), "utf8")) as Record<string, unknown>;
+	const imapHost =
+		typeof c.imapHost === "string" && /^[A-Za-z0-9.:-]+$/.test(c.imapHost)
+			? c.imapHost
+			: smtp.host.replace(/^smtp\./, "imap.");
+	const imapPort =
+		typeof c.imapPort === "number" && Number.isInteger(c.imapPort) && c.imapPort > 0 && c.imapPort < 65536
+			? c.imapPort
+			: 993;
+	const authserv =
+		typeof c.authserv === "string" && /^[A-Za-z0-9.-]+$/.test(c.authserv)
+			? c.authserv
+			: /(^|\.)hostinger\.com$/.test(smtp.host)
+				? "hostinger.io"
+				: null;
+	return {
+		imap: { host: imapHost, port: imapPort, user: smtp.user, password: smtp.password },
+		authserv,
+		ownAddress: smtp.from,
+	};
 }
 
 /** Why email cannot be used now, or null (the password is read and dropped). */

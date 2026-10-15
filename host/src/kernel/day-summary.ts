@@ -20,6 +20,7 @@
 
 import type { NightOutcome } from "../memory/night.ts";
 import type { Db } from "../state/db.ts";
+import { emailDayLine } from "../state/email-inbox.ts";
 
 export interface DayWindow {
 	day: number;
@@ -150,6 +151,9 @@ export function buildDigest(db: Db, w: DayWindow): string {
 			`Messages Iyye sent to people: ${parts.join("; ")} (asked by ${[...askers].map(([a, n]) => `${a} ${n}`).join(", ")}).`,
 		);
 	}
+	// Mail received (plan 0.015): counts only.
+	const received = emailDayLine(db, w.from, w.to);
+	if (received) lines.push(received);
 	// Emails (plan 0.014): counts and who asked, never the words or the addresses.
 	const mails = db
 		.prepare(

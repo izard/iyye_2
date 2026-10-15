@@ -4,7 +4,8 @@
 import type { Channel } from "../channels/types.ts";
 import type { Db } from "./db.ts";
 
-export type EventStatus = "admitted" | "answered" | "dropped";
+/** `ignored` (plan 0.015): a mail Iyye read and decided not to answer, neither answered nor failed. */
+export type EventStatus = "admitted" | "answered" | "dropped" | "ignored";
 
 export interface EventRow {
 	id: string;
@@ -70,9 +71,21 @@ export function getEvent(db: Db, id: string): EventRow | undefined {
 /** What a message with an image says in place of it: the image itself reaches a model only through a tool. */
 export const IMAGE_MARK = "[sent an image]";
 
-/** The text the sender wrote (web: `text`; Telegram: `message.text`, after `IMAGE_MARK` when an image came with it). */
+/**
+ * The text the sender wrote (web: `text`; Telegram: `message.text`, after `IMAGE_MARK` when an image came with
+ * it; email: its subject and its own words, quoted earlier messages cut).
+ */
 export function messageText(event: EventRow): string {
-	const payload = JSON.parse(event.payload_json) as { text?: unknown; message?: { text?: unknown; image?: unknown } };
+	const payload = JSON.parse(event.payload_json) as {
+		text?: unknown;
+		subject?: unknown;
+		message?: { text?: unknown; image?: unknown };
+	};
+	if (event.channel === "email") {
+		const subject = typeof payload.subject === "string" ? payload.subject : "";
+		const body = typeof payload.text === "string" ? payload.text : "";
+		return subject ? `Subject: ${subject}\n\n${body}`.trim() : body;
+	}
 	const raw = event.channel === "web" ? payload.text : payload.message?.text;
 	const text = typeof raw === "string" ? raw : "";
 	if (event.channel === "telegram" && payload.message?.image)

@@ -44,6 +44,9 @@ import {
 	summaryDocId,
 } from "./provenance.ts";
 
+/** How a turn arrived, as its memory says it (plan 0.015 adds mail). */
+const CHANNEL_NAME: Record<string, string> = { web: "local web chat", telegram: "Telegram", email: "email" };
+
 /**
  * What every Iyye bank is told to extract (HLD §6.1, §11.2). A backstop only:
  * provenance comes from the speaker tags, and the person's documents hold no
@@ -350,7 +353,7 @@ export class NightWork {
 		await this.d.ltm.retain(bank, {
 			documentId: saidDocId(e.event_id),
 			content: e.user_text,
-			context: `${who} wrote this to Iyye (${e.channel === "web" ? "local web chat" : "Telegram"}). Every statement here is ${who}'s own.`,
+			context: `${who} wrote this to Iyye (${CHANNEL_NAME[e.channel ?? ""] ?? "Telegram"}). Every statement here is ${who}'s own.`,
 			timestamp: e.said_at,
 			tags: [...base, SPEAKER_PERSON],
 			metadata: { event_id: e.event_id, speaker: who },
@@ -363,7 +366,7 @@ export class NightWork {
 			await this.d.ltm.retain(bank, {
 				documentId: repliedDocId(e.event_id),
 				content: e.reply_text,
-				context: `Iyye's own reply to ${who} on ${date} (${e.channel === "web" ? "local web chat" : "Telegram"}). ${who} had written: ${JSON.stringify(asked)}. These are Iyye's words: not evidence about ${who}.`,
+				context: `Iyye's own reply to ${who} on ${date} (${CHANNEL_NAME[e.channel ?? ""] ?? "Telegram"}). ${who} had written: ${JSON.stringify(asked)}. These are Iyye's words: not evidence about ${who}.`,
 				timestamp: e.answered_at,
 				tags: [...base, SPEAKER_IYYE],
 				metadata: { event_id: e.event_id, action_id: e.action_id ?? "", speaker: "Iyye" },

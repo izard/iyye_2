@@ -5,6 +5,7 @@
 | Node | >= 22.19.0 (dev: 22.23) | Matches Pi's `engines`. Tests run `.ts` directly via Node type stripping. |
 | better-sqlite3 | 13.0.3 | Ships prebuilt binaries; installs with `--ignore-scripts`. SQLite 3.53.4 in the darwin-arm64 build. |
 | typebox | 1.3.27 | Same version Pi uses; tool parameter schemas. |
+| postal-mime | 4.0.7 | MIME parsing of received mail (plan 0.015); no dependencies, MIT-0. The IMAP and SMTP clients are the host's own (`channels/email/`). |
 | typescript / @types/node / @biomejs/biome | 7.0.2 / 22.19.19 / 2.3.5 | Same as the Pi clone's dev tooling. |
 | `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai` | 1.0.0 (exact) | Pi's own `@earendil-works/*` dependencies resolve to 1.0.0 in `package-lock.json`. Clone at `1c1e9c0ef` for source reading. Behaviour below. |
 | llama.cpp `llama-server` | build 11362 (`926862e57`, 2026-10-02), `~/Downloads/llama.cpp/build_27/bin/` (previously build 9542, `6b80c74f2`, in `build_last6/`) | Router mode, behaviour below. Docs for an exact build: `git -C ~/Downloads/llama.cpp show <commit>:tools/server/README.md`. Re-probe with `node scripts/probe-router.ts <llama-server> --tools gemma-4-E4B` before switching builds. |

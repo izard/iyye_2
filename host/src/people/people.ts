@@ -313,15 +313,18 @@ export function newContactNoticeToday(db: Db, contactId: string, now: Date): str
 }
 
 /**
- * The owner's notice when a new Telegram account first writes (plan 0.005 Stage 2), with link suggestions:
+ * The owner's notice when a new Telegram account first writes (plan 0.005 Stage 2), or a new address first
+ * emails (plan 0.015), with link suggestions:
  * people of the same name, and people the owner added who have no account yet. Suggestions only; nothing links.
  */
 export function newContactNotice(db: Db, contactId: string): string | null {
 	const c = getContact(db, contactId);
 	if (!c || linkOf(db, c.id)) return null;
 	const binding = db
-		.prepare("SELECT external_id FROM channel_bindings WHERE contact_id = ? AND channel = 'telegram'")
-		.get(c.id) as { external_id: string } | undefined;
+		.prepare(
+			"SELECT channel, external_id FROM channel_bindings WHERE contact_id = ? AND channel IN ('telegram', 'email')",
+		)
+		.get(c.id) as { channel: string; external_id: string } | undefined;
 	const persons = db
 		.prepare(
 			`SELECT c.* FROM contacts c WHERE c.kind = 'contact' AND c.id <> ?
@@ -340,7 +343,9 @@ export function newContactNotice(db: Db, contactId: string): string | null {
 		.slice(0, 5);
 	const name = neutral(c.display_name.slice(0, 64));
 	return [
-		`Someone new wrote to Iyye on Telegram: ${name}${binding ? ` (Telegram user id ${binding.external_id})` : ""}, id ${short(c.id)}, not trusted.`,
+		binding?.channel === "email"
+			? `Someone new emailed Iyye: ${name} (${neutral(binding.external_id.slice(0, 100))}), id ${short(c.id)}, not trusted.`
+			: `Someone new wrote to Iyye on Telegram: ${name}${binding ? ` (Telegram user id ${binding.external_id})` : ""}, id ${short(c.id)}, not trusted.`,
 		...sameName.map(
 			(p) =>
 				`Possibly ${neutral(p.display_name)} (id ${short(p.id)}), same name: if so, /link ${short(c.id)} ${short(p.id)}`,

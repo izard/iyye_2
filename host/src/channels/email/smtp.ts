@@ -47,6 +47,9 @@ export interface Mail {
 	to: string;
 	subject: string;
 	text: string;
+	/** A reply (plan 0.015): the mail it answers and its thread, as `<id>` values. */
+	inReplyTo?: string;
+	references?: string;
 	/** Without angle brackets. */
 	messageId: string;
 	date: Date;
@@ -294,10 +297,19 @@ function heloName(from: string): string {
 	return /^[A-Za-z0-9.-]+$/.test(domain) ? domain : "localhost";
 }
 
+/** Message ids, one per folded line. */
+function foldIds(ids: string): string {
+	return ids.trim().split(/\s+/).join("\r\n ");
+}
+
+const MSG_IDS = /^<[^<>\s"\\]{3,250}>( <[^<>\s"\\]{3,250}>)*$/;
+
 function headerProblem(s: SmtpSettings, mail: Mail): string | null {
 	const lineBreak = /[\r\n\0]/;
 	if ([mail.to, s.from, mail.subject, s.fromName, mail.messageId].some((v) => lineBreak.test(v)))
 		return "refused: a line break in a mail header";
+	for (const ids of [mail.inReplyTo, mail.references])
+		if (ids !== undefined && !MSG_IDS.test(ids)) return "refused: not a list of message ids";
 	if (/[<>,;\s]/.test(mail.to) || /[<>,;\s]/.test(s.from)) return "refused: not a single plain address";
 	return null;
 }
@@ -333,6 +345,10 @@ export function buildMessage(s: SmtpSettings, mail: Mail): string {
 		`Subject: ${encodeHeader(mail.subject)}`,
 		`Date: ${mailDate(mail.date)}`,
 		`Message-ID: <${mail.messageId}>`,
+		...(mail.inReplyTo ? [`In-Reply-To: ${mail.inReplyTo}`] : []),
+		// RFC 3834: an automatic reply, so other machines (vacation responders, agents) do not answer it back.
+		...(mail.inReplyTo ? ["Auto-Submitted: auto-replied"] : []),
+		...(mail.references ? [`References: ${foldIds(mail.references)}`] : []),
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=UTF-8",
 		"Content-Transfer-Encoding: base64",

@@ -19,6 +19,7 @@ export function toolsReport(db: Db, toolkits: readonly Toolkit[], recent = 10): 
 			private: "the owner and Iyye itself (read-only)",
 			trusted: "the owner and trusted contacts (read-only)",
 			compute: "the owner and Iyye itself (runs code in a sandbox; not evidence)",
+			send: "the owner and trusted contacts (has effects)",
 		}[k.effect];
 		lines.push(`  ${k.name} — ${k.description} · ${who}`);
 		for (const t of k.tools) lines.push(`    ${t.name}: ${t.summary}`);

@@ -111,7 +111,19 @@ export interface Config {
 	 * Email (plan 0.014): `email_send` for the owner and trusted contacts while `<state>/email/` holds Iyye's own
 	 * mailbox (`IYYE2_EMAIL=0` turns it off); mails per day in all and per trusted contact.
 	 */
-	email: { on: boolean; dailyMax: number; contactDailyMax: number };
+	email: {
+		on: boolean;
+		dailyMax: number;
+		contactDailyMax: number;
+		/**
+		 * Receiving (plan 0.015; `IYYE2_EMAIL_INBOUND=0` turns it off): mails a day admitted from untrusted
+		 * senders in all, from one untrusted sender, and from one trusted sender.
+		 */
+		inbound: boolean;
+		untrustedDailyMax: number;
+		senderDailyMax: number;
+		trustedSenderDailyMax: number;
+	};
 	defaultModel: string;
 	/** Seconds between router health checks. */
 	healthIntervalS: number;
@@ -366,6 +378,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			on: env.IYYE2_EMAIL !== "0",
 			dailyMax: int(env, "IYYE2_EMAIL_DAILY_MAX", 20, 0, 1000),
 			contactDailyMax: int(env, "IYYE2_EMAIL_CONTACT_DAILY_MAX", 5, 0, 1000),
+			inbound: env.IYYE2_EMAIL !== "0" && env.IYYE2_EMAIL_INBOUND !== "0",
+			untrustedDailyMax: int(env, "IYYE2_EMAIL_UNTRUSTED_DAILY_MAX", 20, 0, 10_000),
+			senderDailyMax: int(env, "IYYE2_EMAIL_SENDER_DAILY_MAX", 5, 0, 10_000),
+			trustedSenderDailyMax: int(env, "IYYE2_EMAIL_TRUSTED_SENDER_DAILY_MAX", 50, 0, 10_000),
 		},
 		adenosine: {
 			perHour: fraction(env, "IYYE2_ADENOSINE_PER_HOUR", 0.02),

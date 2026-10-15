@@ -16,8 +16,10 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { EmailPoller } from "./channels/email/poller.ts";
+import { EMAIL_REPLY_MAX_TOKENS, EmailResponder } from "./channels/email/responder.ts";
 import { EmailSender } from "./channels/email/sender.ts";
-import { emailDir, emailSettingsProblem, loadEmailSettings } from "./channels/email/settings.ts";
+import { emailDir, emailSettingsProblem, loadEmailSettings, loadInboundSettings } from "./channels/email/settings.ts";
 import { TelegramFiles } from "./channels/telegram/files.ts";
 import { MAX_IMAGE_BYTES, TelegramPoller } from "./channels/telegram/poller.ts";
 import { TelegramSender } from "./channels/telegram/sender.ts";
@@ -45,6 +47,7 @@ import { FactNight } from "./facts/night.ts";
 import { createLocalModelRuntime, outputCap, thinkingLevelFor } from "./integration/pi/runtime.ts";
 import { PiConversations } from "./integration/pi/sessions.ts";
 import { Adenosine } from "./kernel/adenosine.ts";
+import { admitEmail } from "./kernel/admission.ts";
 import { BackgroundWorker } from "./kernel/background.ts";
 import { type CommandExtras, handleOwnerCommand, isCommand } from "./kernel/commands.ts";
 import { CommitmentClock } from "./kernel/commitments.ts";
@@ -95,6 +98,7 @@ import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
+import { emailInboxReport, spoofNoticesToday } from "./state/email-inbox.ts";
 import { getJob } from "./state/jobs.ts";
 import { getKv } from "./state/kv.ts";
 import { DAY_KEYS, seedSelectedModel } from "./state/models.ts";
@@ -480,6 +484,14 @@ async function main(): Promise<number> {
 	});
 	let voiceActor: VoiceActor | null = null;
 	let character: Character | null = null;
+	// Mail (plan 0.015): one direct completion per mail, no tools, the same scoped recall as chats.
+	const emailResponder = new EmailResponder({
+		db,
+		log,
+		identity,
+		complete: routerComplete(modelUrl, EMAIL_REPLY_MAX_TOKENS),
+		recall: (reader, query) => gateway.contextBlock(reader, query),
+	});
 	const scheduler = new Scheduler({
 		db,
 		device,
@@ -487,6 +499,7 @@ async function main(): Promise<number> {
 		conversations,
 		outbox,
 		log,
+		email: emailResponder,
 		onDeviceTime: (jobId, ms) => adenosine.deviceTime("chat", ms, `${jobId}:${getJob(db, jobId)?.attempt ?? 0}`),
 		// Plan 0.009 CH4: the voice, off until the owner turns a surface on (built below, with the character).
 		rephrase: (event, text, signal, profile) =>
@@ -608,6 +621,42 @@ async function main(): Promise<number> {
 						void outbox
 							.notifyOwner({ key: newContactKey(id), content })
 							.catch((err: unknown) => log.warn("people: new-contact notice failed", { error: String(err) }));
+				},
+			})
+		: null;
+	// Receiving mail (plan 0.015): Iyye's own mailbox over IMAP, admitted like Telegram updates.
+	const emailOpts = {
+		ownAddress: "",
+		untrustedDailyMax: config.email.untrustedDailyMax,
+		senderDailyMax: config.email.senderDailyMax,
+		trustedSenderDailyMax: config.email.trustedSenderDailyMax,
+	};
+	const emailPoller = config.email.inbound
+		? new EmailPoller({
+				db,
+				log,
+				load: () => {
+					const s = loadInboundSettings(mailDir);
+					if (typeof s !== "string") emailOpts.ownAddress = s.ownAddress;
+					return s;
+				},
+				admit: (input) => {
+					const r = admitEmail(admission, emailOpts, input);
+					if (r.outcome === "admitted") scheduler.wake();
+					// Owner decision 1 (plan 0.015): a new sender is told like a new Telegram account (shared daily cap).
+					if (r.outcome === "admitted" && r.newContactId) {
+						const content = newContactNoticeToday(db, r.newContactId, new Date());
+						if (content)
+							void outbox.notifyOwner({ key: newContactKey(r.newContactId), content }).catch(() => undefined);
+					}
+					// Someone Iyye knows, or someone pretending: the owner hears about it (a few a day at most).
+					if (r.spoofed && spoofNoticesToday(db) < 3)
+						void outbox
+							.notifyOwner({
+								key: `email-unverified:${r.inboxId}`,
+								content: `A mail claiming to be from ${r.spoofed} was not verified by the mail server, so Iyye did not read or answer it (/email).`,
+							})
+							.catch(() => undefined);
 				},
 			})
 		: null;
@@ -975,6 +1024,8 @@ async function main(): Promise<number> {
 		commitments: new ReminderCommands({ db }),
 		plans,
 		sentReport: () => sentReport(db),
+		emailReport: () =>
+			emailInboxReport(db, emailPoller ? emailPoller.status() : "receiving is off (IYYE2_EMAIL_INBOUND=0)"),
 		self: selfModel,
 		motivationReport: (args: string[] = []) => {
 			const [sub, a, b] = args;
@@ -1200,6 +1251,7 @@ async function main(): Promise<number> {
 			try {
 				await web.stop();
 				await poller?.stop();
+				await emailPoller?.stop();
 				await rhythm.stop();
 				await scheduler.stop();
 				await outbox.stop();
@@ -1256,6 +1308,7 @@ async function main(): Promise<number> {
 	scheduler.start();
 	rhythm.start();
 	poller?.start();
+	emailPoller?.start();
 	if (config.memory.enabled) await passthrough.start(); // before Hindsight, which calls it
 	memory.start(); // in the background: chat works while memory comes up
 	if (ltm) {

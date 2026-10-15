@@ -5,7 +5,8 @@ import type { Channel } from "../channels/types.ts";
 import type { Db } from "./db.ts";
 
 /** The chat channels: each has a selected model that is loaded at startup. */
-export const MODEL_CHANNELS: readonly Channel[] = ["web", "telegram"];
+/** Channels with their own selected chat model; email (plan 0.015) answers with the Telegram one. */
+export const MODEL_CHANNELS: readonly Exclude<Channel, "email">[] = ["web", "telegram"];
 
 /**
  * What a model can be selected for: a chat channel, long-term memory work (0.002 L2), background work (0.007),
