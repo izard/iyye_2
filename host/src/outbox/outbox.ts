@@ -41,10 +41,22 @@ import { splitOffsets } from "./split.ts";
 export type ChatRoute = { channel: "web"; contact: "owner" } | { channel: "telegram"; chatId: number };
 /**
  * An email (plan 0.014): one address and its subject; a reply to a mail (plan 0.015) also names the mail it
- * answers. Never the route of a turn with tools: a mail's turn has none.
+ * answers. A turn's route only for a trusted sender's mail from an address the owner stored (plan 0.016).
  */
 export type EmailRoute = { channel: "email"; to: string; subject: string; inReplyTo?: string; references?: string };
 export type Route = ChatRoute | EmailRoute;
+/** A route as the owner reads it (`/plan`, `/commitments`). */
+export function routeLabel(r: Route): string {
+	if (r.channel === "web") return "the web chat";
+	if (r.channel === "email") return `email to ${r.to}`;
+	return `Telegram chat ${r.chatId}`;
+}
+
+/** How a request arrived, as the owner's notices and records name it ("asked via …"). */
+export function viaOf(r: Route): string {
+	return r.channel === "web" ? "web chat" : r.channel === "email" ? "email" : "Telegram";
+}
+
 /** Channels the outbox delivers on. */
 export type OutboundChannel = Channel;
 export type ActionKind = "reply" | "failure_notice";

@@ -24,7 +24,7 @@
  */
 
 import { Type } from "typebox";
-import type { Outbox } from "../outbox/outbox.ts";
+import { type Outbox, viaOf } from "../outbox/outbox.ts";
 import { getContact, OWNER_CONTACT_ID, resolvePerson, scopeFor } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
 import {
@@ -174,7 +174,7 @@ export function emailToolkit(deps: EmailDeps): Toolkit {
 function asker(db: Db, ctx: ToolContext): Asker | string {
 	if (ctx.principal === "iyye") return "Not sent: Iyye does not send email on its own.";
 	if (!ctx.turn) return "Email can only be sent when someone asks in a conversation.";
-	const via = ctx.turn.route.channel === "web" ? "web chat" : "Telegram";
+	const via = viaOf(ctx.turn.route);
 	if (ctx.principal === "owner")
 		return {
 			kind: "owner",

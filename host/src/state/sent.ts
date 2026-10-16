@@ -124,7 +124,7 @@ export function sentReport(db: Db): string {
 					? "by Iyye on its own"
 					: r.requested_by === "owner"
 						? `asked by you in the ${r.requested_via}`
-						: `asked by ${JSON.stringify((r.requester ?? "a contact").slice(0, 64))} on ${r.requested_via}`;
+						: `asked by ${JSON.stringify((r.requester ?? "a contact").slice(0, 64))} ${r.requested_via === "email" ? "by" : "on"} ${r.requested_via}`;
 			return `  ${r.created_at.slice(0, 10)} ${at} to ${to} (${asked}) · ${r.state ?? "not sent"}${receipt ? `, receipt ${receipt.level}` : ""} · ${JSON.stringify(r.text.replace(/\s+/g, " ").slice(0, 100))}`;
 		}),
 		...emails,

@@ -7,6 +7,7 @@
  * A reminder set by command goes to the owner's web chat.
  */
 
+import { type Route, routeLabel } from "../outbox/outbox.ts";
 import {
 	cancelSeries,
 	findCommitments,
@@ -123,6 +124,5 @@ function who(db: Db, contactId: string): string {
 }
 
 function route(json: string): string {
-	const r = JSON.parse(json) as { channel: string; chatId?: number };
-	return r.channel === "web" ? "the web chat" : `Telegram chat ${r.chatId}`;
+	return routeLabel(JSON.parse(json) as Route);
 }

@@ -25,7 +25,7 @@
  */
 
 import { Type } from "typebox";
-import type { Outbox, Route } from "../outbox/outbox.ts";
+import { type Outbox, type Route, viaOf } from "../outbox/outbox.ts";
 import {
 	accountsOf,
 	type Contact,
@@ -245,7 +245,7 @@ function requester(db: Db, ctx: ToolContext): Requester | string {
 	if (ctx.principal === "iyye")
 		return { kind: "iyye", contactId: null, name: "Iyye", scope: ctx.scope, via: "background", eventId: null };
 	if (!ctx.turn) return "Messages can only be sent when someone asks in a conversation.";
-	const via = ctx.turn.route.channel === "web" ? "web chat" : "Telegram";
+	const via = viaOf(ctx.turn.route);
 	if (ctx.principal === "owner")
 		return {
 			kind: "owner",

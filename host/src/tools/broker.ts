@@ -31,7 +31,7 @@ import { createHash } from "node:crypto";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 import type { Logger } from "../log.ts";
-import type { ChatRoute } from "../outbox/outbox.ts";
+import type { Route } from "../outbox/outbox.ts";
 import type { Db } from "../state/db.ts";
 import { recordToolCall } from "../state/tool-calls.ts";
 
@@ -74,7 +74,8 @@ export const WEB_TOOLKIT = "web";
  * effect (a reminder) may reach only this route.
  */
 export interface TurnContext {
-	route: ChatRoute;
+	/** A chat, or the reply thread of a mail (plan 0.016: a trusted sender's mail from a stored address). */
+	route: Route;
 	contactId: string;
 	eventId: string | null;
 }

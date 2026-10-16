@@ -11,6 +11,7 @@
 
 import { Type } from "typebox";
 import type { PlanRunner, ProposedStep } from "../kernel/plans.ts";
+import { viaOf } from "../outbox/outbox.ts";
 import type { IyyeTool, ToolContext, Toolkit } from "./broker.ts";
 
 interface StepParam {
@@ -73,7 +74,7 @@ export function plansToolkit(runner: Pick<PlanRunner, "propose" | "markTaskDone"
 				scope: ctx.scope,
 				route: ctx.turn.route,
 				eventId: ctx.turn.eventId,
-				via: ctx.turn.route.channel === "web" ? "web chat" : "Telegram",
+				via: viaOf(ctx.turn.route),
 			});
 		},
 	};

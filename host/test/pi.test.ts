@@ -19,6 +19,7 @@ import { RouterClient } from "../src/models/client.ts";
 import { renderPreset } from "../src/models/preset.ts";
 import type { RouterProcess } from "../src/models/router.ts";
 import { openDb } from "../src/state/db.ts";
+import { emailSession } from "../src/state/sessions.ts";
 import { fakeRouterProcess, freePort, type Sandbox, sandbox, waitFor } from "./model-helpers.ts";
 
 const OWNER: ScopeView = { kind: "owner", channel: "web" };
@@ -214,6 +215,32 @@ describe("Pi integration", () => {
 		);
 		assert.notEqual(conv.sessionFile("owner-night"), before);
 		assert.ok(readFileSync(before, "utf8").includes("teal"), "the old transcript is kept for audit");
+		await conv.disposeAll();
+	});
+
+	test("plan 0.016: a person's mail is its own conversation beside their chat; /forget removes both", async () => {
+		const db = openDb(":memory:");
+		const conv = conversations(db);
+		const scope = "contact:julia";
+		const chat: ScopeView = { kind: "contact", channel: "telegram", displayName: "Julia", trusted: true };
+		const mail: ScopeView = { kind: "contact", channel: "email", displayName: "Julia", trusted: true };
+		await conv.turn({ scope, view: chat, model: "small", text: "chat one" });
+		const m = await conv.turn({
+			scope,
+			session: emailSession(scope),
+			view: mail,
+			model: "small",
+			text: "[[history]]",
+		});
+		assert.equal(m.ok && m.text, "history: [[history]]", "the mail does not see the chat");
+		assert.match(text(requests().at(-1)!.messages[0]!), /You are answering email from "Julia"/);
+		const c = await conv.turn({ scope, view: chat, model: "small", text: "[[history]]" });
+		assert.equal(c.ok && c.text, "history: chat one | [[history]]", "the chat does not see the mail");
+		const files = [conv.sessionFile(scope)!, conv.sessionFile(emailSession(scope))!];
+		assert.notEqual(files[0], files[1]);
+		assert.equal(await conv.forgetScopes([scope]), 2);
+		assert.deepEqual([conv.sessionFile(scope), conv.sessionFile(emailSession(scope))], [null, null]);
+		for (const f of files) assert.ok(!existsSync(f), `${f} is deleted`);
 		await conv.disposeAll();
 	});
 

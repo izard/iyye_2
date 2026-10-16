@@ -382,6 +382,17 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 				UNION SELECT address FROM contact_emails WHERE contact_id IN (${am}))`,
 		).run(FORGOTTEN, FORGOTTEN, ...accounts, ...accounts, ...accounts);
 		db.prepare(`DELETE FROM contact_emails WHERE contact_id IN (${am})`).run(...accounts);
+		// Reminders and plans made by mail (plan 0.016) keep the mail's thread as their route: the address,
+		// the subject and the thread ids go from them and from the reminders' actions.
+		const noRoute = JSON.stringify({ channel: "email", to: FORGOTTEN, subject: FORGOTTEN });
+		for (const table of ["commitments", "plans"])
+			db.prepare(
+				`UPDATE ${table} SET route_json = ? WHERE json_extract(route_json, '$.channel') = 'email' AND scope IN (${marks})`,
+			).run(noRoute, ...t.scopes);
+		db.prepare(
+			`UPDATE actions SET route_json = ? WHERE json_extract(route_json, '$.channel') = 'email'
+			 AND commitment_id IN (SELECT id FROM commitments WHERE scope IN (${marks}))`,
+		).run(noRoute, ...t.scopes);
 		// Reminders sent to them (no event; their commitment says whose), and the owner's notices that quote one.
 		db.prepare(
 			`UPDATE actions SET content = ? WHERE content IS NOT NULL
