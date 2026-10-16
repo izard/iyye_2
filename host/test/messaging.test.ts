@@ -298,6 +298,10 @@ describe("telegram_send (plan 0.008)", () => {
 		// "Please confirm in Telegram": to the owner's own Telegram chat.
 		assert.match(await tool.run({ to: "Alex", text: "Your mail arrived." }, mail(), undefined), /^Sent to the owner/);
 		assert.equal(fake.messagesTo(5001).at(-1), "✉️ From Iyye, on behalf of The owner (email):\n\nYour mail arrived.");
+		// The prompt says "your owner", and that is all a model may know them by.
+		for (const to of ["the owner", "owner", "Your Owner"])
+			assert.match(await tool.run({ to, text: "Confirmed." }, mail(), undefined), /^Sent to the owner/, to);
+		assert.equal(fake.messagesTo(5001).at(-1), "✉️ From Iyye, on behalf of The owner (email):\n\nConfirmed.");
 		assert.match(await tool.run({ to: "Jacob", text: "Hello from Alex" }, mail(), undefined), /delivered/);
 		assert.match(sentReport(db), /to Jacob \(asked by "The owner \(email\)" by email\)/);
 		const via = db.prepare("SELECT DISTINCT requested_via FROM sent_messages").all() as { requested_via: string }[];
