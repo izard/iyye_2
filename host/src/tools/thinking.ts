@@ -22,7 +22,7 @@
 
 import { Type } from "typebox";
 import type { ModelLease, OpResult } from "../models/manager.ts";
-import { streamChat } from "../models/stream.ts";
+import { type StreamedChat, streamChat } from "../models/stream.ts";
 import type { Db } from "../state/db.ts";
 import { type IyyeTool, shorten, type Toolkit } from "./broker.ts";
 
@@ -37,12 +37,11 @@ const MAX_ANSWER_CHARS = 8000;
  */
 const CUT_OFF_MID_THOUGHT = "[truncated — reasoning incomplete";
 
-/** One streamed completion with thinking on: the answer text (reasoning dropped) and whether it was cut off. */
-export type ThinkComplete = (
-	model: string,
-	question: string,
-	signal: AbortSignal,
-) => Promise<{ text: string; truncated: boolean }>;
+/**
+ * One streamed completion with thinking on: the answer text (reasoning dropped), whether it was cut off, and
+ * why it stopped early when it failed partway (`error`).
+ */
+export type ThinkComplete = (model: string, question: string, signal: AbortSignal) => Promise<StreamedChat>;
 
 export interface ThinkingDeps {
 	db: Db;
@@ -96,6 +95,12 @@ export function thinkingToolkit(d: ThinkingDeps): Toolkit {
 				const r = await d.complete(d.model, q.text, abort.signal);
 				const secs = Math.round((now().getTime() - t0) / 1000);
 				const text = r.text.trim();
+				if (r.error && (!text || text.startsWith(CUT_OFF_MID_THOUGHT)))
+					return `The thinking model on ${d.machine} failed (after ${secs} s) before it answered: ${r.error}. Answer yourself, and say so.`;
+				if (r.error) {
+					const part = text.length > MAX_ANSWER_CHARS ? `${text.slice(0, MAX_ANSWER_CHARS)} […]` : text;
+					return `${q.note}The thinking model on ${d.machine} failed partway through its answer (after ${secs} s: ${r.error}). What it wrote before failing is below; it stops mid-way and its conclusion is missing. Use it only as far as it goes, and say that the answer was cut off:\n${part}`;
+				}
 				if (!text)
 					return `The thinking model on ${d.machine} gave no answer (after ${secs} s). Answer yourself, and say so.`;
 				if (r.truncated && text.startsWith(CUT_OFF_MID_THOUGHT))

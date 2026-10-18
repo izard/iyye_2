@@ -122,6 +122,31 @@ describe("ask_thinking_model", () => {
 		);
 	});
 
+	test("a server failing partway (2026-10-18): what came is passed on as cut off, never as an answer", async () => {
+		const failed = "the server failed: inference was interrupted (engine_transient)";
+		const r = rig({ complete: async () => ({ text: "The bound is M ≈ 2 × 1", truncated: false, error: failed }) });
+		const out = (await r.ask("q")).content[0]!.text;
+		assert.match(
+			out,
+			/^The thinking model on mbp failed partway through its answer \(after \d+ s: the server failed: inference was interrupted \(engine_transient\)\)\..*conclusion is missing.*:\nThe bound is M ≈ 2 × 1$/s,
+		);
+		assert.ok(!out.includes("The thinking model answered"));
+		const before = rig({ complete: async () => ({ text: "", truncated: false, error: failed }) });
+		assert.match(
+			(await before.ask("q")).content[0]!.text,
+			/^The thinking model on mbp failed \(after \d+ s\) before it answered: the server failed: .*Answer yourself, and say so\.$/,
+		);
+		// A failed question does not use up the day's limit.
+		assert.equal(
+			(
+				r.db.prepare("SELECT count(*) AS n FROM tool_calls WHERE result LIKE '%answered after%'").get() as {
+					n: number;
+				}
+			).n,
+			0,
+		);
+	});
+
 	test("an unavailable or lost machine is said plainly, never retried", async () => {
 		const away = rig({
 			models: { acquire: async (): Promise<OpResult> => ({ ok: false, busy: true, message: "mbp is unreachable" }) },
@@ -179,6 +204,52 @@ test("thinkComplete streams with thinking on, keeps only the answer, and notices
 		assert.equal(body.stream, true);
 		assert.equal(body.max_tokens, 16384);
 		assert.deepEqual(body.chat_template_kwargs, { enable_thinking: true });
+	} finally {
+		server.close();
+	}
+});
+
+test("streamChat: a server's error frame, or a stream that ends without a finish, is never a whole answer", async () => {
+	const scripts: Record<string, string[]> = {
+		// rapid-mlx after a Metal failure mid-answer: an error frame, then [DONE].
+		error: [
+			JSON.stringify({ choices: [{ delta: { content: "Half an " }, finish_reason: null }] }),
+			JSON.stringify({
+				error: { message: "inference was interrupted", type: "server_error", code: "engine_transient" },
+			}),
+			"[DONE]",
+		],
+		// The connection simply closes.
+		closed: [JSON.stringify({ choices: [{ delta: { content: "Half an " }, finish_reason: null }] })],
+		// [DONE] with no finish_reason.
+		unfinished: [JSON.stringify({ choices: [{ delta: { content: "Half an " }, finish_reason: null }] }), "[DONE]"],
+		ok: [JSON.stringify({ choices: [{ delta: { content: "Whole." }, finish_reason: "stop" }] }), "[DONE]"],
+	};
+	const server = createServer((req, res) => {
+		req.resume();
+		req.on("end", () => {
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			for (const d of scripts[req.url?.split("/")[1] ?? ""] ?? []) res.write(`data: ${d}\n\n`);
+			res.end();
+		});
+	});
+	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	try {
+		const run = (script: string) =>
+			thinkComplete(() => `${url}/${script}`, 1024)("m@mbp", "q", new AbortController().signal);
+		assert.deepEqual(await run("error"), {
+			text: "Half an ",
+			truncated: false,
+			error: "the server failed: inference was interrupted (engine_transient)",
+		});
+		assert.deepEqual(await run("closed"), {
+			text: "Half an ",
+			truncated: false,
+			error: "the stream ended before the answer was finished",
+		});
+		assert.equal((await run("unfinished")).error, "the stream ended before the answer was finished");
+		assert.deepEqual(await run("ok"), { text: "Whole.", truncated: false });
 	} finally {
 		server.close();
 	}
