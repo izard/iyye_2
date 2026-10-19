@@ -18,7 +18,7 @@ import { forgetRecords, forgetTarget } from "../src/memory/forget.ts";
 import { MotivationActor } from "../src/motivation/actor.ts";
 import { InitiativeLedger } from "../src/motivation/budget.ts";
 import { makeComposer } from "../src/motivation/compose.ts";
-import { countsFor, ensureTrial, motivationReport, traceOpportunity } from "../src/motivation/report.ts";
+import { countsFor, ensureTrial, markUseful, motivationReport, traceOpportunity } from "../src/motivation/report.ts";
 import { recordServices } from "../src/motivation/services.ts";
 import { collectSignals } from "../src/motivation/signals.ts";
 import { MotivationTracker } from "../src/motivation/tracker.ts";
@@ -638,8 +638,25 @@ test("the report and the trial period read records only", () => {
 	db.prepare(
 		"INSERT INTO motivation_events (id, at, opportunity_id, motivation, kind, reason, ref) VALUES ('e9', ?, 'o9', 'social', 'attempted', 'notice', 'notice:motivation:o9:t')",
 	).run(clock.t.toISOString());
+	db.prepare(
+		`INSERT INTO opportunities (id, cluster, domain, evidence_json, evidence_text, question, status, created_at, updated_at, motivation, action_kind)
+		 VALUES ('c0ffee99', 'c9', 'conversation', '[]', 'the owner   said: a talk tomorrow', 'q', 'running', ?, ?, 'social', 'follow_up')`,
+	).run(clock.t.toISOString(), clock.t.toISOString());
+	db.prepare("UPDATE motivation_events SET opportunity_id = 'c0ffee99' WHERE id = 'e9'").run();
+	db.prepare("UPDATE actions SET idempotency_key = 'notice:motivation:c0ffee99:t' WHERE id = 'n1'").run();
+	db.prepare("UPDATE motivation_events SET ref = 'notice:motivation:c0ffee99:t' WHERE id = 'e9'").run();
 	const report = motivationReport(db, s.ledger, { now: clock.t });
 	assert.match(report, /social: opened 0, attempted 1[\s\S]*unconfirmed deliveries 1/);
+	// What Iyye did is listed with the id that trace and useful take, and whether the owner judged it.
+	assert.match(
+		report,
+		/what Iyye did on its own \(1 without your judgement\):\n {2}c0ffee99 \S+ \S+ social · follow_up — running · not judged yet\n {4}the owner said: a talk tomorrow/,
+	);
+	assert.match(markUseful(db, "c0ffee99", "yes", clock.t), /noted: c0ffee99 was useful/);
+	assert.match(
+		motivationReport(db, s.ledger, { now: clock.t }),
+		/\(0 without your judgement\)[\s\S]*running · useful/,
+	);
 	assert.match(report, /trial period since .* \(behaviour bbbb\)/);
 	assert.match(
 		report,

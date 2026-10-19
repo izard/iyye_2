@@ -203,8 +203,46 @@ export function motivationReport(
 			.get() as { n: number }
 	).n;
 	lines.push(`settled without an outcome: ${unexplained}${unexplained ? " (should be 0)" : ""}`);
+	lines.push(...actedList(db, since));
 	lines.push("/motivation trace <id> shows one opportunity; /motivation useful <id> yes|no records your judgement.");
 	return lines.join("\n");
+}
+
+/**
+ * What Iyye did on its own in the period, newest first, with the ids that `trace` and `useful` take and
+ * your judgement so far: the list to label from.
+ */
+function actedList(db: Db, since: string, limit = 20): string[] {
+	const rows = db
+		.prepare(
+			`SELECT o.id, o.motivation, o.action_kind, o.status, o.outcome, o.evidence_text, max(v.at) AS at,
+			   (SELECT u.kind FROM motivation_events u WHERE u.opportunity_id = o.id AND u.kind IN ('useful', 'not_useful')
+			    ORDER BY u.at DESC, u.rowid DESC LIMIT 1) AS judged
+			 FROM motivation_events v JOIN opportunities o ON o.id = v.opportunity_id
+			 WHERE v.kind = 'attempted' AND v.at >= ?
+			 GROUP BY o.id ORDER BY at DESC LIMIT ?`,
+		)
+		.all(since, limit + 1) as {
+		id: string;
+		motivation: string | null;
+		action_kind: string | null;
+		status: string;
+		outcome: string | null;
+		evidence_text: string | null;
+		at: string;
+		judged: string | null;
+	}[];
+	if (rows.length === 0) return ["what Iyye did on its own: nothing in this period"];
+	const waiting = rows.filter((r) => !r.judged).length;
+	return [
+		`what Iyye did on its own (${waiting}${rows.length > limit ? "+" : ""} without your judgement):`,
+		...rows
+			.slice(0, limit)
+			.map(
+				(r) =>
+					`  ${r.id.slice(0, 8)} ${r.at.slice(0, 16).replace("T", " ")} ${(r.motivation ?? "curiosity").replace("_", "-")} · ${r.action_kind ?? "investigate"} — ${r.outcome ?? r.status} · ${r.judged === "useful" ? "useful" : r.judged === "not_useful" ? "not useful" : "not judged yet"}\n    ${(r.evidence_text ?? "").replace(/\s+/g, " ").slice(0, 120)}`,
+			),
+	];
 }
 
 function findOpportunity(db: Db, ref: string): { id: string } | string {
