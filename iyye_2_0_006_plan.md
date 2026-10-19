@@ -121,7 +121,7 @@ Exit, tests on the fake router and fake Telegram:
   - cancels their scheduled reminders;
   - replaces with `[forgotten]` the text of their commitments, of every reminder action sent to them, and of the owner's failure and missed notices that quoted one (actions and web chat).
 - **Owner notices name and quote:** `"Julia"'s reminder "…" (to their Telegram chat) could not be delivered: …`. The person's name and words are quoted and clipped, since a contact controls that text.
-- Times use the system timezone; `IYYE2_TIMEZONE` is not implemented (the process timezone is the owner's).
+- Times use the system timezone, which is the owner's (owner decision 2026-10-19: this is fine; `IYYE2_TIMEZONE` will not be built).
 - **Known limits:**
   - with the promise check label-only (owner decision 2), a false "I've set a reminder" without a tool call (C0's B12) is still delivered; C2 only makes it visible in `/decisions`;
   - a sent reminder is not in the person's Pi conversation or STM. **Owner choice (2026-10-04), built:** a request-local `<reminders>` note in that chat's next turns (`PiConversations.turnNotes` → `recentReminderNote`) lists the reminders delivered there in the last 12 hours, quoted (a person wrote them), so "done, thanks" makes sense. It is never stored in the transcript, STM or long-term memory, and background turns never get it.
@@ -214,7 +214,7 @@ A plan step of kind `task`: something the person does themselves (an agreed list
 | `IYYE2_CONTACT_REMINDERS_MAX` | `20` | open reminders a contact may have |
 | `IYYE2_CONTACT_PLANS_MAX` | `5` | open plans a contact may have |
 | `IYYE2_REMINDER_MAX_LATE_D` | `7` | later than this, it fails and is reported instead |
-| `IYYE2_TIMEZONE` | — | **not built**: times use the system timezone, which is the owner's |
+| `IYYE2_TIMEZONE` | — | **not built, by owner decision (2026-10-19)**: times use the system timezone, which is the owner's |
 
 ## 7. Owner decisions
 

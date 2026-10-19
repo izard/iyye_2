@@ -27,7 +27,7 @@
 - A **toolkit** is a named group: `{ name, description, effect: "read" | "act", tools }`. The broker stays the only path to tools and authorizes at execution time, now per toolkit.
 - Initial toolkits: `core` (`current_time`, `memory_search`; always on), `machine` (`system_status`), `web` (`web_search`, `web_fetch`).
 - **Read-only toolkits are for everyone** (owner decision 2): owner and every contact, trusted or not. `machine` therefore becomes available to contacts. **Consequence (flagged for the owner):** a Telegram contact can learn free disk space, memory, uptime and the loaded model names.
-- Toolkits with effects (`act`) do not exist yet. When one does, it needs an owner grant per contact (`/grant`, `/revoke`, local owner surfaces only, HLD §9.2). That machinery is not built in 0.004.
+- Toolkits with effects (`act`) do not exist yet. When one does, it needs an owner grant per contact (`/grant`, `/revoke`, local owner surfaces only, HLD §9.2). That machinery is not built in 0.004. **Owner decision (2026-10-19), built:** trust alone gives a contact the `act` toolkits (today only `thinking`), no grant per toolkit; untrusted contacts and Iyye's own work never get them. Only `/trust` and `/untrust` from the local surfaces change it, and a change reopens the contact's session with the new tool set (`ToolBroker.allowed`).
 - The system prompt lists tools grouped by toolkit. `/tools` shows the toolkits, who has them, and the last calls with outcomes, from `tool_calls`.
 - `memory_search` stays bound to the session's trusted scope, as before.
 
@@ -286,7 +286,7 @@ The owner asked for more resource monitoring ("nvidia-smi, powertop, etc."). Not
 
 ## 6. Out of scope
 
-- `act` toolkits and per-contact grants.
+- Per-contact grants (owner decision 2026-10-19: trust alone gives `act` toolkits instead).
 - Browsing with JavaScript, logins, forms, downloads, PDFs and images.
 - Hosted search APIs of any kind.
 

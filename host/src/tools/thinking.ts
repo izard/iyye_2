@@ -3,12 +3,14 @@
 
 /**
  * "Ask the thinking model" (owner decision 2026-10-09, widening plan 0.012):
- * the owner's turns may hand one self-contained question to the reasoning
- * model on the owner's other machine (the MBP) and get its answer back.
+ * the owner's turns, and since 2026-10-19 trusted contacts' (owner decision:
+ * trust alone grants `act` toolkits), may hand one self-contained question to
+ * the reasoning model on the owner's other machine (the MBP) and get its
+ * answer back.
  *
- * - Owner-only (effect `act`): the question leaves the Spark, and only the
- *   owner decided that may happen. Never contacts, never background work
- *   (whose model this already is).
+ * - Effect `act`: the owner and contacts the owner trusts. Never untrusted
+ *   contacts, never background work (whose model this already is). The daily
+ *   limit is shared by everyone who may ask.
  * - The model sees only the question the session wrote: no conversation, no
  *   memory, no tools, no session kept anywhere. Its reasoning is not returned,
  *   only its answer.

@@ -31,7 +31,7 @@
  * scheduler (M7) limits how many run on the device at once.
  */
 
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { getCurrentTools } from "@earendil-works/pi-ai";
 import {
@@ -217,6 +217,46 @@ export class PiConversations {
 			}
 		}
 		return removed;
+	}
+
+	/**
+	 * Transcript files in this store, current and retired, that name someone (`/forget`, owner decision
+	 * 2026-10-19; `mentions.ts`). `exclude`: scopes whose transcripts are not counted (the person's own,
+	 * which `forgetScopes` deletes whole).
+	 */
+	transcriptsMentioning(names: RegExp | null, exclude: readonly string[] = []): string[] {
+		if (!names) return [];
+		const root = join(this.d.stateDir, "sessions");
+		if (!existsSync(root)) return [];
+		const found: string[] = [];
+		const walk = (dir: string) => {
+			for (const e of readdirSync(dir, { withFileTypes: true })) {
+				const path = join(dir, e.name);
+				if (e.isDirectory()) walk(path);
+				else if (e.name.endsWith(".jsonl") && names.test(readFileSync(path, "utf8"))) found.push(path);
+			}
+		};
+		const skip = new Set(exclude.flatMap((s) => [s, emailSession(s)]).map((s) => join(root, encodeURIComponent(s))));
+		for (const e of readdirSync(root, { withFileTypes: true }))
+			if (e.isDirectory() && !skip.has(join(root, e.name))) walk(join(root, e.name));
+		return found;
+	}
+
+	/**
+	 * Delete the transcripts that name someone. A conversation whose current transcript is one of them starts
+	 * afresh first (as after a night), so nothing writes to a deleted file. Returns how many files went.
+	 */
+	async eraseTranscriptsMentioning(names: RegExp | null): Promise<number> {
+		const files = this.transcriptsMentioning(names);
+		if (files.length === 0) return 0;
+		const current = this.d.db.prepare("SELECT scope, session_file FROM pi_sessions").all() as {
+			scope: string;
+			session_file: string;
+		}[];
+		const live = current.filter((c) => files.includes(c.session_file)).map((c) => c.scope);
+		if (live.length) await this.retireScopes(live);
+		for (const f of files) rmSync(f, { force: true });
+		return files.length;
 	}
 
 	/** Start these scopes' conversations afresh (as after a night); their transcript files stay. */

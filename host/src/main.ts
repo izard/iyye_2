@@ -818,6 +818,15 @@ async function main(): Promise<number> {
 		forgetConversations: (scopes) => conversations.forgetScopes(scopes),
 		forgetBackground: (scopes) => backgroundConversations.forgetScopes(scopes),
 		retireConversations: (scopes) => conversations.retireScopes(scopes),
+		// Owner decision 2026-10-19: transcripts in every conversation store that name the person go too.
+		transcripts: {
+			count: (names, exclude) =>
+				conversations.transcriptsMentioning(names, exclude).length +
+				backgroundConversations.transcriptsMentioning(names, exclude).length,
+			erase: async (names) =>
+				(await conversations.eraseTranscriptsMentioning(names)) +
+				(await backgroundConversations.eraseTranscriptsMentioning(names)),
+		},
 		forgetQueued: (scopes) => {
 			// A workspace may hold anything a conversation wrote about the person: all of them go.
 			sandbox?.wipeAll();

@@ -19,7 +19,7 @@ import { test } from "node:test";
 import { Character } from "../src/character/character.ts";
 import { handleOwnerCommand, isKnownCommand } from "../src/kernel/commands.ts";
 import { DeviceSlot } from "../src/kernel/device.ts";
-import { forgetRecords } from "../src/memory/forget.ts";
+import { forgetRecords, forgetTarget } from "../src/memory/forget.ts";
 import { getContact } from "../src/state/contacts.ts";
 import { type Db, migrate, openDb } from "../src/state/db.ts";
 import { VoiceCommands } from "../src/voice/commands.ts";
@@ -443,7 +443,7 @@ test("/forget: the person's samples and those naming them keep only ids, are nev
 	const { shadow } = voice(db, { kev: true });
 	await shadow.drainOnce();
 	commands(db).command(["same", (samples(db)[0]!.id as string).slice(0, 8)], "owner_web");
-	forgetRecords(db, { person: getContact(db, "jacob")!, scopes: ["contact:jacob"] } as never, "owner_web", ago(0));
+	forgetRecords(db, forgetTarget(db, getContact(db, "jacob")!) as never, "owner_web", ago(0));
 	const rows = samples(db);
 	const gone = rows.filter((r) => r.status === "forgotten");
 	assert.equal(gone.length, 2);

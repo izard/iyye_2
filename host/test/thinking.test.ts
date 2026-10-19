@@ -29,7 +29,7 @@ function lease(valid = () => true): ModelLease & { released: boolean } {
 	return l;
 }
 
-function rig(over: Partial<ThinkingDeps> = {}, principal: "owner" | "contact" | "iyye" = "owner") {
+function rig(over: Partial<ThinkingDeps> = {}, principal: "owner" | "contact" | "iyye" = "owner", trusted = false) {
 	const db = openDb(":memory:");
 	const device = new DeviceSlot();
 	const l = lease();
@@ -48,15 +48,20 @@ function rig(over: Partial<ThinkingDeps> = {}, principal: "owner" | "contact" | 
 		dailyMax: 2,
 		...over,
 	});
-	const tools = new ToolBroker({ db, toolkits: [kit], log: silentLogger }).forSession({ scope: "owner", principal });
+	const tools = new ToolBroker({ db, toolkits: [kit], log: silentLogger }).forSession({
+		scope: "owner",
+		principal,
+		trusted,
+	});
 	const ask = (question: string, signal?: AbortSignal) =>
 		(tools.definitions[0]!.execute as unknown as Exec)("c", { question }, signal, undefined, undefined as never);
 	return { db, device, lease: l, asked, tools, ask };
 }
 
 describe("ask_thinking_model", () => {
-	test("owner-only: contacts and background work never see it", () => {
+	test("the owner and trusted contacts (owner decision 2026-10-19); untrusted contacts and background work never", () => {
 		assert.deepEqual(rig().tools.names, ["ask_thinking_model"]);
+		assert.deepEqual(rig({}, "contact", true).tools.names, ["ask_thinking_model"]);
 		assert.deepEqual(rig({}, "contact").tools.names, []);
 		assert.deepEqual(rig({}, "iyye").tools.names, []);
 	});
