@@ -95,6 +95,8 @@ export function thinkingToolkit(d: ThinkingDeps): Toolkit {
 				const r = await d.complete(d.model, q.text, abort.signal);
 				const secs = Math.round((now().getTime() - t0) / 1000);
 				const text = r.text.trim();
+				// The pass-through lost the other machine mid-answer: say so in its words.
+				if (r.error && !lease.valid()) r.error = `the connection to ${d.machine} was lost`;
 				if (r.error && (!text || text.startsWith(CUT_OFF_MID_THOUGHT)))
 					return `The thinking model on ${d.machine} failed (after ${secs} s) before it answered: ${r.error}. Answer yourself, and say so.`;
 				if (r.error) {

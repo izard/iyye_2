@@ -78,8 +78,10 @@ Serving ${name} on https://${listen}:${port}: ${rapidMlx} ${serverArgs.join(" ")
 `);
 const [cmd, cmdArgs] =
 	process.platform === "darwin" ? ["/usr/bin/caffeinate", ["-i", rapidMlx, ...serverArgs]] : [rapidMlx, serverArgs];
+// No stdin: rapid-mlx asks at startup whether to upgrade itself ("Run it now? [Y/n]") and would wait there,
+// never listening; without a terminal it skips the question and serves.
 const child = spawn(cmd, cmdArgs as string[], {
-	stdio: "inherit",
+	stdio: ["ignore", "inherit", "inherit"],
 	env: { ...process.env, RAPID_MLX_API_KEY: readFileSync(secrets.keyFile, "utf8").trim() },
 });
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => child.kill(sig));

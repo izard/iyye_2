@@ -8,6 +8,7 @@ import { describe, test } from "node:test";
 import { DeviceSlot } from "../src/kernel/device.ts";
 import { silentLogger } from "../src/log.ts";
 import type { ModelLease, OpResult } from "../src/models/manager.ts";
+import { brokenStream } from "../src/models/stream.ts";
 import { openDb } from "../src/state/db.ts";
 import { toolCallsForScope } from "../src/state/tool-calls.ts";
 import { ToolBroker } from "../src/tools/broker.ts";
@@ -163,6 +164,20 @@ describe("ask_thinking_model", () => {
 		});
 		assert.match((await lost.ask("q")).content[0]!.text, /connection to mbp was lost/);
 		assert.ok(l.released);
+		// The pass-through lost the machine mid-answer: the part that came is passed on, with that reason.
+		let ok = true;
+		const l2 = lease(() => ok);
+		const midway = rig({
+			models: { acquire: async () => l2 },
+			complete: async () => {
+				ok = false;
+				return { text: "The first half", truncated: false, error: "the connection broke (terminated)" };
+			},
+		});
+		assert.match(
+			(await midway.ask("q")).content[0]!.text,
+			/failed partway through its answer \(after \d+ s: the connection to mbp was lost\).*:\nThe first half$/s,
+		);
 	});
 
 	test("the turn's cancellation stops the call", async () => {
@@ -224,6 +239,8 @@ test("streamChat: a server's error frame, or a stream that ends without a finish
 		// [DONE] with no finish_reason.
 		unfinished: [JSON.stringify({ choices: [{ delta: { content: "Half an " }, finish_reason: null }] }), "[DONE]"],
 		ok: [JSON.stringify({ choices: [{ delta: { content: "Whole." }, finish_reason: "stop" }] }), "[DONE]"],
+		// The connection breaks mid-answer (2026-10-19): what came is kept.
+		broken: [JSON.stringify({ choices: [{ delta: { content: "Half an " }, finish_reason: null }] })],
 	};
 	const server = createServer((req, res) => {
 		req.resume();
@@ -253,4 +270,15 @@ test("streamChat: a server's error frame, or a stream that ends without a finish
 	} finally {
 		server.close();
 	}
+});
+
+test("brokenStream: fetch's own 5-minute rule for a silent body is named as a dropped connection", () => {
+	const timeout = Object.assign(new TypeError("terminated"), {
+		cause: Object.assign(new Error("Body Timeout Error"), { code: "UND_ERR_BODY_TIMEOUT" }),
+	});
+	assert.match(brokenStream(timeout), /^nothing arrived from the server for 5 minutes/);
+	assert.equal(
+		brokenStream(Object.assign(new TypeError("terminated"), { cause: new Error("other side closed") })),
+		"the connection broke (other side closed)",
+	);
 });

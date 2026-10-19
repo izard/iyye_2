@@ -12,9 +12,9 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { request } from "node:http";
+import { request, type ServerResponse } from "node:http";
 import { createServer } from "node:https";
-import { createServer as netServer } from "node:net";
+import { createServer as netServer, type Socket } from "node:net";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 
@@ -120,9 +120,13 @@ export function startFront(o: {
 			res.on("close", () => {
 				if (!res.writableFinished) up.destroy();
 			});
+			watchStall(res);
 			req.pipe(up);
 		},
 	);
+	// A connection that goes quiet in both directions (no request body, no answer yet) is probed, so a peer
+	// that vanished is noticed in minutes, not hours.
+	front.on("connection", (socket: Socket) => socket.setKeepAlive(true, 60_000));
 	front.requestTimeout = 0;
 	front.headersTimeout = 60_000;
 	front.on("clientError", (_err, socket) => socket.destroy());
@@ -134,4 +138,35 @@ export function startFront(o: {
 	front.listen(o.port, o.listen, () =>
 		console.log(`HTTPS front on https://${o.listen}:${o.port} -> 127.0.0.1:${o.innerPort}`),
 	);
+}
+
+/**
+ * Ends an answer whose reader stopped reading (2026-10-19: Wi-Fi dropped the Spark's connection mid-answer;
+ * the Spark gave up after 5 minutes, but this side kept the server generating into the dead connection for
+ * 8 more, since a sending socket waits out the system's own retransmissions). Iyye always reads at once, so
+ * an answer that has not drained for `stallMs` has no reader: destroying it makes the server stop. Never a
+ * limit on the model's time: a server that sends nothing for an hour is left alone.
+ */
+export function watchStall(
+	res: Pick<ServerResponse, "writableNeedDrain" | "destroy" | "on">,
+	stallMs = 120_000,
+	everyMs = 10_000,
+): void {
+	let since: number | null = null;
+	const timer = setInterval(() => {
+		if (!res.writableNeedDrain) {
+			since = null;
+			return;
+		}
+		since ??= Date.now();
+		if (Date.now() - since >= stallMs) {
+			console.error(
+				`${new Date().toISOString()} front: the reader stopped reading for ${stallMs / 1000} s; ending the answer`,
+			);
+			clearInterval(timer);
+			res.destroy();
+		}
+	}, everyMs);
+	timer.unref();
+	res.on("close", () => clearInterval(timer));
 }
