@@ -206,10 +206,13 @@ export function collectSignals(s: SignalSources): Signal[] {
 	// knows what a reply actually used.) Recorded only: the tracker does not count them yet (JOURNAL_ONLY).
 	// Settled only by new independent evidence moving p out of the band; a belief resting on Iyye's own
 	// words alone is never a reason (HLD §11.2).
+	// Only beliefs in the closed predicate vocabulary (2026-10-20): the extractor's "other: <verb phrase>" catch-all
+	// is where requests and passing tasks land ("Please acknowledge receipt in telegram", "try again to send ack"),
+	// and asking the owner to confirm those as facts about them is noise. They stay beliefs; they are never asked.
 	for (const b of db
 		.prepare(
 			`SELECT b.id, b.subject, b.predicate, b.object, b.negated, b.details, b.p, b.updated_at FROM beliefs b
-			 WHERE b.state = 'current' AND b.p >= 0.3 AND b.p <= 0.7
+			 WHERE b.state = 'current' AND b.p >= 0.3 AND b.p <= 0.7 AND b.predicate NOT LIKE 'other:%'
 			 AND EXISTS (SELECT 1 FROM belief_evidence e WHERE e.belief_id = b.id AND e.source NOT IN ('iyye', 'probe') AND e.weight > 0)
 			 AND (b.subject_ref = 'owner'
 				OR (b.subject_ref LIKE 'contact:%' AND (

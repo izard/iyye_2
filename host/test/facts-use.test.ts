@@ -323,6 +323,20 @@ describe("F4: curiosity from important uncertain beliefs", () => {
 			collectSignals({ db, now: T0, selfGaps: () => [], healing: () => [], sleep: () => null }).filter(
 				(s) => s.kind === "belief_uncertain",
 			);
+		// A request caught by the "other:" catch-all is never asked about as a fact (2026-10-20).
+		fact(db, {
+			id: "g4",
+			source: "jacob",
+			scope: "contact:jacob",
+			object: "telegram account",
+			fact_key: "contact:julia|other: try sending acknowledgement",
+			subject: "Julia",
+			p: 0.6,
+		});
+		assert.ok(
+			db.prepare("SELECT p FROM beliefs WHERE predicate LIKE 'other:%' AND p BETWEEN 0.3 AND 0.7").get(),
+			"it is an uncertain belief like the others",
+		);
 		assert.deepEqual(
 			sig().map((s) => s.text),
 			["unsure (p 0.60) whether Julia plans to a trip to Rome"],
