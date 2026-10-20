@@ -20,6 +20,11 @@
  *   answer is streamed, so a long think never looks like a hang. The turn's
  *   own cancellation stops it.
  * - Bounded by a daily number of answered questions.
+ * - The session picks the reasoning effort per question (owner decision
+ *   2026-10-20): `low`, `medium` or `xhigh`, the levels Qwen3.8's template
+ *   knows, sent as `chat_template_kwargs.reasoning_effort`. Left out, it is
+ *   `medium`; the template's own default is `xhigh`, which spent 30k+ reasoning
+ *   tokens on every question.
  */
 
 import { Type } from "typebox";
@@ -43,7 +48,15 @@ const CUT_OFF_MID_THOUGHT = "[truncated — reasoning incomplete";
  * One streamed completion with thinking on: the answer text (reasoning dropped), whether it was cut off, and
  * why it stopped early when it failed partway (`error`).
  */
-export type ThinkComplete = (model: string, question: string, signal: AbortSignal) => Promise<StreamedChat>;
+export type ThinkComplete = (
+	model: string,
+	question: string,
+	signal: AbortSignal,
+	effort: ThinkingEffort,
+) => Promise<StreamedChat>;
+
+export type ThinkingEffort = "low" | "medium" | "xhigh";
+export const DEFAULT_THINKING_EFFORT: ThinkingEffort = "medium";
 
 export interface ThinkingDeps {
 	db: Db;
@@ -65,6 +78,12 @@ const QUESTION = Type.Object(
 			description:
 				"The whole question, self-contained: every fact, number and condition the model needs, since it sees nothing else.",
 		}),
+		effort: Type.Optional(
+			Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("xhigh")], {
+				description:
+					"How hard it should think. low: a quick check or a simple calculation (about a minute). medium (the default): an ordinary puzzle or analysis. xhigh: only a genuinely hard problem where correctness matters most; it can think for half an hour or more.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -94,7 +113,7 @@ export function thinkingToolkit(d: ThinkingDeps): Toolkit {
 			try {
 				release = await d.device.acquire(`thinking:${ctx.scope}`);
 				if (abort.signal.aborted) return "Stopped.";
-				const r = await d.complete(d.model, q.text, abort.signal);
+				const r = await d.complete(d.model, q.text, abort.signal, p.effort ?? DEFAULT_THINKING_EFFORT);
 				const secs = Math.round((now().getTime() - t0) / 1000);
 				const text = r.text.trim();
 				// The pass-through lost the other machine mid-answer: say so in its words.
@@ -145,15 +164,15 @@ function answeredToday(db: Db, now: Date): number {
 	).n;
 }
 
-/** The completion: streamed (`streamChat`), thinking on, the server's own sampling and reasoning budget. */
+/** The completion: streamed (`streamChat`), thinking on at the chosen effort, the server's own sampling. */
 export function thinkComplete(url: (model: string) => string, maxTokens: number): ThinkComplete {
-	return (model, question, signal) =>
+	return (model, question, signal, effort) =>
 		streamChat(
 			url(model),
 			{
 				model,
 				max_tokens: maxTokens,
-				chat_template_kwargs: { enable_thinking: true },
+				chat_template_kwargs: { enable_thinking: true, reasoning_effort: effort },
 				messages: [
 					{
 						role: "system",

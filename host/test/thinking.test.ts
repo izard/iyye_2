@@ -34,8 +34,10 @@ function rig(over: Partial<ThinkingDeps> = {}, principal: "owner" | "contact" | 
 	const device = new DeviceSlot();
 	const l = lease();
 	const asked: string[] = [];
-	const complete: ThinkComplete = async (_m, q) => {
+	const efforts: string[] = [];
+	const complete: ThinkComplete = async (_m, q, _s, effort) => {
 		asked.push(q);
+		efforts.push(effort);
 		return { text: "Sally's parents have five children.", truncated: false };
 	};
 	const kit = thinkingToolkit({
@@ -53,9 +55,15 @@ function rig(over: Partial<ThinkingDeps> = {}, principal: "owner" | "contact" | 
 		principal,
 		trusted,
 	});
-	const ask = (question: string, signal?: AbortSignal) =>
-		(tools.definitions[0]!.execute as unknown as Exec)("c", { question }, signal, undefined, undefined as never);
-	return { db, device, lease: l, asked, tools, ask };
+	const ask = (question: string, signal?: AbortSignal, effort?: string) =>
+		(tools.definitions[0]!.execute as unknown as Exec)(
+			"c",
+			effort ? { question, effort } : { question },
+			signal,
+			undefined,
+			undefined as never,
+		);
+	return { db, device, lease: l, asked, efforts, tools, ask };
 }
 
 describe("ask_thinking_model", () => {
@@ -76,6 +84,21 @@ describe("ask_thinking_model", () => {
 		assert.deepEqual(r.asked, ["If Sally has three brothers, and each has two sisters, how many children?"]);
 		assert.ok(r.lease.released);
 		assert.equal(r.device.holder, null);
+	});
+
+	test("the session picks the effort per question (owner decision 2026-10-20); left out, it is medium", async () => {
+		const r = rig({ dailyMax: 5 });
+		await r.ask("2+2?", undefined, "low");
+		await r.ask("Prove it.", undefined, "xhigh");
+		await r.ask("Which is larger?");
+		assert.deepEqual(r.efforts, ["low", "xhigh", "medium"]);
+		const props = (
+			r.tools.definitions[0]!.parameters as { properties: Record<string, { anyOf?: { const: string }[] }> }
+		).properties;
+		assert.deepEqual(
+			props.effort!.anyOf!.map((x) => x.const),
+			["low", "medium", "xhigh"],
+		);
 	});
 
 	test("takes the other machine's device: background work there gives way", async () => {
@@ -219,11 +242,11 @@ test("thinkComplete streams with thinking on, keeps only the answer, and notices
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 	try {
-		const r = await thinkComplete(() => url, 16384)("m@mbp", "riddle", new AbortController().signal);
+		const r = await thinkComplete(() => url, 16384)("m@mbp", "riddle", new AbortController().signal, "low");
 		assert.deepEqual(r, { text: "Five children.", truncated: true });
 		assert.equal(body.stream, true);
 		assert.equal(body.max_tokens, 16384);
-		assert.deepEqual(body.chat_template_kwargs, { enable_thinking: true });
+		assert.deepEqual(body.chat_template_kwargs, { enable_thinking: true, reasoning_effort: "low" });
 	} finally {
 		server.close();
 	}
@@ -259,7 +282,7 @@ test("streamChat: a server's error frame, or a stream that ends without a finish
 	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 	try {
 		const run = (script: string) =>
-			thinkComplete(() => `${url}/${script}`, 1024)("m@mbp", "q", new AbortController().signal);
+			thinkComplete(() => `${url}/${script}`, 1024)("m@mbp", "q", new AbortController().signal, "medium");
 		assert.deepEqual(await run("error"), {
 			text: "Half an ",
 			truncated: false,
