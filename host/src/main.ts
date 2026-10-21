@@ -94,6 +94,7 @@ import { Observer } from "./observe/observer.ts";
 import { ensureWorkspace } from "./observe/workspace.ts";
 import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
 import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./people/people.ts";
+import { guardClientRequests } from "./process/client-requests.ts";
 import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
@@ -128,6 +129,7 @@ import { SearxngService } from "./web/searxng.ts";
 
 async function main(): Promise<number> {
 	const log = consoleLogger();
+	guardClientRequests(log);
 	let config: ReturnType<typeof loadConfig>;
 	let registry: ReturnType<typeof loadRegistry>;
 	let identity: string;
