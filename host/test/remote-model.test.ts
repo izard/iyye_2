@@ -36,6 +36,8 @@ interface FakeEndpoint {
 	props: { file: string; ctx: number };
 	/** What /v1/models lists (an OpenAI-compatible server's models). */
 	models: Record<string, unknown>[];
+	/** How /v1/models answers: normally, by hanging up, or with a page that is not JSON. */
+	modelsReply: "ok" | "hang-up" | "html";
 	/** Drop the next completion's connection after its first chunk. */
 	dropNext: boolean;
 	server: Server;
@@ -49,6 +51,7 @@ async function fakeEndpoint(cert = "remote"): Promise<FakeEndpoint> {
 		requests: [],
 		props: { file: "tak.gguf", ctx: 8192 },
 		models: [{ id: "/Users/owner/Downloads/flash-q4", reasoning_parser: "qwen3" }],
+		modelsReply: "ok",
 		dropNext: false,
 		server: null as unknown as Server,
 		close: () => new Promise((r) => ep.server.close(() => r())),
@@ -64,6 +67,9 @@ async function fakeEndpoint(cert = "remote"): Promise<FakeEndpoint> {
 				return;
 			}
 			if (req.url === "/health") return void res.writeHead(200).end('{"status":"ok"}');
+			if (req.url === "/v1/models" && ep.modelsReply === "hang-up") return void res.socket?.destroy();
+			if (req.url === "/v1/models" && ep.modelsReply === "html")
+				return void res.writeHead(200).end("<html>busy</html>");
 			if (req.url === "/v1/models") return void res.writeHead(200).end(JSON.stringify({ data: ep.models }));
 			if (req.url === "/props")
 				return void res.writeHead(200).end(
@@ -458,6 +464,29 @@ describe("the thinking model: any OpenAI-compatible server, for the thinking too
 		assert.equal(ep.requests[0]!.body.model, "/Users/owner/Downloads/flash-q4");
 		assert.equal(ep.requests[0]!.auth, `Bearer ${KEY}`);
 		lease.release();
+	});
+
+	test("a hang-up or a bad page on /v1/models makes it unreachable, never an escaped rejection (crashes of 2026-10-21)", async () => {
+		const escaped: unknown[] = [];
+		const onRejection = (r: unknown) => escaped.push(r);
+		process.on("unhandledRejection", onRejection);
+		try {
+			const flaky = await fakeEndpoint();
+			flaky.modelsReply = "hang-up";
+			await start(flaky); // start() checks once; this rejected before
+			assert.equal(remote.status.state, "unreachable");
+			assert.match(remote.status.detail, /socket hang up|ECONNRESET/);
+			flaky.modelsReply = "html";
+			await remote.check();
+			assert.equal(remote.status.state, "unreachable");
+			flaky.modelsReply = "ok";
+			await remote.check();
+			assert.equal(remote.status.state, "up", remote.status.detail);
+			await new Promise((r) => setImmediate(r));
+			assert.deepEqual(escaped, []);
+		} finally {
+			process.off("unhandledRejection", onRejection);
+		}
 	});
 
 	test("refused: another model, or a server that leaves reasoning in the answer", async () => {

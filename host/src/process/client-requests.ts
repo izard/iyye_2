@@ -2,19 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The host's first crash (2026-10-21, during a Wi-Fi outage on the Spark):
- * `Error: socket hang up` at `TLSSocket.socketOnEnd`. Node emitted it on an
- * outgoing `http(s).request` that had no `'error'` listener, and an `'error'`
- * event with no listener throws, which took the host down. Node's stack names
- * no caller, so neither the call site nor its module was known.
+ * A backstop for outgoing requests nobody listens to. An `http(s).request` that
+ * fails with no `'error'` listener throws, which would take the host down
+ * (it holds the outbox, leases and SQLite state). Node prints that case as
+ * `Unhandled 'error' event` … `Emitted 'error' event on ClientRequest`.
  *
- * Every client request now gets one more `'error'` listener as it is created
+ * Written for the crashes of 2026-10-21 (`socket hang up` at
+ * `TLSSocket.socketOnEnd`), which turned out to be the other kind: an
+ * unhandled rejection from the thinking model's health check
+ * (`models/remote.ts`, fixed there). This listener does not cover that.
+ *
+ * Every client request gets one more `'error'` listener as it is created
  * (`http.client.request.created`, fired in the `ClientRequest` constructor).
  * A request whose own code also listens is unchanged: the error reaches that
  * code. A request with no other listener gets a warning naming where it was
  * created (once per creating line), not a crash. Whatever awaited that request
- * may then never settle, which is a bug to fix at the named site, not a reason
- * to stop the host, which holds the outbox, leases and SQLite state.
+ * may then never settle, which is a bug to fix at the named site.
  */
 
 import { subscribe, unsubscribe } from "node:diagnostics_channel";

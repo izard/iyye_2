@@ -184,7 +184,9 @@ export class RemoteModels {
 		try {
 			const health = await this.get("/health");
 			if (health.status !== 200) return this.lost("unreachable", `health answered HTTP ${health.status}`);
-			if (!this.spec) return this.checkOpenAi();
+			// Awaited, so its failures land in the catch below: a bare `return` let a rejection escape
+			// to the timer and crash the host (2026-10-21, twice: `socket hang up` on /v1/models).
+			if (!this.spec) return await this.checkOpenAi();
 			const props = await this.get("/props");
 			if (props.status !== 200) return this.lost("unreachable", `props answered HTTP ${props.status}`);
 			const p = JSON.parse(props.body) as {
@@ -238,9 +240,10 @@ export class RemoteModels {
 
 	private schedule(): void {
 		if (!this.server) return;
-		this.timer = setTimeout(async () => {
-			await this.check();
-			this.schedule();
+		this.timer = setTimeout(() => {
+			this.check()
+				.catch((err: unknown) => this.lost("unreachable", (err as Error).message))
+				.finally(() => this.schedule());
 		}, this.o.healthIntervalMs);
 		this.timer.unref();
 	}
