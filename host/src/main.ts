@@ -867,6 +867,7 @@ async function main(): Promise<number> {
 		geoHttp: config.self.geolocation ? webHttp : null,
 		live: () => ({
 			models: Object.fromEntries(DAY_KEYS.map((k) => [k, models.selected(k)])),
+			loaded: models.loadedNow(),
 			mode: rhythm.mode(),
 			day: Number(getKv(db, "rhythm.day")) || null,
 		}),

@@ -108,7 +108,8 @@ export interface SelfModelDeps {
 	tickMs?: number;
 	timezone?: string;
 	/** Live facts the host already knows, for the about-me block. */
-	live?: () => { models: Record<string, string | null>; mode: string; day: number | null };
+	/** `models`: each role's selected model; `loaded`: what the router has loaded now (one copy each). */
+	live?: () => { models: Record<string, string | null>; loaded: string[]; mode: string; day: number | null };
 }
 
 export interface Gap {
@@ -189,7 +190,7 @@ export class SelfModel {
 			newId: () => crypto.randomUUID(),
 			tickMs: 60_000,
 			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-			live: () => ({ models: {}, mode: "awake", day: null }),
+			live: () => ({ models: {}, loaded: [], mode: "awake", day: null }),
 			...deps,
 		};
 	}
@@ -609,10 +610,7 @@ export class SelfModel {
 		const live = this.d.live();
 		const v = this.describeFacet("versions");
 		lines.push(
-			`- Software: ${v ?? "versions unknown"} Models: ${Object.entries(live.models)
-				.filter(([, m]) => m)
-				.map(([k, m]) => `${k} ${m}`)
-				.join(", ")}. Day ${live.day ?? "?"}, ${live.mode}.`,
+			`- Software: ${v ?? "versions unknown"} ${describeModels(live.models, live.loaded)} Day ${live.day ?? "?"}, ${live.mode}.`,
 		);
 		const place = this.describeFacet("place");
 		const lat = this.value<number>("place", "estimate_lat");
@@ -691,6 +689,28 @@ export function latestMachine(db: Db): { result: Record<string, unknown>; at: st
 }
 
 /** The about-me note for a turn: the owner's scope only (place, network and people are owner-only). */
+const ROLE_NAMES: Record<string, string> = { web: "web chat", telegram: "Telegram", background: "background work" };
+
+/**
+ * Loaded models with what each serves, then selected ones that are not loaded. Grouped by model: a list of
+ * roles ("web gemma-4-26B, telegram gemma-4-26B") read as two loaded copies (2026-10-23).
+ */
+export function describeModels(selected: Record<string, string | null>, loaded: readonly string[]): string {
+	const roles = new Map<string, string[]>();
+	for (const [role, m] of Object.entries(selected))
+		if (m) roles.set(m, [...(roles.get(m) ?? []), ROLE_NAMES[role] ?? role]);
+	const serves = (m: string) => {
+		const r = roles.get(m) ?? [];
+		return r.length === 0 ? "no role" : r.length === 1 ? r[0]! : `${r.slice(0, -1).join(", ")} and ${r.at(-1)}`;
+	};
+	const out = [
+		`Models loaded (one copy each): ${loaded.length ? loaded.map((m) => `${m} (${serves(m)})`).join(", ") : "none"}.`,
+	];
+	const missing = [...roles.keys()].filter((m) => !loaded.includes(m));
+	if (missing.length) out.push(`Selected but not loaded: ${missing.map((m) => `${m} (${serves(m)})`).join(", ")}.`);
+	return out.join(" ");
+}
+
 export function selfNoteFor(scope: string, model: Pick<SelfModel, "aboutMe">, db: Db): string | null {
 	return scope === "owner" ? model.aboutMe(latestMachine(db)) : null;
 }
