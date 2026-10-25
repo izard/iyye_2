@@ -9,8 +9,9 @@
  *
  * - Tools come in **toolkits**: named groups with one permission. A toolkit
  *   whose effect is "read" is for everyone, owner and every contact (owner
- *   decision, plan 0.004 §8); an "act" toolkit is owner-only until per-contact
- *   grants exist.
+ *   decision, plan 0.004 §8); an "act" toolkit is for the owner and contacts
+ *   the owner trusts (owner decision 2026-10-19: trust alone, no grant per
+ *   toolkit).
  * - Tools are always declared in one fixed order (toolkit order, then tool
  *   order). Any change to the declared set, even its order, makes llama.cpp
  *   reprocess the whole conversation (plan 0.004 T0).
@@ -31,7 +32,7 @@ import { createHash } from "node:crypto";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 import type { Logger } from "../log.ts";
-import type { ChatRoute } from "../outbox/outbox.ts";
+import type { Route } from "../outbox/outbox.ts";
 import type { Db } from "../state/db.ts";
 import { recordToolCall } from "../state/tool-calls.ts";
 
@@ -74,7 +75,8 @@ export const WEB_TOOLKIT = "web";
  * effect (a reminder) may reach only this route.
  */
 export interface TurnContext {
-	route: ChatRoute;
+	/** A chat, or the reply thread of a mail (plan 0.016: a trusted sender's mail from a stored address). */
+	route: Route;
 	contactId: string;
 	eventId: string | null;
 }
@@ -109,7 +111,8 @@ export interface Toolkit {
 	 * asker's own route (reminders, plan 0.006), for people (owner and contacts),
 	 * never Iyye's background work. "reach": messages to other people (plan
 	 * 0.008), for the owner, contacts the owner trusts and Iyye's own work
-	 * (owner decision). "act": other effects, owner-only until grants exist.
+	 * (owner decision). "act": other effects, for the owner and contacts the owner trusts (owner decision
+	 * 2026-10-19: trust alone grants them; never untrusted contacts or Iyye's own work).
 	 * "private": observes only, but what it reads is the owner's (Iyye's own code repositories): the owner and
 	 * Iyye's own work, never contacts.
 	 * "trusted": observes only what the asker sent in this conversation (images, 2026-10-09), but costs a
@@ -210,6 +213,7 @@ export class ToolBroker {
 			return principal === "iyye"
 				? !scope.startsWith(PLAN_STEP_SCOPE) && !scope.startsWith(INVESTIGATION_SCOPE)
 				: principal === "owner" || trusted;
+		if (kit.effect === "act") return principal === "owner" || (principal === "contact" && trusted);
 		return principal === "owner";
 	}
 

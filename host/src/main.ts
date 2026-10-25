@@ -94,6 +94,7 @@ import { Observer } from "./observe/observer.ts";
 import { ensureWorkspace } from "./observe/workspace.ts";
 import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
 import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./people/people.ts";
+import { guardClientRequests } from "./process/client-requests.ts";
 import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
@@ -128,6 +129,7 @@ import { SearxngService } from "./web/searxng.ts";
 
 async function main(): Promise<number> {
 	const log = consoleLogger();
+	guardClientRequests(log);
 	let config: ReturnType<typeof loadConfig>;
 	let registry: ReturnType<typeof loadRegistry>;
 	let identity: string;
@@ -818,6 +820,15 @@ async function main(): Promise<number> {
 		forgetConversations: (scopes) => conversations.forgetScopes(scopes),
 		forgetBackground: (scopes) => backgroundConversations.forgetScopes(scopes),
 		retireConversations: (scopes) => conversations.retireScopes(scopes),
+		// Owner decision 2026-10-19: transcripts in every conversation store that name the person go too.
+		transcripts: {
+			count: (names, exclude) =>
+				conversations.transcriptsMentioning(names, exclude).length +
+				backgroundConversations.transcriptsMentioning(names, exclude).length,
+			erase: async (names) =>
+				(await conversations.eraseTranscriptsMentioning(names)) +
+				(await backgroundConversations.eraseTranscriptsMentioning(names)),
+		},
 		forgetQueued: (scopes) => {
 			// A workspace may hold anything a conversation wrote about the person: all of them go.
 			sandbox?.wipeAll();
@@ -856,6 +867,7 @@ async function main(): Promise<number> {
 		geoHttp: config.self.geolocation ? webHttp : null,
 		live: () => ({
 			models: Object.fromEntries(DAY_KEYS.map((k) => [k, models.selected(k)])),
+			loaded: models.loadedNow(),
 			mode: rhythm.mode(),
 			day: Number(getKv(db, "rhythm.day")) || null,
 		}),

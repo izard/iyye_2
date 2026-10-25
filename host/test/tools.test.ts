@@ -26,7 +26,7 @@ import { fakeRouterProcess, freePort, type Sandbox, sandbox, waitFor } from "./m
 
 const FIXED = new Date("2026-10-02T09:42:00Z");
 
-/** A tool with an effect, for the owner-only "act" toolkit. */
+/** A tool with an effect, for the "act" toolkit (the owner and trusted contacts). */
 const actTool: IyyeTool = {
 	name: "light_on",
 	label: "Light on",
@@ -87,7 +87,7 @@ describe("probes", () => {
 });
 
 describe("tool broker", () => {
-	test("read-only toolkits are for everyone; a toolkit with effects only for the owner; order is fixed", () => {
+	test("read-only toolkits are for everyone; a toolkit with effects for the owner and trusted contacts; order is fixed", () => {
 		const b = broker();
 		const contact = b.forSession({ scope: "contact:x", principal: "contact" });
 		assert.deepEqual(contact.names, ["current_time", "system_status"], "contacts get every read-only toolkit");
@@ -95,6 +95,13 @@ describe("tool broker", () => {
 			contact.toolkits.map((k) => k.name),
 			["core", "machine"],
 		);
+		// Owner decision 2026-10-19: trust alone gives a contact the toolkits with effects; Iyye's own work never.
+		assert.deepEqual(b.forSession({ scope: "contact:t", principal: "contact", trusted: true }).names, [
+			"current_time",
+			"system_status",
+			"light_on",
+		]);
+		assert.ok(!b.forSession({ scope: "iyye", principal: "iyye" }).names.includes("light_on"));
 		const owner = b.forSession({ scope: "owner", principal: "owner" });
 		assert.deepEqual(owner.names, ["current_time", "system_status", "light_on"]);
 		assert.deepEqual(
@@ -199,7 +206,7 @@ test("/tools lists toolkits in order with who may use them, and the latest calls
 		report,
 		/^toolkits, in declaration order:\n {2}core — the time · everyone \(read-only\)\n {4}current_time: /,
 	);
-	assert.match(report, / {2}home — the house · owner only \(has effects\)/);
+	assert.match(report, / {2}home — the house · the owner and trusted contacts \(has effects\)/);
 	assert.match(report, /last 1 call\(s\):\n {2}\d{4}-\d\d-\d\d \d\d:\d\d you: core\/current_time → ok$/);
 	const ctx = { models: {} as never, db, issuer: "owner_web", toolsReport: () => toolsReport(db, b.toolkits) };
 	assert.equal((await handleOwnerCommand("/tools", ctx)).reply, report);

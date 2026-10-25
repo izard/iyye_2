@@ -241,6 +241,24 @@ describe("look_at_image", () => {
 		assert.equal(r.bodies.length, 3);
 	});
 
+	test("a server failing partway: the description is marked as stopping mid-way; failing at once is a failure", async () => {
+		const r = rig({
+			complete: async () => ({ text: "A cat on a", truncated: false, error: "the server failed: oom" }),
+		});
+		const a = r.admit(63, "cat");
+		const out = await r.sessionFor(a.scope, "contact", true).look({ question: "q" });
+		assert.match(
+			out,
+			/A cat on a\n\n\[the vision model failed partway \(the server failed: oom\); the description stops mid-way\]$/,
+		);
+		const none = rig({ complete: async () => ({ text: "", truncated: false, error: "the server failed: oom" }) });
+		const b = none.admit(64, "cat");
+		assert.equal(
+			await none.sessionFor(b.scope, "contact", true).look({ question: "q" }),
+			"The vision model failed: the server failed: oom. Say so.",
+		);
+	});
+
 	test("/forget deletes the kept images and Telegram's file ids", async () => {
 		const r = rig();
 		const a = r.admit(71, "cat");

@@ -40,6 +40,7 @@ describe("model manager", () => {
 		assert.equal(s.models.find((m) => m.name === "small")!.status, "loaded");
 		assert.equal(s.models.find((m) => m.name === "missing")!.status, "unavailable");
 		assert.ok(!s.models.some((m) => m.name === "default"), "router-only ids are not shown");
+		assert.deepEqual(rig.manager.loadedNow(), ["small"], "registry models only, from the last check");
 		assert.deepEqual(ops(rig), [
 			{ op: "router_start", model_name: null, state: "done" },
 			{ op: "load", model_name: "small", state: "done" },

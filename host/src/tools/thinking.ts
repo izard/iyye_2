@@ -3,12 +3,14 @@
 
 /**
  * "Ask the thinking model" (owner decision 2026-10-09, widening plan 0.012):
- * the owner's turns may hand one self-contained question to the reasoning
- * model on the owner's other machine (the MBP) and get its answer back.
+ * the owner's turns, and since 2026-10-19 trusted contacts' (owner decision:
+ * trust alone grants `act` toolkits), may hand one self-contained question to
+ * the reasoning model on the owner's other machine (the MBP) and get its
+ * answer back.
  *
- * - Owner-only (effect `act`): the question leaves the Spark, and only the
- *   owner decided that may happen. Never contacts, never background work
- *   (whose model this already is).
+ * - Effect `act`: the owner and contacts the owner trusts. Never untrusted
+ *   contacts, never background work (whose model this already is). The daily
+ *   limit is shared by everyone who may ask.
  * - The model sees only the question the session wrote: no conversation, no
  *   memory, no tools, no session kept anywhere. Its reasoning is not returned,
  *   only its answer.
@@ -18,11 +20,16 @@
  *   answer is streamed, so a long think never looks like a hang. The turn's
  *   own cancellation stops it.
  * - Bounded by a daily number of answered questions.
+ * - The session picks the reasoning effort per question (owner decision
+ *   2026-10-20): `low`, `medium` or `xhigh`, the levels Qwen3.8's template
+ *   knows, sent as `chat_template_kwargs.reasoning_effort`. Left out, it is
+ *   `medium`; the template's own default is `xhigh`, which spent 30k+ reasoning
+ *   tokens on every question.
  */
 
 import { Type } from "typebox";
 import type { ModelLease, OpResult } from "../models/manager.ts";
-import { streamChat } from "../models/stream.ts";
+import { type StreamedChat, streamChat } from "../models/stream.ts";
 import type { Db } from "../state/db.ts";
 import { type IyyeTool, shorten, type Toolkit } from "./broker.ts";
 
@@ -37,12 +44,19 @@ const MAX_ANSWER_CHARS = 8000;
  */
 const CUT_OFF_MID_THOUGHT = "[truncated — reasoning incomplete";
 
-/** One streamed completion with thinking on: the answer text (reasoning dropped) and whether it was cut off. */
+/**
+ * One streamed completion with thinking on: the answer text (reasoning dropped), whether it was cut off, and
+ * why it stopped early when it failed partway (`error`).
+ */
 export type ThinkComplete = (
 	model: string,
 	question: string,
 	signal: AbortSignal,
-) => Promise<{ text: string; truncated: boolean }>;
+	effort: ThinkingEffort,
+) => Promise<StreamedChat>;
+
+export type ThinkingEffort = "low" | "medium" | "xhigh";
+export const DEFAULT_THINKING_EFFORT: ThinkingEffort = "medium";
 
 export interface ThinkingDeps {
 	db: Db;
@@ -64,6 +78,12 @@ const QUESTION = Type.Object(
 			description:
 				"The whole question, self-contained: every fact, number and condition the model needs, since it sees nothing else.",
 		}),
+		effort: Type.Optional(
+			Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("xhigh")], {
+				description:
+					"How hard it should think. low: a quick check or a simple calculation (about a minute). medium (the default): an ordinary puzzle or analysis. xhigh: only a genuinely hard problem where correctness matters most; it can think for half an hour or more.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -93,9 +113,17 @@ export function thinkingToolkit(d: ThinkingDeps): Toolkit {
 			try {
 				release = await d.device.acquire(`thinking:${ctx.scope}`);
 				if (abort.signal.aborted) return "Stopped.";
-				const r = await d.complete(d.model, q.text, abort.signal);
+				const r = await d.complete(d.model, q.text, abort.signal, p.effort ?? DEFAULT_THINKING_EFFORT);
 				const secs = Math.round((now().getTime() - t0) / 1000);
 				const text = r.text.trim();
+				// The pass-through lost the other machine mid-answer: say so in its words.
+				if (r.error && !lease.valid()) r.error = `the connection to ${d.machine} was lost`;
+				if (r.error && (!text || text.startsWith(CUT_OFF_MID_THOUGHT)))
+					return `The thinking model on ${d.machine} failed (after ${secs} s) before it answered: ${r.error}. Answer yourself, and say so.`;
+				if (r.error) {
+					const part = text.length > MAX_ANSWER_CHARS ? `${text.slice(0, MAX_ANSWER_CHARS)} […]` : text;
+					return `${q.note}The thinking model on ${d.machine} failed partway through its answer (after ${secs} s: ${r.error}). What it wrote before failing is below; it stops mid-way and its conclusion is missing. Use it only as far as it goes, and say that the answer was cut off:\n${part}`;
+				}
 				if (!text)
 					return `The thinking model on ${d.machine} gave no answer (after ${secs} s). Answer yourself, and say so.`;
 				if (r.truncated && text.startsWith(CUT_OFF_MID_THOUGHT))
@@ -136,15 +164,15 @@ function answeredToday(db: Db, now: Date): number {
 	).n;
 }
 
-/** The completion: streamed (`streamChat`), thinking on, the server's own sampling and reasoning budget. */
+/** The completion: streamed (`streamChat`), thinking on at the chosen effort, the server's own sampling. */
 export function thinkComplete(url: (model: string) => string, maxTokens: number): ThinkComplete {
-	return (model, question, signal) =>
+	return (model, question, signal, effort) =>
 		streamChat(
 			url(model),
 			{
 				model,
 				max_tokens: maxTokens,
-				chat_template_kwargs: { enable_thinking: true },
+				chat_template_kwargs: { enable_thinking: true, reasoning_effort: effort },
 				messages: [
 					{
 						role: "system",

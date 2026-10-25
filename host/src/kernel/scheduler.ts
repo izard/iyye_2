@@ -35,10 +35,13 @@ import type { TurnResult } from "../integration/pi/turn.ts";
 import type { Logger } from "../log.ts";
 import type { ModelLease, OpResult } from "../models/manager.ts";
 import { type ActionRow, Outbox, type Route } from "../outbox/outbox.ts";
-import { getContact } from "../state/contacts.ts";
+import { getContact, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
+import { contactByEmail } from "../state/emails.ts";
 import { type EventRow, getEvent, messageText } from "../state/events.ts";
 import { failJob, getJob, type JobRow, markJobRunning, queuedJobs, renewLease, requeueJob } from "../state/jobs.ts";
+import { emailSession } from "../state/sessions.ts";
+import { OWNER_EMAIL_CONTACT_ID } from "./admission.ts";
 import { DeviceSlot } from "./device.ts";
 
 /** What the scheduler needs from the model manager. */
@@ -257,8 +260,11 @@ export class Scheduler {
 				const releaseDevice = await this.d.device.acquire(`chat:${job.id}`);
 				const t0 = this.d.now().getTime();
 				try {
-					if (event.channel === "email") await this.runEmail(job, event, lease);
-					else await this.run(job, event, lease);
+					// Plan 0.016: a trusted sender's mail from an address the owner stored is a turn with their
+					// chat's tools; any other mail gets the tool-less answer (plan 0.015).
+					const mail = this.mailView(event);
+					if (event.channel === "email" && !mail) await this.runEmail(job, event, lease);
+					else await this.run(job, event, lease, mail);
 				} finally {
 					releaseDevice();
 					try {
@@ -363,7 +369,35 @@ export class Scheduler {
 		await this.d.outbox.deliver({ jobId: job.id, event, kind: "reply", content: result.text });
 	}
 
-	private async run(job: JobRow, event: EventRow, lease: ModelLease): Promise<void> {
+	/**
+	 * Plan 0.016 (owner decision 2026-10-16): a mail is a conversation turn with the sender's own chat tools
+	 * only when the receiving server verified it, the address is one the owner stored for that very person
+	 * (`/person email`; the owner's own address: the trusted contact `owner-email`, never the owner), and the
+	 * owner trusts them now. Read when the job runs, so a trust or address removed since admission counts.
+	 */
+	mailView(event: EventRow): ScopeView | null {
+		if (event.channel !== "email" || !event.principal_contact_id) return null;
+		const contact = getContact(this.d.db, event.principal_contact_id);
+		if (!contact || contact.kind === "owner" || contact.trusted !== 1) return null;
+		const verified = this.d.db
+			.prepare("SELECT 1 FROM email_inbox WHERE event_id = ? AND authenticated = 1")
+			.get(event.id);
+		if (!verified) return null;
+		const from = (JSON.parse(event.payload_json) as { from?: { address?: unknown } }).from?.address;
+		const stored = typeof from === "string" && from ? contactByEmail(this.d.db, from) : null;
+		const own = stored === OWNER_CONTACT_ID && contact.id === OWNER_EMAIL_CONTACT_ID;
+		if (!own && stored !== contact.id) return null;
+		return {
+			kind: "contact",
+			channel: "email",
+			displayName: contact.display_name,
+			trusted: true,
+			...(own ? { ownAddress: true } : {}),
+		};
+	}
+
+	/** A conversation turn; `mail`: the view of a mail allowed its sender's tools (`mailView`). */
+	private async run(job: JobRow, event: EventRow, lease: ModelLease, mail: ScopeView | null): Promise<void> {
 		const leaseUntil = new Date(this.d.now().getTime() + this.d.leaseMs).toISOString();
 		markJobRunning(this.d.db, job.id, lease.model, leaseUntil);
 		const abort = new AbortController();
@@ -376,7 +410,8 @@ export class Scheduler {
 		renew.unref();
 		let profile: BoundProfile | null = null;
 		try {
-			profile = this.d.bindProfile?.(job.id, event) ?? null;
+			// The bound profile (owner decision 13) is for chats; a mail turn has none.
+			profile = mail ? null : (this.d.bindProfile?.(job.id, event) ?? null);
 		} catch (err) {
 			this.d.log.warn("scheduler: the profile was not bound; the turn runs without it", {
 				error: (err as Error).message,
@@ -387,13 +422,16 @@ export class Scheduler {
 		try {
 			result = await this.d.conversations.turn({
 				scope: job.scope,
-				view: this.viewFor(event),
+				// A person's mail is its own conversation beside their chat (plan 0.016).
+				...(mail ? { session: emailSession(job.scope) } : {}),
+				view: mail ?? this.viewFor(event),
 				model: lease.model,
-				text: messageText(event),
+				text: mail ? mailTurnText(event) : messageText(event),
 				signal: abort.signal,
-				// Who asked and the exact route back: a reminder made in this turn can reach only this chat.
+				// Who asked and the exact route back: a reminder made in this turn can reach only this chat
+				// (for a mail, its reply thread).
 				turn: {
-					route: Outbox.chatRouteFor(event),
+					route: Outbox.routeFor(event),
 					contactId: event.principal_contact_id ?? "",
 					eventId: event.id,
 				},
@@ -414,7 +452,13 @@ export class Scheduler {
 			await this.fail(getJob(this.d.db, job.id)!, event, "the model stopped while answering");
 			return;
 		}
-		if (result.ok) {
+		if (result.ok && mail) {
+			// Never voiced (the voice is for Telegram); the reply goes back on the mail's thread.
+			this.d.db
+				.prepare("UPDATE email_inbox SET verdict = 'replied', reason = NULL, decided_at = ? WHERE event_id = ?")
+				.run(this.iso(), event.id);
+			await this.d.outbox.deliver({ jobId: job.id, event, kind: "reply", content: result.text });
+		} else if (result.ok) {
 			const voiced = await this.voice(event, result.text, profile);
 			const action = await this.d.outbox.deliver({ jobId: job.id, event, kind: "reply", content: voiced.content });
 			try {
@@ -509,4 +553,16 @@ export class Scheduler {
 	private iso(): string {
 		return this.d.now().toISOString();
 	}
+}
+
+/** A mail as a turn's message (plan 0.016): what was cut or not opened is said, so nothing is claimed of it. */
+function mailTurnText(event: EventRow): string {
+	const p = JSON.parse(event.payload_json) as { truncated?: unknown; attachments?: unknown };
+	return [
+		messageText(event),
+		...(p.truncated === true ? ["[the rest of the mail was too long and is not shown]"] : []),
+		...(typeof p.attachments === "number" && p.attachments > 0
+			? [`[${p.attachments} attachment(s), not opened]`]
+			: []),
+	].join("\n");
 }

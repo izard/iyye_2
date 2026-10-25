@@ -16,8 +16,13 @@
  * - The owner's recall reads every contact, so Iyye's replies to the owner
  *   today may quote the person. Those replies leave the owner's short-term
  *   memory (only the owner's own words stay), so tonight's night cannot store
- *   them. Owner replies stored on earlier nights are a known limit (plan
- *   0.002 L6): they cannot be told apart without per-turn recall provenance.
+ *   them.
+ * - Owner decision 2026-10-19: Iyye's replies to the owner stored on earlier
+ *   nights, and day summaries stored in Iyye's own bank, go too when they name
+ *   the person (`mentions.ts`; no record says which memory fed a reply, so the
+ *   name is the test): their documents and facts leave long-term memory, their
+ *   text leaves SQLite's copy of short-term memory, and their reply reviews
+ *   go. So do conversation transcripts that name them (`MemoryControl`).
  * - The tombstone keeps anything said before it out of memory for good (late
  *   deliveries, the night, restaging). What the person says afterwards is
  *   remembered normally: the contact, its channel bindings and trust stay.
@@ -25,8 +30,8 @@
 
 import { existsSync, rmSync } from "node:fs";
 import { forgetReplyReviews } from "../decisions/reply-review.ts";
-import { forgetBeliefs } from "../facts/beliefs.ts";
-import { queueFactDocDeletions } from "../facts/night.ts";
+import { forgetBeliefs, forgetEvidenceOf } from "../facts/beliefs.ts";
+import { factDocId, queueDocDeletions, queueFactDocDeletions } from "../facts/night.ts";
 import { forgetFacts } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
 import { forgetMotivationRecords } from "../motivation/actor.ts";
@@ -36,6 +41,7 @@ import type { Db } from "../state/db.ts";
 import { getKv, setKv } from "../state/kv.ts";
 import { mediaPath } from "../state/media.ts";
 import { forgetNotes } from "../state/notes.ts";
+import { IYYE_SCOPE } from "../state/stm.ts";
 import {
 	addTombstone,
 	bankDeletionDone,
@@ -45,6 +51,8 @@ import {
 } from "../state/tombstones.ts";
 import { forgetVoice } from "../voice/shadow.ts";
 import { bankFor } from "./gateway.ts";
+import { mentionsAny, personNames } from "./mentions.ts";
+import { repliedDocId, summaryDocId } from "./provenance.ts";
 
 export const FORGOTTEN = "[forgotten]";
 export const PENDING_BANKS_KEY = "memory.banks_to_consolidate";
@@ -54,6 +62,12 @@ export interface ForgetTarget {
 	/** The person's scope and every linked account's scope. */
 	scopes: string[];
 	banks: string[];
+	/** Every name they carry (`mentions.ts`): what names them in Iyye's stored words goes too. */
+	names: string[];
+	/** Iyye's replies to the owner that left short-term memory (stored, or given up) and name them. */
+	storedReplies: { eventId: string; actionId: string | null }[];
+	/** Day summaries that left short-term memory (stored in Iyye's own bank before 2026-10-06) and name them. */
+	storedSummaries: string[];
 	counts: { messages: number; stm: number; toolCalls: number; decisions: number };
 }
 
@@ -67,10 +81,32 @@ export function forgetTarget(db: Db, contact: Contact): ForgetTarget | string {
 	const banks = scopes.map(bankFor).filter((b): b is string => b !== null);
 	const marks = scopes.map(() => "?").join(", ");
 	const count = (sql: string) => (db.prepare(sql).get(...scopes) as { n: number }).n;
+	const names = personNames(db, person);
+	const storedReplies = (
+		db
+			.prepare(
+				"SELECT event_id, action_id, reply_text FROM stm_episodes WHERE scope = 'owner' AND kind = 'turn' AND state NOT IN ('day', 'backlog') AND reply_text != ''",
+			)
+			.all() as { event_id: string; action_id: string | null; reply_text: string }[]
+	)
+		.filter((r) => mentionsAny(r.reply_text, names))
+		.map((r) => ({ eventId: r.event_id, actionId: r.action_id }));
+	const storedSummaries = (
+		db
+			.prepare(
+				"SELECT event_id, user_text FROM stm_episodes WHERE kind = 'summary' AND state NOT IN ('day', 'backlog')",
+			)
+			.all() as { event_id: string; user_text: string }[]
+	)
+		.filter((r) => mentionsAny(r.user_text, names))
+		.map((r) => r.event_id);
 	return {
 		person,
 		scopes,
 		banks,
+		names,
+		storedReplies,
+		storedSummaries,
 		counts: {
 			messages: count(`SELECT count(*) AS n FROM events WHERE scope IN (${marks})`),
 			stm: count(`SELECT count(*) AS n FROM stm_episodes WHERE scope IN (${marks})`),
@@ -316,13 +352,10 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 		);
 		forgetFacts(db, t.scopes, [t.person.id], { ownerReplies: ownerTurns.map((r) => r.event_id) });
 		// Day summaries not yet stored may name the person ("2 from Julia"): they go too (HLD §15 #15).
-		const names = [t.person.display_name, ...accountsOf(db, t.person.id).map((a) => a.display_name)]
-			.map((n) => n.trim().toLowerCase())
-			.filter((n) => n.length >= 2);
 		const summaries = db
 			.prepare("SELECT event_id, user_text FROM stm_episodes WHERE kind = 'summary' AND state IN ('day', 'backlog')")
 			.all() as { event_id: string; user_text: string }[];
-		for (const r of summaries.filter((r) => names.some((n) => r.user_text.toLowerCase().includes(n)))) {
+		for (const r of summaries.filter((r) => mentionsAny(r.user_text, t.names))) {
 			db.prepare("DELETE FROM stm_fts WHERE event_id = ?").run(r.event_id);
 			db.prepare("DELETE FROM stm_episodes WHERE event_id = ?").run(r.event_id);
 		}
@@ -382,6 +415,17 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 				UNION SELECT address FROM contact_emails WHERE contact_id IN (${am}))`,
 		).run(FORGOTTEN, FORGOTTEN, ...accounts, ...accounts, ...accounts);
 		db.prepare(`DELETE FROM contact_emails WHERE contact_id IN (${am})`).run(...accounts);
+		// Reminders and plans made by mail (plan 0.016) keep the mail's thread as their route: the address,
+		// the subject and the thread ids go from them and from the reminders' actions.
+		const noRoute = JSON.stringify({ channel: "email", to: FORGOTTEN, subject: FORGOTTEN });
+		for (const table of ["commitments", "plans"])
+			db.prepare(
+				`UPDATE ${table} SET route_json = ? WHERE json_extract(route_json, '$.channel') = 'email' AND scope IN (${marks})`,
+			).run(noRoute, ...t.scopes);
+		db.prepare(
+			`UPDATE actions SET route_json = ? WHERE json_extract(route_json, '$.channel') = 'email'
+			 AND commitment_id IN (SELECT id FROM commitments WHERE scope IN (${marks}))`,
+		).run(noRoute, ...t.scopes);
 		// Reminders sent to them (no event; their commitment says whose), and the owner's notices that quote one.
 		db.prepare(
 			`UPDATE actions SET content = ? WHERE content IS NOT NULL
@@ -398,6 +442,7 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			JSON.stringify(FORGOTTEN),
 			...t.scopes,
 		);
+		forgetStoredWords(db, t, at);
 		const pending = parseBanks(getKv(db, PENDING_BANKS_KEY));
 		setKv(db, PENDING_BANKS_KEY, JSON.stringify(pending.filter((b) => !t.banks.includes(b))), at);
 		for (const scope of t.scopes) {
@@ -405,6 +450,47 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 			if (bank) queueBankDeletion(db, bank, scope, at);
 		}
 	})();
+}
+
+/**
+ * Owner decision 2026-10-19: Iyye's stored replies to the owner and stored day summaries that name the person.
+ * Their documents (and the stored facts of those replies) are queued for deletion from long-term memory, the
+ * facts' evidence leaves the beliefs, their text leaves SQLite, and the replies' reviews go. Part of
+ * `forgetRecords`' transaction.
+ */
+function forgetStoredWords(db: Db, t: ForgetTarget, at: string): void {
+	const ownerBank = bankFor("owner");
+	const selfBank = bankFor(IYYE_SCOPE);
+	const docs: { bank: string; doc: string }[] = [];
+	const factIds: string[] = [];
+	for (const r of t.storedReplies) {
+		if (ownerBank) docs.push({ bank: ownerBank, doc: repliedDocId(r.eventId) });
+		const facts = db.prepare("SELECT id, stored_at FROM stm_facts WHERE doc_id = ?").all(repliedDocId(r.eventId)) as {
+			id: string;
+			stored_at: string | null;
+		}[];
+		for (const f of facts) {
+			factIds.push(f.id);
+			if (f.stored_at && ownerBank) docs.push({ bank: ownerBank, doc: factDocId(f.id) });
+		}
+		db.prepare("UPDATE stm_episodes SET reply_text = '' WHERE event_id = ?").run(r.eventId);
+	}
+	forgetEvidenceOf(db, factIds, at);
+	for (const id of factIds) {
+		db.prepare("DELETE FROM stm_facts_fts WHERE fact_id = ?").run(id);
+		db.prepare("DELETE FROM stm_facts WHERE id = ?").run(id);
+	}
+	forgetReplyReviews(
+		db,
+		t.storedReplies.flatMap((r) => (r.actionId ? [r.actionId] : [])),
+		at,
+	);
+	for (const id of t.storedSummaries) {
+		if (selfBank) docs.push({ bank: selfBank, doc: summaryDocId(id) });
+		db.prepare("DELETE FROM stm_fts WHERE event_id = ?").run(id);
+		db.prepare("DELETE FROM stm_episodes WHERE event_id = ?").run(id);
+	}
+	queueDocDeletions(db, docs, at);
 }
 
 export interface BankDeleter {

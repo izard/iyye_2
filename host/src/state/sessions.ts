@@ -33,3 +33,8 @@ export function forgetSession(db: Db, scope: string): void {
 export function touchSession(db: Db, scope: string, at: string): void {
 	db.prepare("UPDATE pi_sessions SET last_used_at = ? WHERE scope = ?").run(at, scope);
 }
+
+/** The conversation key of a person's mail (plan 0.016): the same person (scope), a separate transcript. */
+export function emailSession(scope: string): string {
+	return `${scope}#email`;
+}

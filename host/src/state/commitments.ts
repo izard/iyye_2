@@ -103,7 +103,9 @@ export function quoteReminder(db: Db, c: Pick<Commitment, "recipient_contact_id"
 		| undefined;
 	const who = !row || row.kind === "owner" ? "Your" : `${JSON.stringify(row.display_name.slice(0, 64))}'s`;
 	const route = JSON.parse(c.route_json) as { channel: string };
-	return `${who} reminder ${JSON.stringify(c.text.replace(/\s+/g, " ").slice(0, 200))} (to ${route.channel === "web" ? "the web chat" : "their Telegram chat"})`;
+	const to =
+		route.channel === "web" ? "the web chat" : route.channel === "email" ? "their email" : "their Telegram chat";
+	return `${who} reminder ${JSON.stringify(c.text.replace(/\s+/g, " ").slice(0, 200))} (to ${to})`;
 }
 
 /**
@@ -120,7 +122,7 @@ export function recentReminderNote(db: Db, scope: string, now: Date, hours = 12)
 		)
 		.all(scope, since) as { text: string; due_at: string; route_json: string; created_at: string }[];
 	const route = (json: string) =>
-		(JSON.parse(json) as { channel: string }).channel === "web" ? " (web chat)" : " (Telegram)";
+		({ web: " (web chat)", email: " (email)" })[(JSON.parse(json) as { channel: string }).channel] ?? " (Telegram)";
 	if (rows.length === 0) return null;
 	const safe = (t: string) =>
 		JSON.stringify(t.replace(/</g, "‹").replace(/>/g, "›").replace(/\s+/g, " ").slice(0, 200));

@@ -320,7 +320,7 @@ describe("the actor", () => {
 		r.clock.now = after(10 * MIN);
 		await r.actor.act([], new Set([where.cluster, who.cluster]));
 		assert.equal(r.self.value("place", "stated"), null);
-		assert.match(r.actor.questionsReport(), /answered · answer: "a south-eastern suburb of Munich"/);
+		assert.match(r.actor.questionsReport(), /answered · answer: "a south-eastern suburb of Munich"\n {4}\S/);
 		assert.equal(r.actor.accept("00000002", "", "owner_web"), "noted: a south-eastern suburb of Munich");
 		assert.equal(r.self.value("place", "stated"), "a south-eastern suburb of Munich");
 		assert.equal(r.actor.noteFor("owner"), null);

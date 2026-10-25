@@ -3,12 +3,14 @@
 
 /**
  * Answering a mail (plan 0.015): one direct model call, no Pi session and no
- * tools (owner decision 3: a mail never makes Iyye act, whoever sent it). The
- * model sees Iyye's identity, what memory holds for this sender (the same
- * scoped recall as their chats), and the mail as quoted data.
+ * tools. The model sees Iyye's identity, what memory holds for this sender
+ * (the same scoped recall as their chats), and the mail as quoted data. Since
+ * plan 0.016 this is for every mail except a trusted sender's from an address
+ * the owner stored (`Scheduler.mailView`), which is a turn with their chat's
+ * tools instead.
  *
- * - **Trusted senders** (contacts the owner trusts, and the owner's own
- *   address) always get a reply (owner decision 2).
+ * - **Trusted senders** here (trusted, but at an address the owner never
+ *   stored) always get a reply (owner decision 2).
  * - **Everyone else:** the model decides; `NO_REPLY` means no answer is sent
  *   (advertising, notifications, nothing said to Iyye personally).
  * - A reply cut off at its token limit is a failure, never half an answer.

@@ -1020,13 +1020,14 @@ export class MotivationActor {
 			.prepare("SELECT * FROM self_questions ORDER BY asked_at DESC LIMIT 10")
 			.all() as SelfQuestion[];
 		if (rows.length === 0) return "no questions asked yet";
+		// The question as it was asked (2026-10-20): the open one whole, since it says how to answer it.
 		return [
 			"questions about myself (latest 10):",
 			...rows.map(
 				(q) =>
-					`  ${q.id.slice(0, 8)} ${q.asked_at.slice(0, 16).replace("T", " ")} ${q.field} · ${q.status}${q.answer_text ? ` · answer: ${JSON.stringify(q.answer_text.slice(0, 120))}` : ""}`,
+					`  ${q.id.slice(0, 8)} ${q.asked_at.slice(0, 16).replace("T", " ")} · ${q.status}${q.answer_text ? ` · answer: ${JSON.stringify(q.answer_text.slice(0, 120))}` : ""}\n    ${q.status === "asked" ? q.question : clip(q.question, 140)}`,
 			),
-			"/self accept <id> [answer] · /self dismiss <id>",
+			"/self accept <id> [answer] · /self dismiss <id>; a question about a belief is answered with the /facts commands it names",
 		].join("\n");
 	}
 
@@ -1311,4 +1312,9 @@ export function notNowReason(why: string): WithheldReason | string {
 	if (/paused/.test(why)) return "paused";
 	if (/person|conversation|waiting|quiet/.test(why)) return "owner busy";
 	return why.slice(0, 80);
+}
+
+function clip(text: string, max: number): string {
+	const t = text.replace(/\s+/g, " ");
+	return t.length > max ? `${t.slice(0, max)}…` : t;
 }

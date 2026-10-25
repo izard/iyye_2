@@ -766,6 +766,25 @@ export function forgetBeliefs(db: Db, scopes: readonly string[], personIds: read
 	return [...new Set([...touched, ...about])];
 }
 
+/**
+ * Remove the evidence these facts gave (`/forget`: facts of Iyye's stored replies that named the person,
+ * owner decision 2026-10-19) and recompute what it touched. Returns the beliefs touched.
+ */
+export function forgetEvidenceOf(db: Db, stmFactIds: readonly string[], at: string): string[] {
+	if (stmFactIds.length === 0) return [];
+	const marks = stmFactIds.map(() => "?").join(", ");
+	const touched = db
+		.prepare(
+			`SELECT DISTINCT e.belief_id, b.fact_key FROM belief_evidence e JOIN beliefs b ON b.id = e.belief_id
+			 WHERE e.stm_fact_id IN (${marks})`,
+		)
+		.all(...stmFactIds) as { belief_id: string; fact_key: string }[];
+	db.prepare(`DELETE FROM belief_evidence WHERE stm_fact_id IN (${marks})`).run(...stmFactIds);
+	for (const t of touched) recompute(db, t.belief_id, at);
+	for (const k of new Set(touched.map((t) => t.fact_key))) rebuildTimeline(db, k, at.slice(0, 10));
+	return touched.map((t) => t.belief_id);
+}
+
 /** `/facts <words>`: beliefs whose subject, predicate or value mention the words, with their evidence (owner only). */
 export function searchBeliefs(db: Db, words: string, limit = 10): Belief[] {
 	const terms = words

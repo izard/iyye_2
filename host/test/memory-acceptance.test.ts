@@ -14,7 +14,7 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, afterEach, before, describe, test } from "node:test";
 import type { TelegramMessage } from "../src/channels/types.ts";
@@ -28,6 +28,7 @@ import { MemoryControl } from "../src/memory/control.ts";
 import type { GateResult } from "../src/memory/gate.ts";
 import { MemoryGateway } from "../src/memory/gateway.ts";
 import { REPLY_STRATEGY } from "../src/memory/hindsight.ts";
+import { mentionPattern } from "../src/memory/mentions.ts";
 import { NightWork } from "../src/memory/night.ts";
 import { memoryReport } from "../src/memory/report.ts";
 import { linkAccount, OWNER_CONTACT_ID } from "../src/state/contacts.ts";
@@ -115,6 +116,10 @@ describe("memory acceptance (HLD §15)", () => {
 			mode: () => mode,
 			forgetConversations: (scopes) => s!.conversations.forgetScopes(scopes),
 			retireConversations: (scopes) => s!.conversations.retireScopes(scopes),
+			transcripts: {
+				count: (names, exclude) => s!.conversations.transcriptsMentioning(names, exclude).length,
+				erase: (names) => s!.conversations.eraseTranscriptsMentioning(names),
+			},
 		});
 	const cmd = async (text: string) =>
 		(
@@ -402,6 +407,59 @@ describe("memory acceptance (HLD §15)", () => {
 		assert.equal(getEvent(db, after.eventId)!.scope, `contact:${alex.contactId}`);
 		await night();
 		assert.ok(ltm.docs.has(`${bank}/${after.eventId}:said`), "new memory after the forget");
+	});
+
+	test("#15 /forget (owner decision 2026-10-19): Iyye's stored replies to the owner and transcripts that name them go too", async () => {
+		sb = sandbox();
+		s = await startStack(sb, {}, { telegramApiBase: fake.apiBase, memory: { ltm: ltm.client(), bankCacheMs: 0 } });
+		const julia = fromTelegram(s.db, 6401, "Julia", "My birthday is on 3 May");
+		await answered(julia.eventId);
+		const asked = fromOwner(s.db, "When is Julia's birthday?");
+		await answered(asked.eventId);
+		const other = fromOwner(s.db, "What is the weather like?");
+		await answered(other.eventId);
+		await night();
+		const replied = (id: string) => `iyye-owner/${id}:replied`;
+		assert.ok(ltm.docs.has(replied(asked.eventId)) && ltm.docs.has(replied(other.eventId)), "both replies stored");
+		// Retired transcripts of the owner's earlier days: one names her, one only a namesake's longer name.
+		const ownerDir = join(sb.stateDir, "sessions", "owner");
+		writeFileSync(
+			join(ownerDir, "2026-10-01T00-00-00-000Z_old.jsonl"),
+			`${JSON.stringify({ text: "Julia's cat" })}\n`,
+		);
+		writeFileSync(join(ownerDir, "2026-10-01T00-00-00-000Z_quiet.jsonl"), `${JSON.stringify({ text: "Juliana" })}\n`);
+
+		const preview = await cmd(`/forget ${julia.contactId.slice(0, 8)}`);
+		assert.match(
+			preview,
+			/1 of Iyye's replies to you stored on earlier nights and 0 stored day summaries that name them \("julia"\): deleted/,
+		);
+		// The old one and today's owner conversation (it asked about her); never her own, which goes whole.
+		assert.match(preview, /2 other conversation transcript\(s\) that name them/);
+		assert.ok(ltm.docs.has(replied(asked.eventId)), "a preview changes nothing");
+
+		const reply = await cmd(`/forget ${julia.contactId.slice(0, 8)} confirm`);
+		assert.match(
+			reply,
+			/Iyye's stored words that named them: 1 reply to you and 0 day summaries, deleted from long-term memory/,
+		);
+		assert.ok(!ltm.docs.has(replied(asked.eventId)), "the stored reply naming her is deleted");
+		assert.ok(ltm.docs.has(replied(other.eventId)), "a stored reply that does not name her stays");
+		assert.ok(ltm.docs.has(`iyye-owner/${asked.eventId}:said`), "the owner's own words stay");
+		const text = (id: string) =>
+			(s!.db.prepare("SELECT reply_text FROM stm_episodes WHERE event_id = ?").get(id) as { reply_text: string })
+				.reply_text;
+		assert.equal(text(asked.eventId), "");
+		assert.match(text(other.eventId), /weather/);
+		assert.deepEqual(
+			readdirSync(ownerDir).filter((f) => f.includes("2026-10-01")),
+			["2026-10-01T00-00-00-000Z_quiet.jsonl"],
+		);
+		assert.equal(
+			s.conversations.transcriptsMentioning(mentionPattern(["julia"])).length,
+			0,
+			"no transcript naming her is left anywhere",
+		);
 	});
 
 	test("#15 /forget during an outage: queued, never read or written until deleted; the next night deletes it first", async () => {

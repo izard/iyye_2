@@ -31,7 +31,7 @@
  * scheduler (M7) limits how many run on the device at once.
  */
 
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { getCurrentTools } from "@earendil-works/pi-ai";
 import {
@@ -46,6 +46,7 @@ import type { SelectionRequest, TurnInfo } from "../../decisions/toolkit-selecti
 import type { Logger } from "../../log.ts";
 import type { Db } from "../../state/db.ts";
 import {
+	emailSession,
 	forgetSession,
 	getSessionFile,
 	recordSessionFile,
@@ -117,6 +118,11 @@ export interface TurnRequest {
 	 * (owner decision 13). Only an owner view uses it; a change reopens the session on its next turn.
 	 */
 	mind?: string | null;
+	/**
+	 * The conversation's own key when it differs from the scope (plan 0.016: a trusted sender's mail is its
+	 * own conversation, `emailSession(scope)`, beside their chat). Memory, tools and notes still use `scope`.
+	 */
+	session?: string;
 }
 
 interface LiveSession {
@@ -196,8 +202,8 @@ export class PiConversations {
 	 */
 	async forgetScopes(scopes: readonly string[]): Promise<number> {
 		let removed = 0;
-		for (const scope of scopes) {
-			await this.chains.get(scope)?.catch(() => undefined);
+		for (const person of scopes) await this.chains.get(person)?.catch(() => undefined);
+		for (const scope of scopes.flatMap((s) => [s, emailSession(s)])) {
 			const live = this.live.get(scope);
 			if (live) {
 				live.session.dispose();
@@ -213,10 +219,50 @@ export class PiConversations {
 		return removed;
 	}
 
+	/**
+	 * Transcript files in this store, current and retired, that name someone (`/forget`, owner decision
+	 * 2026-10-19; `mentions.ts`). `exclude`: scopes whose transcripts are not counted (the person's own,
+	 * which `forgetScopes` deletes whole).
+	 */
+	transcriptsMentioning(names: RegExp | null, exclude: readonly string[] = []): string[] {
+		if (!names) return [];
+		const root = join(this.d.stateDir, "sessions");
+		if (!existsSync(root)) return [];
+		const found: string[] = [];
+		const walk = (dir: string) => {
+			for (const e of readdirSync(dir, { withFileTypes: true })) {
+				const path = join(dir, e.name);
+				if (e.isDirectory()) walk(path);
+				else if (e.name.endsWith(".jsonl") && names.test(readFileSync(path, "utf8"))) found.push(path);
+			}
+		};
+		const skip = new Set(exclude.flatMap((s) => [s, emailSession(s)]).map((s) => join(root, encodeURIComponent(s))));
+		for (const e of readdirSync(root, { withFileTypes: true }))
+			if (e.isDirectory() && !skip.has(join(root, e.name))) walk(join(root, e.name));
+		return found;
+	}
+
+	/**
+	 * Delete the transcripts that name someone. A conversation whose current transcript is one of them starts
+	 * afresh first (as after a night), so nothing writes to a deleted file. Returns how many files went.
+	 */
+	async eraseTranscriptsMentioning(names: RegExp | null): Promise<number> {
+		const files = this.transcriptsMentioning(names);
+		if (files.length === 0) return 0;
+		const current = this.d.db.prepare("SELECT scope, session_file FROM pi_sessions").all() as {
+			scope: string;
+			session_file: string;
+		}[];
+		const live = current.filter((c) => files.includes(c.session_file)).map((c) => c.scope);
+		if (live.length) await this.retireScopes(live);
+		for (const f of files) rmSync(f, { force: true });
+		return files.length;
+	}
+
 	/** Start these scopes' conversations afresh (as after a night); their transcript files stay. */
 	async retireScopes(scopes: readonly string[]): Promise<void> {
-		for (const scope of scopes) {
-			await this.chains.get(scope)?.catch(() => undefined);
+		for (const person of scopes) await this.chains.get(person)?.catch(() => undefined);
+		for (const scope of scopes.flatMap((s) => [s, emailSession(s)])) {
 			const live = this.live.get(scope);
 			if (live) {
 				live.session.dispose();
@@ -238,7 +284,13 @@ export class PiConversations {
 		let session: AgentSession;
 		let live: LiveSession;
 		try {
-			live = await this.open(req.scope, req.view, req.model, req.view.kind === "owner" ? (req.mind ?? null) : null);
+			live = await this.open(
+				req.session ?? req.scope,
+				req.scope,
+				req.view,
+				req.model,
+				req.view.kind === "owner" ? (req.mind ?? null) : null,
+			);
 			await this.selectToolkits(live, req);
 			live.tools?.beginTurn(req.turn);
 			session = live.session;
@@ -312,8 +364,8 @@ export class PiConversations {
 		} catch (err) {
 			this.d.log.warn("pi: after-turn observer failed", { error: (err as Error).message });
 		}
-		touchSession(this.d.db, req.scope, this.d.now().toISOString());
-		this.evictIdle(req.scope);
+		touchSession(this.d.db, req.session ?? req.scope, this.d.now().toISOString());
+		this.evictIdle(req.session ?? req.scope);
 		return result;
 	}
 
@@ -377,7 +429,14 @@ export class PiConversations {
 		}
 	}
 
-	private async open(scope: string, view: ScopeView, model: string, mind: string | null = null): Promise<LiveSession> {
+	/** `key`: the conversation (live session, transcript); `scope`: the person, for the tools' grants. */
+	private async open(
+		key: string,
+		scope: string,
+		view: ScopeView,
+		model: string,
+		mind: string | null = null,
+	): Promise<LiveSession> {
 		// The principal comes from the trusted view the kernel built, never from the conversation.
 		// Background work is the principal `iyye`: read-only toolkits only (ToolBroker.allowed).
 		const principal = view.kind === "background" ? "iyye" : view.kind;
@@ -386,7 +445,7 @@ export class PiConversations {
 		const tools = this.d.tools?.forSession({ scope, principal, trusted }) ?? null;
 		// The prompt for every permitted toolkit and the bound reasoning: a change in either reopens the session.
 		const prompt = composeSystemPrompt(this.d.identity, view, tools?.toolkits ?? [], mind);
-		const existing = this.live.get(scope);
+		const existing = this.live.get(key);
 		if (existing && existing.prompt === prompt) {
 			existing.lastUsed = Date.now();
 			return existing;
@@ -394,18 +453,18 @@ export class PiConversations {
 		if (existing) {
 			// The view or the granted tools changed: reopen with the new prompt and tool set.
 			existing.session.dispose();
-			this.live.delete(scope);
+			this.live.delete(key);
 		}
-		const sessionDir = join(this.d.stateDir, "sessions", encodeURIComponent(scope));
+		const sessionDir = join(this.d.stateDir, "sessions", encodeURIComponent(key));
 		mkdirSync(sessionDir, { recursive: true });
-		const recorded = getSessionFile(this.d.db, scope);
+		const recorded = getSessionFile(this.d.db, key);
 		const manager =
 			recorded && existsSync(recorded)
 				? SessionManager.open(recorded, sessionDir, this.cwd)
 				: SessionManager.create(this.cwd, sessionDir);
 		const file = manager.getSessionFile();
-		if (!file) throw new Error(`Pi did not assign a session file for scope ${scope}`);
-		if (file !== recorded) recordSessionFile(this.d.db, scope, file, this.d.now().toISOString());
+		if (!file) throw new Error(`Pi did not assign a session file for ${key}`);
+		if (file !== recorded) recordSessionFile(this.d.db, key, file, this.d.now().toISOString());
 
 		const recall: TurnState = { block: null, noThinking: false };
 		// Plan 0.004 §3.4: a person's session declares the always-on toolkits plus what earlier turns added.
@@ -456,8 +515,13 @@ export class PiConversations {
 		const live: LiveSession = { session, prompt, active, view, mind, loader, tools, lastUsed: Date.now(), recall };
 		// Every permitted tool is registered (so one can be added later); only the active ones are declared.
 		if (selecting) this.declareToolkits(live, active);
-		this.live.set(scope, live);
-		this.d.log.info("pi: session opened", { scope, file, resumed: file === recorded, tools: tools?.names ?? [] });
+		this.live.set(key, live);
+		this.d.log.info("pi: session opened", {
+			scope: key,
+			file,
+			resumed: file === recorded,
+			tools: tools?.names ?? [],
+		});
 		return live;
 	}
 

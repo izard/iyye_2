@@ -323,6 +323,12 @@ export class ModelManager {
 		return { ok: true, message: `${channel} now uses ${name} from its next message` };
 	}
 
+	/** Models loaded as of the last router check (every lease and status refreshes it); none while the router is not up. */
+	loadedNow(): string[] {
+		if (this.routerState !== "up") return [];
+		return this.d.registry.models.filter((m) => this.statuses.get(m.name)?.value === "loaded").map((m) => m.name);
+	}
+
 	selected(channel: SelectionKey): string | null {
 		return getSelectedModel(this.d.db, channel);
 	}

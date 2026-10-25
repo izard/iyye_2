@@ -25,7 +25,7 @@
  */
 
 import { Type } from "typebox";
-import type { Outbox, Route } from "../outbox/outbox.ts";
+import { type Outbox, type Route, viaOf } from "../outbox/outbox.ts";
 import {
 	accountsOf,
 	type Contact,
@@ -117,7 +117,11 @@ export function messagingToolkit(deps: MessagingDeps): Toolkit {
 			"Send a Telegram message now to a person Iyye knows. Use it when the person you are talking with asks you to write to someone, or, in your own work, when someone clearly needs to know what you found. Write the message yourself; the recipient sees who it is from. Returns whether it was delivered; say exactly that.",
 		summary: "send a Telegram message now to a person Iyye knows",
 		parameters: Type.Object({
-			to: Type.String({ minLength: 1, maxLength: 80, description: "The person's name as Iyye knows them" }),
+			to: Type.String({
+				minLength: 1,
+				maxLength: 80,
+				description: 'The person\'s name as Iyye knows them, or "owner" for your owner',
+			}),
 			text: Type.String({ minLength: 1, maxLength: 2000, description: "The message, written by you" }),
 		}),
 		run: async (p: { to: string; text: string }, ctx: ToolContext) => {
@@ -245,7 +249,7 @@ function requester(db: Db, ctx: ToolContext): Requester | string {
 	if (ctx.principal === "iyye")
 		return { kind: "iyye", contactId: null, name: "Iyye", scope: ctx.scope, via: "background", eventId: null };
 	if (!ctx.turn) return "Messages can only be sent when someone asks in a conversation.";
-	const via = ctx.turn.route.channel === "web" ? "web chat" : "Telegram";
+	const via = viaOf(ctx.turn.route);
 	if (ctx.principal === "owner")
 		return {
 			kind: "owner",
@@ -271,8 +275,16 @@ function startOfDay(d: Date): string {
 	return s.toISOString();
 }
 
-/** The one person a name means, or why not. Linked accounts are their person, so the owner's linked account is the owner. */
+/**
+ * The one person a name means, or why not. Linked accounts are their person, so the owner's linked account is
+ * the owner. "owner" (also "the owner", "my owner", "your owner") is the owner: the prompt calls them that, and
+ * the model has no other name for them when none is known (2026-10-16, a mail asking for a Telegram confirmation).
+ */
 export function resolveRecipient(db: Db, ref: string): Contact | string {
+	if (/^(the |my |your )?owner$/i.test(ref.trim())) {
+		const owner = getContact(db, OWNER_CONTACT_ID);
+		if (owner) return owner;
+	}
 	const people = new Map<string, Contact>();
 	for (const c of findContacts(db, ref)) {
 		const person = resolvePerson(db, c);

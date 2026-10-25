@@ -12,7 +12,7 @@ import { describe, test } from "node:test";
 import { handleOwnerCommand } from "../src/kernel/commands.ts";
 import { silentLogger } from "../src/log.ts";
 import { forgetRecords, forgetTarget } from "../src/memory/forget.ts";
-import { latestMachine, SelfModel, selfNoteFor } from "../src/self/model.ts";
+import { describeModels, latestMachine, SelfModel, selfNoteFor } from "../src/self/model.ts";
 import {
 	type Exec,
 	parseHardware,
@@ -247,7 +247,12 @@ function rig(opts: { geo?: boolean; platform?: NodeJS.Platform } = {}): Rig {
 		listDir: (path) => (path === "/proc/acpi/button/lid" ? ["LID0"] : []),
 		now: () => now,
 		timezone: "Europe/Berlin",
-		live: () => ({ models: { web: "gemma-4-26B", background: "gemma-4-E4B" }, mode: "awake", day: 7 }),
+		live: () => ({
+			models: { web: "gemma-4-26B", telegram: "gemma-4-26B", background: "gemma-4-E4B" },
+			loaded: ["gemma-4-26B", "gemma-4-E4B"],
+			mode: "awake",
+			day: 7,
+		}),
 	});
 	return r;
 }
@@ -371,7 +376,10 @@ describe("the self model", () => {
 			/- Place: The owner says Iyye is at Hamburg, at home\. The network places it in Munich, Bavaria, DE\. Sunrise \d\d:\d\d, sunset \d\d:\d\d/,
 		);
 		assert.match(about, /- People who wrote in the last 30 days: "Jacob" \("my son"\), 1 message\(s\)/);
-		assert.match(about, /Models: web gemma-4-26B, background gemma-4-E4B\. Day 7, awake\./);
+		assert.match(
+			about,
+			/Models loaded \(one copy each\): gemma-4-26B \(web chat and Telegram\), gemma-4-E4B \(background work\)\. Day 7, awake\./,
+		);
 		assert.equal(selfNoteFor("contact:jacob-1", r.model, r.db), null, "a contact's turn never gets it");
 		assert.equal(selfNoteFor("owner", r.model, r.db), about);
 
@@ -450,4 +458,16 @@ describe("the self model", () => {
 		const facets = r.model.gaps().map((g) => g.facet);
 		for (const f of ["hardware", "power", "sleep"]) assert.ok(!facets.includes(f as never), `${f} is not a gap`);
 	});
+});
+
+test("models are listed by what is loaded, each once, with the roles it serves (2026-10-23: read as two copies)", () => {
+	assert.equal(
+		describeModels({ web: "a", telegram: "a", background: "b" }, ["a", "b"]),
+		"Models loaded (one copy each): a (web chat and Telegram), b (background work).",
+	);
+	assert.equal(
+		describeModels({ web: "a", telegram: "c", background: null }, ["a", "x"]),
+		"Models loaded (one copy each): a (web chat), x (no role). Selected but not loaded: c (Telegram).",
+	);
+	assert.equal(describeModels({}, []), "Models loaded (one copy each): none.");
 });

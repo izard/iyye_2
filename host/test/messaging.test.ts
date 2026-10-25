@@ -279,6 +279,35 @@ describe("telegram_send (plan 0.008)", () => {
 		);
 	});
 
+	test("plan 0.016: asked by mail from the owner's own address (the trusted contact owner-email): sent, labelled, recorded as by email", async () => {
+		const { db, tool } = setup();
+		db.prepare(
+			"INSERT INTO contacts (id, display_name, kind, trusted, created_at) VALUES ('owner-email', 'The owner (email)', 'contact', 1, 't')",
+		).run();
+		let n = 0;
+		const mail = (): ToolContext => ({
+			scope: "contact:owner-email",
+			principal: "contact",
+			trusted: true,
+			turn: {
+				route: { channel: "email", to: "alex@gmail.com", subject: "Re: Test", inReplyTo: "<m1@gmail.com>" },
+				contactId: "owner-email",
+				eventId: `mail-ev-${n++}`,
+			},
+		});
+		// "Please confirm in Telegram": to the owner's own Telegram chat.
+		assert.match(await tool.run({ to: "Alex", text: "Your mail arrived." }, mail(), undefined), /^Sent to the owner/);
+		assert.equal(fake.messagesTo(5001).at(-1), "✉️ From Iyye, on behalf of The owner (email):\n\nYour mail arrived.");
+		// The prompt says "your owner", and that is all a model may know them by.
+		for (const to of ["the owner", "owner", "Your Owner"])
+			assert.match(await tool.run({ to, text: "Confirmed." }, mail(), undefined), /^Sent to the owner/, to);
+		assert.equal(fake.messagesTo(5001).at(-1), "✉️ From Iyye, on behalf of The owner (email):\n\nConfirmed.");
+		assert.match(await tool.run({ to: "Jacob", text: "Hello from Alex" }, mail(), undefined), /delivered/);
+		assert.match(sentReport(db), /to Jacob \(asked by "The owner \(email\)" by email\)/);
+		const via = db.prepare("SELECT DISTINCT requested_via FROM sent_messages").all() as { requested_via: string }[];
+		assert.deepEqual(via, [{ requested_via: "email" }]);
+	});
+
 	test("Iyye on its own: labelled 'From Iyye', the owner told, one message per person per day and its own daily cap", async () => {
 		const { db, tool } = setup();
 		const bg: ToolContext = { scope: "iyye:inv:1:1", principal: "iyye" };
