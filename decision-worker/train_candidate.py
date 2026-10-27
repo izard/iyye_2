@@ -4,7 +4,8 @@
 """Train one candidate decision adapter from a parent checkpoint (Stage 4 infrastructure, decision-worker/TRAINING.md).
 
     kev-train/.venv/bin/python decision-worker/train_candidate.py --data <labelled.jsonl> \
-        [--parent jaredpalmer/kev-4b@<sha> | <candidate dir>] [--steps 50] [--max-minutes 30] [--lr 2e-5] [--seed 0]
+        [--parent jaredpalmer/kev-4b@<sha> | <candidate dir>] [--steps 50] [--max-minutes 30] [--lr 2e-5] [--seed 0] \
+        [--suite ~/.iyye2/decisions/suites/evals/v7/decision-v7 --replay 4000]
 
 What it guarantees, whatever Kev's trainer does:
 
@@ -86,12 +87,22 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out-root", default=str(w.TRAINING / "candidates"), help="where candidates go (a smoke uses a scratch directory)")
     ap.add_argument("--label", default="", help="a short note kept in the manifest")
+    ap.add_argument("--suite", default="", help="a provisioned frozen suite (provision_suite.py) to draw --replay records from")
+    ap.add_argument("--replay", type=int, default=0, help="mix in this many of the suite's training records (Kev's own recipe), so the delta does not forget it")
+    ap.add_argument("--max-state", type=int, default=0, help="drop records whose state is longer than this many tokens (bounds memory: the suite's long states peaked at 53 GB)")
     a = ap.parse_args()
+    if a.max_state and not 256 <= a.max_state <= 8192:
+        ap.error("--max-state 256..8192")
+    if bool(a.suite) != bool(a.replay) or not 0 <= a.replay <= 20000:
+        ap.error("--suite and --replay go together (--replay 1..20000)")
     if not 1 <= a.steps <= 2000 or not 0 < a.max_minutes <= 600 or not 0 < a.lr <= 1e-3:
         ap.error("--steps 1..2000, --max-minutes up to 600, --lr up to 1e-3")
     data = Path(a.data).resolve()
     if not data.is_file():
         ap.error(f"no data file {data}")
+    suite = Path(a.suite).resolve() if a.suite else None
+    if suite and not (suite / "manifest.json").is_file():
+        ap.error(f"no suite at {suite}")
     out_root = Path(a.out_root).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     lock = w.take_lock()
@@ -120,6 +131,11 @@ def main() -> int:
         "--lr", str(a.lr), "--accum", str(a.accum), "--batch", str(a.batch), "--seed", str(a.seed),
         "--out", str(run_dir),
     ]
+    if a.max_state:
+        kev_args += ["--max_state", str(a.max_state)]
+    if suite:
+        # kev.train fetches nothing offline: the training partition must already be provisioned and hash-checked.
+        kev_args += ["--suite", str(suite), "--replay", str(a.replay)]
     cmd = [sys.executable, str(Path(__file__).with_name("kev_train_launcher.py")), str(stats_path), *kev_args]
     base = {"id": cid, "kind": "kev-lora-head", "parent": a.parent, "data_sha256": w.sha256_file(data), "steps": a.steps}
     w.journal({**base, "event": "started"})
@@ -136,7 +152,8 @@ def main() -> int:
         "kind": "kev-lora-head",
         "parent": {"requested": a.parent, **parent},
         "data": {"path": str(data), "sha256": base["data_sha256"], "records": records},
-        "training": {"steps": a.steps, "lr": a.lr, "accum": a.accum, "batch": a.batch, "seed": a.seed, "kev_args": kev_args},
+        "replay": {"suite": str(suite), "manifest_sha256": w.sha256_file(suite / "manifest.json"), "records": a.replay, "seed": a.seed} if suite else None,
+        "training": {"steps": a.steps, "max_state": a.max_state or None, "lr": a.lr, "accum": a.accum, "batch": a.batch, "seed": a.seed, "kev_args": kev_args},
         "kev_commit": w.git_commit(w.ROOT / "kev"),
         "environment": {**w.package_versions(), "lock_sha256": w.training_lock_sha256()},
         "resources": {**stats, "total_wall_s": round(time.monotonic() - started, 2)},

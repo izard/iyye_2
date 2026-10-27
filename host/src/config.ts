@@ -180,6 +180,8 @@ export interface Config {
 		timeoutMs: number;
 		/** Toolkit selection (plan 0.004 §3.4): `act` chooses toolkits before each turn; `shadow` only compares after it. */
 		toolkitSelection: "act" | "shadow";
+		/** Plan 0.017 N1: how many decision questions `/decisions queue` offers the owner a day (IYYE2_LABELS_DAILY). */
+		labelsDaily: number;
 	};
 }
 
@@ -430,6 +432,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			model: env.IYYE2_DECISIONS_MODEL || "jaredpalmer/kev-4b@6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
 			timeoutMs: int(env, "IYYE2_DECISIONS_TIMEOUT_MS", 5000, 100, 600_000),
 			toolkitSelection: oneOf(env, "IYYE2_TOOLKIT_SELECTION", ["act", "shadow"], "act"),
+			labelsDaily: int(env, "IYYE2_LABELS_DAILY", 15, 0, 200),
 		},
 	};
 }

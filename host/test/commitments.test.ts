@@ -16,8 +16,9 @@ import { TelegramSender } from "../src/channels/telegram/sender.ts";
 import type { TelegramMessage } from "../src/channels/types.ts";
 import { WebChatAdapter } from "../src/channels/web/adapter.ts";
 import { DecisionClient } from "../src/decisions/client.ts";
+import { labelDecision } from "../src/decisions/labels.ts";
 import { ReplyReviewShadow } from "../src/decisions/reply-review.ts";
-import { decisionsReport, labelDecision } from "../src/decisions/report.ts";
+import { decisionsReport } from "../src/decisions/report.ts";
 import { admitOwnerWebMessage, admitTelegramUpdate } from "../src/kernel/admission.ts";
 import { handleOwnerCommand } from "../src/kernel/commands.ts";
 import { CommitmentClock } from "../src/kernel/commitments.ts";
@@ -355,7 +356,7 @@ describe("C2: the ledger labels Kev's reply review", () => {
 		assert.match(report, new RegExp(`    ${unsupported.slice(0, 8)} p=0\\.90: `));
 
 		assert.match(
-			labelDecision(s.db, unsupported.slice(0, 8), "no", "owner_web", "t"),
+			labelDecision(s.db, [unsupported.slice(0, 8), "no"], "owner_web", "t"),
 			/did not claim anything was set up/,
 		);
 		assert.equal(
@@ -375,7 +376,7 @@ test("labelling a reply review from before schema 2 answers the question it was 
 	db.prepare(
 		"INSERT INTO decisions (id, role, schema_version, mode, state_json, state_hash, questions_json, status, created_at, verdicts_json) VALUES ('0001abcd', 'reply_review', 1, 'shadow', '{}', 'h', '[]', 'ok', 't', '{\"promises_future_action\":\"yes\"}')",
 	).run();
-	assert.match(labelDecision(db, "0001abcd", "yes", "owner_web", "t"), /the reply promised a future action/);
+	assert.match(labelDecision(db, ["0001abcd", "yes"], "owner_web", "t"), /the reply promised a future action/);
 	assert.equal(
 		(db.prepare("SELECT outcome_json FROM decisions").get() as { outcome_json: string }).outcome_json,
 		'{"promises_future_action":true}',

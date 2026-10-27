@@ -12,6 +12,7 @@ The groundwork for Stage 4 (HLD §10.3–10.5, §14) and for plan 0.009 CH6 (the
 | `worker_env.py` | training venv | What every trainer shares: the scrubbed environment, the one training lock, the journal, a supervised (stoppable) run, atomic candidates with a hashed manifest. |
 | `train_candidate.py` | training venv | One Kev candidate (LoRA + pointer head) from a parent checkpoint, offline, under the lock, written atomically with a manifest (below). |
 | `kev_train_launcher.py` | training venv | Runs `kev.train` unchanged in-process and records status, wall time, peak CUDA and resident memory. |
+| `provision_suite.py` | training venv | Owner-run, once, with network (plan 0.017 decision 6): Kev's frozen suite `v7/decision-v7` (the released kev-4b's own replay suite, manifest sha256 `a8f50e48…`) into `~/.iyye2/decisions/suites/evals/v7/decision-v7`, read-only: manifest, calibration and development copied from the clone, the training partition fetched from `jaredpalmer/kev-suites` at Kev's pinned revision and hash-checked by Kev's `load_split`; never the locked test partition, never a token. |
 | `predict.py` | either venv | Verifies a candidate against its manifest (exit 4 on any missing, extra or changed file), then scores labelled requests with Kev's `LocalPredictor` (bf16 as `kev.serve` loads on CUDA; `--raw` for temperature 1). |
 | `fixtures/train-fixture.jsonl` | | 24 synthetic, non-private requests (a message to an assistant; `needs_web` noul, `topic` choice, `urgency` score). |
 | `host/scripts/training-smoke.ts` | node | The Kev round trip: train a few steps, score the candidate in both venvs and the parent, report parity, movement, time and memory. |
@@ -60,8 +61,8 @@ kev-train/.venv/bin/python decision-worker/train_candidate.py --data <labelled.j
 
 ## Known gaps (Stage 4 work, not built)
 
-- **Calibration:** a candidate carries no fitted temperature (1.0); its parent has 2.41. It must be fitted on a validation split (Kev's `scripts/calibrate_checkpoint.py`) before any comparison with the active bundle.
-- **Replay:** `kev.train --replay` needs a frozen suite (`--suite`), which is not provisioned on the Spark; without it a delta fine-tune can forget the released recipe.
+- **Calibration:** a candidate carries no fitted temperature (1.0); its parent has 2.41. It must be fitted on a validation split before any comparison with the active bundle: `kev.metrics.fit_temperature` with Kev's release settings (116 ms on 367 rows), recorded beside the bundle (how `kev.serve` is given it per instance: to verify in Stage 4 N4). Never `scripts/calibrate_checkpoint.py` on a candidate or the cached pin: it writes into `head.pt`.
+- **Replay:** provisioned (2026-10-27, `provision_suite.py`); `train_candidate.py --suite <dir> --replay N [--max-state T]` passes it to kev.train offline and records the suite's hash in the manifest. Measured (`host/SPIKE-0.017.md`): a 20-step run with replay peaked at 50–54 GB CUDA (30 GB without), with the day models loaded the Spark ran out of headroom; the driver is not state length (likely the suite's 77-option banking77 questions) and must be bounded before any scheduled run. Size the mix to the own data (4000 replay records drowned 24 own ones).
 - **Datasets:** nothing exports Iyye's labelled decisions yet (owner labels, weak labels, `/forget` exclusions, grouped and time-split partitions, sealed test set).
 - **Admission:** the trainers do not yet ask `DeviceSlot`/NightWork for the device; run them only by hand, briefly, while nobody needs the GPU.
 - **Other Kev models:** the trainer and predictor take any Kev LoRA + head checkpoint on any base Kev supports (provision it first; offline otherwise).
@@ -74,6 +75,7 @@ decision-worker/train-env.sh                 # rebuild the training venv from it
 decision-worker/train-env.sh --check         # shared pins identical?
 decision-worker/convert-env.sh               # the converter venv from its lock (same llama.cpp commit)
 kev-train/.venv/bin/python decision-worker/voice_provision.py minicpm5-2b   # once, with network
+kev-train/.venv/bin/python decision-worker/provision_suite.py              # Kev's replay suite, once, with network
 cd host && node scripts/training-smoke.ts /tmp/iyye-train-smoke --steps 3
 cd host && node scripts/voice-lora-smoke.ts ~/.iyye2/spikes/voice-lora --steps 20
 ```

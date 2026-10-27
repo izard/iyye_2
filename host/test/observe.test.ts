@@ -14,8 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { DecisionClient } from "../src/decisions/client.ts";
+import { labelDecision } from "../src/decisions/labels.ts";
 import { OBSERVATION_IMPORTANCE, ObservationImportance } from "../src/decisions/observation-importance.ts";
-import { labelDecision } from "../src/decisions/report.ts";
 import { handleOwnerCommand } from "../src/kernel/commands.ts";
 import { buildDigest } from "../src/kernel/day-summary.ts";
 import { DeviceSlot } from "../src/kernel/device.ts";
@@ -361,7 +361,7 @@ describe("the importance check on Kev", () => {
 			change: "free disk space fell from 412 GB to 38 GB",
 		});
 		const id = (db.prepare("SELECT id FROM decisions LIMIT 1").get() as { id: string }).id;
-		assert.match(labelDecision(db, id.slice(0, 8), "no", "owner_web", "t"), /not worth telling you about/);
+		assert.match(labelDecision(db, [id.slice(0, 8), "no"], "owner_web", "t"), /not worth telling you about/);
 		db.close();
 		async function lastId() {
 			return (db.prepare("SELECT id FROM decisions ORDER BY rowid DESC LIMIT 1").get() as { id: string }).id;

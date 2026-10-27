@@ -14,6 +14,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { DecisionClient } from "../src/decisions/client.ts";
+import { labelDecision } from "../src/decisions/labels.ts";
 import { MEMORY_SALIENCE, MemorySalience, SALIENCE_QUESTION } from "../src/decisions/memory-salience.ts";
 import {
 	forgetReplyReviews,
@@ -21,7 +22,7 @@ import {
 	REPLY_REVIEW,
 	ReplyReviewShadow,
 } from "../src/decisions/reply-review.ts";
-import { bestThreshold, decisionsReport, labelDecision, roleReport } from "../src/decisions/report.ts";
+import { bestThreshold, decisionsReport, roleReport } from "../src/decisions/report.ts";
 import { handleOwnerCommand } from "../src/kernel/commands.ts";
 import { DeviceSlot } from "../src/kernel/device.ts";
 import { silentLogger } from "../src/log.ts";
@@ -142,17 +143,18 @@ describe("decisions: contract, roles, owner view (plan 0.003 K2–K4)", () => {
 		});
 		assert.equal(client.recordOutcome(d.id, { promises_future_action: false }, "commitments"), true);
 		assert.match(
-			labelDecision(db, d.id.slice(0, 8), "yes", "owner_web", "t2"),
-			/the reply claimed something was set up/,
+			labelDecision(db, [d.id.slice(0, 8), "yes"], "owner_web", "t2"),
+			/the reply promised a future action/,
+			"a label answers a question the row was asked: this one was asked only promises_future_action",
 		);
 		assert.equal(client.recordOutcome(d.id, { promises_future_action: false }, "commitments"), false);
 		const row = decisionRows(db)[0]!;
 		assert.deepEqual(
 			[row.outcome_json, row.outcome_source, row.label_strength],
-			['{"claims_arranged":true}', "owner_web", "owner"],
+			['{"promises_future_action":true}', "owner_web", "owner"],
 		);
-		assert.match(labelDecision(db, d.id.slice(0, 8), "maybe", "owner_web", "t"), /usage/);
-		assert.match(labelDecision(db, "ffffff", "yes", "owner_web", "t"), /no decision ffffff/);
+		assert.match(labelDecision(db, [d.id.slice(0, 8), "maybe"], "owner_web", "t"), /usage/);
+		assert.match(labelDecision(db, ["ffffff", "yes"], "owner_web", "t"), /no decision ffffff/);
 	});
 
 	test("K3 memory salience: asked before each retain with the message only; joined to the transfer's result as a weak label", async () => {
@@ -365,7 +367,7 @@ describe("decisions: contract, roles, owner view (plan 0.003 K2–K4)", () => {
 			db,
 			issuer: "owner_web",
 			decisionsReport: (args: string[] = [], issuer = "owner") => {
-				if (args[0] === "label") return labelDecision(db, args[1] ?? "", args[2] ?? "", issuer, "t");
+				if (args[0] === "label") return labelDecision(db, args.slice(1), issuer, "t");
 				if (args[0]) return roleReport(db, args[0]);
 				return decisionsReport(db, { state: "up", detail: "kev" }, 0, review.pending);
 			},
@@ -402,7 +404,17 @@ describe("decisions: contract, roles, owner view (plan 0.003 K2–K4)", () => {
 				questions: [{ id: "web", instructions: "?" }],
 			},
 		);
-		assert.match(await cmd(`/decisions label ${toolkitRow.id.slice(0, 8)} yes`), /labelled automatically/);
+		// Plan 0.017 N1: toolkit selection is labelled per toolkit; its weak outcome (the tools used) stays.
+		assert.match(await cmd(`/decisions label ${toolkitRow.id.slice(0, 8)} yes`), /needed the web toolkit/);
+		assert.equal(
+			(
+				db.prepare("SELECT label_strength FROM decisions WHERE id = ?").get(toolkitRow.id) as {
+					label_strength: null;
+				}
+			).label_strength,
+			null,
+		);
+		assert.match(await cmd(`/decisions label ${toolkitRow.id.slice(0, 8)} machine yes`), /was not asked "machine"/);
 
 		const roleView = await cmd("/decisions reply_review");
 		assert.match(roleView, /^reply_review \(schema 3, unsure between 0\.35 and 0\.65; shadow — none:/);

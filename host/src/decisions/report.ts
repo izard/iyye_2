@@ -9,8 +9,9 @@
  */
 
 import type { Db } from "../state/db.ts";
-import { joinOutcome, type Role } from "./client.ts";
+import type { Role } from "./client.ts";
 import { INITIATIVE } from "./initiative.ts";
+import { labelCountLines } from "./labels.ts";
 import { MEMORY_SALIENCE, SALIENCE_QUESTION } from "./memory-salience.ts";
 import { OBSERVATION_IMPORTANCE } from "./observation-importance.ts";
 import { CLAIM_QUESTION, commitmentsOfReply, PROMISE_QUESTION, REPLY_REVIEW } from "./reply-review.ts";
@@ -24,37 +25,6 @@ export const ROLES: readonly Role[] = [
 	OBSERVATION_IMPORTANCE,
 	INITIATIVE,
 ];
-
-/** Reply reviews before schema 2 (plan 0.006 C2) were asked only "promises or offers". */
-const LEGACY_REVIEW_LABEL = {
-	field: "promises_future_action",
-	yes: "the reply promised a future action",
-	no: "the reply promised no future action",
-};
-
-/** Roles the owner can label with `/decisions label`, and the question each label answers. */
-const LABELLED: Record<string, { field: string; yes: string; no: string }> = {
-	[MEMORY_SALIENCE.name]: {
-		field: "worth_remembering",
-		yes: "the message was worth remembering",
-		no: "the message was not worth remembering",
-	},
-	[OBSERVATION_IMPORTANCE.name]: {
-		field: "worth_telling",
-		yes: "the change was worth telling you about",
-		no: "the change was not worth telling you about",
-	},
-	[INITIATIVE.name]: {
-		field: "worth_investigating",
-		yes: "it was worth investigating",
-		no: "it was not worth investigating",
-	},
-	[REPLY_REVIEW.name]: {
-		field: "claims_arranged",
-		yes: "the reply claimed something was set up",
-		no: "the reply did not claim anything was set up",
-	},
-};
 
 interface Row {
 	id: string;
@@ -121,7 +91,11 @@ export function decisionsReport(
 		if (role === MEMORY_SALIENCE.name) lines.push(...salienceLines(ok));
 		if (role === REPLY_REVIEW.name) lines.push(...reviewLines(db, ok, pendingReplies));
 	}
-	lines.push("", "more: /decisions <role> (recent answers) · /decisions label <id> yes|no");
+	lines.push("", ...labelCountLines(db));
+	lines.push(
+		"",
+		"more: /decisions <role> (recent answers) · /decisions queue [n] (today's questions for you) · /decisions label <id> [question] yes|no|skip",
+	);
 	return lines.join("\n");
 }
 
@@ -153,28 +127,6 @@ export function roleReport(db: Db, role: string, limit = 12): string {
 		);
 	}
 	return lines.join("\n");
-}
-
-/**
- * `/decisions label <id> yes|no`: the owner's answer to a decision's question
- * (an owner label: no weak label replaces it). Only roles with an owner
- * question; the model's own answer is never a label.
- */
-export function labelDecision(db: Db, ref: string, answer: string, issuer: string, at: string): string {
-	if (!/^[0-9a-f-]{6,36}$/i.test(ref)) return "usage: /decisions label <id, at least 6 characters> yes|no";
-	if (answer !== "yes" && answer !== "no") return "usage: /decisions label <id> yes|no";
-	const rows = db
-		.prepare("SELECT id, role, schema_version FROM decisions WHERE id LIKE ?")
-		.all(`${ref.toLowerCase()}%`) as { id: string; role: string; schema_version: number }[];
-	if (rows.length === 0) return `no decision ${ref}; see /decisions <role>`;
-	if (rows.length > 1) return `${ref} matches ${rows.length} decisions; use more of the id`;
-	const row = rows[0]!;
-	// A label answers the question the row was asked: a schema-1 reply review was never asked claims_arranged (§15 #18).
-	const l = row.role === REPLY_REVIEW.name && row.schema_version < 2 ? LEGACY_REVIEW_LABEL : LABELLED[row.role];
-	if (!l) return `${row.role} is labelled automatically, not by the owner`;
-	const yes = answer === "yes";
-	joinOutcome(db, row.id, { [l.field]: yes }, issuer, "owner", at);
-	return `labelled ${row.id.slice(0, 8)} (${row.role}): ${yes ? l.yes : l.no}`;
 }
 
 function preview(stateJson: string): string {

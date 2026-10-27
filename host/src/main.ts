@@ -34,10 +34,11 @@ import { ConfigError, loadConfig, PROJECT_ROOT } from "./config.ts";
 import { DecisionClient } from "./decisions/client.ts";
 import { FactRelation } from "./decisions/fact-relation.ts";
 import { InitiativeShadow } from "./decisions/initiative.ts";
+import { labelDecision, queueReport } from "./decisions/labels.ts";
 import { MemorySalience } from "./decisions/memory-salience.ts";
 import { ObservationImportance } from "./decisions/observation-importance.ts";
 import { ReplyReviewShadow } from "./decisions/reply-review.ts";
-import { decisionsReport, labelDecision, roleReport } from "./decisions/report.ts";
+import { decisionsReport, roleReport } from "./decisions/report.ts";
 import { DecisionService } from "./decisions/service.ts";
 import { ToolkitSelectionShadow, ToolkitSelector } from "./decisions/toolkit-selection.ts";
 import { auditUntracedCitations, ensureBeliefTimelines } from "./facts/beliefs.ts";
@@ -1102,8 +1103,12 @@ async function main(): Promise<number> {
 		people: new People({ db }),
 		toolsReport: () => toolsReport(db, tools.toolkits),
 		decisionsReport: (args: string[] = [], issuer = "owner") => {
-			if (args[0] === "label")
-				return labelDecision(db, args[1] ?? "", args[2] ?? "", issuer, new Date().toISOString());
+			if (args[0] === "label") return labelDecision(db, args.slice(1), issuer, new Date().toISOString());
+			if (args[0] === "queue") {
+				const n = args[1] === undefined ? 5 : Number(args[1]);
+				if (!Number.isInteger(n) || n < 1) return "usage: /decisions queue [n]";
+				return queueReport(db, n, config.decisions.labelsDaily, new Date());
+			}
 			if (args[0]) return roleReport(db, args[0]);
 			return decisionsReport(db, decisions.status, selectionShadow.pending, replyReview.pending);
 		},
