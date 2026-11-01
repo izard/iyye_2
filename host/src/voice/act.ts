@@ -13,8 +13,10 @@
  * - the turn used a tool with an effect (reminders, plans, messaging, any
  *   "act" toolkit) or had a tool call refused: receipts, arrangements and
  *   refusals keep their exact words;
- * - the voice model is not loaded (never loaded or waited for here), the call
- *   fails, takes longer than the deadline, or the turn is stopped;
+ * - the original is longer than `VOICE_MAX_CHARS`, or the voice model is not
+ *   loaded (never loaded or waited for here): no attempt, so no sample, and the
+ *   shadow rephrases it afterwards;
+ * - the call fails, takes longer than the deadline, or the turn is stopped;
  * - the placeholders do not come back, the check refuses it, or it is a copy.
  *
  * A slow answer still beats a timed-out one: the deadline only decides
@@ -74,6 +76,21 @@ export interface VoiceActorDeps {
 	newId?: () => string;
 }
 
+function actSettings(db: Db): ActSettings {
+	try {
+		const v = JSON.parse(getKv(db, ACT_KEY) ?? "{}") as Partial<ActSettings>;
+		return { owner: v.owner, contacts: v.contacts };
+	} catch {
+		return { owner: undefined, contacts: undefined };
+	}
+}
+
+/** Whether acting is on for any surface: the voice model is then a day model (owner decision 2026-11-01). */
+export function actingOn(db: Db): boolean {
+	const s = actSettings(db);
+	return SURFACES.some((x) => s[x]?.on === true);
+}
+
 export class VoiceActor {
 	private readonly d: Required<VoiceActorDeps>;
 
@@ -82,12 +99,7 @@ export class VoiceActor {
 	}
 
 	settings(): ActSettings {
-		try {
-			const v = JSON.parse(getKv(this.d.db, ACT_KEY) ?? "{}") as Partial<ActSettings>;
-			return { owner: v.owner, contacts: v.contacts };
-		} catch {
-			return { owner: undefined, contacts: undefined };
-		}
+		return actSettings(this.d.db);
 	}
 
 	/** `/voice act [on|off owner|contacts|all]` (owner surfaces only; recorded with who and when). */
@@ -171,9 +183,11 @@ export class VoiceActor {
 			});
 			const why = this.effectReason(event.id);
 			if (why) return skip(why);
-			if (original.length > VOICE_MAX_CHARS) return skip(`longer than ${VOICE_MAX_CHARS} characters`);
+			// Too long to wait for, or no model loaded: no attempt and no sample, so the shadow rephrases it
+			// afterwards (owner decision 2026-11-01; a sample here would hide the message from the shadow).
+			if (original.length > VOICE_MAX_CHARS) return keep;
 			const lease = await this.d.models.acquire(model); // never loads: refused unless already loaded
-			if (!("release" in lease)) return skip(`the voice model is not available: ${lease.message}`);
+			if (!("release" in lease)) return keep;
 			const names = this.d.names();
 			const m = maskFixed(original, names);
 			const at = this.d.now();

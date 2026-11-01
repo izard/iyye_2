@@ -19,7 +19,7 @@ import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { loadConfig, PROJECT_ROOT } from "../src/config.ts";
-import { routerComplete } from "../src/facts/extractor.ts";
+import { extractionComplete } from "../src/facts/extractor.ts";
 import { FactNight, STRUCTURED_TAG } from "../src/facts/night.ts";
 import { DeviceSlot } from "../src/kernel/device.ts";
 import { consoleLogger } from "../src/log.ts";
@@ -179,7 +179,7 @@ try {
 				db,
 				ltm,
 				gate: timed,
-				complete: routerComplete(router.url),
+				complete: extractionComplete(router.url),
 				log,
 				extract: true,
 				merge: true,

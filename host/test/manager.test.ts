@@ -274,6 +274,34 @@ describe("model manager", () => {
 			assert.ok((await rig.manager.wakeFromNight("waking")).ok);
 		});
 
+		test("the voice model is a day model only while voice acting is on (owner decision 2026-11-01)", async () => {
+			await rig.manager.stop();
+			rig.db.close();
+			let acting = false;
+			rig = await healing({ voiceByDay: () => acting });
+			await rig.manager.start();
+			const status = async (name: string) =>
+				(await rig.manager.status()).models.find((m) => m.name === name)!.status;
+			assert.ok((await rig.manager.load("small-2", "owner_web")).ok);
+			assert.ok((await rig.manager.select("voice", "small-2", "owner_web")).ok);
+			assert.deepEqual(rig.manager.dayKeys(), ["web", "telegram", "background"]);
+			// Acting off: the night unloads it and waking leaves it unloaded.
+			await rig.manager.restForNight([], "night");
+			assert.ok((await rig.manager.wakeFromNight("waking")).ok);
+			assert.equal(await status("small-2"), "unloaded");
+			// Acting on: by day it is healed (loaded again), the night unloads it, waking loads it, last.
+			acting = true;
+			assert.deepEqual(rig.manager.dayKeys(), ["web", "telegram", "background", "voice"]);
+			await waitFor(async () => (await status("small-2")) === "loaded", 5000);
+			await rig.manager.restForNight([], "night");
+			await new Promise((x) => setTimeout(x, 300));
+			assert.equal(await status("small-2"), "unloaded", "nothing is reloaded at night");
+			const wake = await rig.manager.wakeFromNight("waking");
+			assert.ok(wake.ok);
+			assert.match(wake.message, /small, small-2$/);
+			assert.equal(await status("small-2"), "loaded");
+		});
+
 		test("a reload decided just before the owner's /unload does not undo it (race found on 2026-10-05)", async () => {
 			await rig.manager.stop();
 			rig.db.close();

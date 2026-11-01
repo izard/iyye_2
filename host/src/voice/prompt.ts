@@ -78,7 +78,7 @@ export function voiceUser(lang: VoiceLang, masked: string): string {
 }
 
 export function voiceMaxTokens(text: string): number {
-	return Math.min(1500, Math.ceil(text.length / 2) + 200);
+	return Math.min(3200, Math.ceil(text.length / 2) + 200); // 3200 covers the shadow's 6000 characters
 }
 
 export type VoiceComplete = (

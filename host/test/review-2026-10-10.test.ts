@@ -15,7 +15,7 @@ import { describe, test } from "node:test";
 import { correctBelief, getBelief, mergeFact } from "../src/facts/beliefs.ts";
 import { type BeliefReader, visibleEvidence } from "../src/facts/disclosure.ts";
 import { parseFacts } from "../src/facts/extract.ts";
-import { extractOne, routerComplete } from "../src/facts/extractor.ts";
+import { extractionComplete, extractOne, routerComplete } from "../src/facts/extractor.ts";
 import { docsFor, type FactDoc, type StmFact } from "../src/facts/store.ts";
 import { composeSystemPrompt } from "../src/integration/pi/prompt.ts";
 import { checkCitations } from "../src/observe/citations.ts";
@@ -275,4 +275,31 @@ test("a trusted contact's prompt allows what recall labels with its source; an u
 	assert.ok(!trusted.includes("Do not share anything about your owner or other people."));
 	const untrusted = composeSystemPrompt("I.", { kind: "contact", displayName: "Max", channel: "telegram" });
 	assert.match(untrusted, /Do not share anything about your owner or other people\./);
+});
+
+test("fact extraction lifts the registry's repeat penalty and has room for long documents (2026-11-01)", async () => {
+	const seen: Record<string, unknown>[] = [];
+	const server = createServer((req, res) => {
+		let raw = "";
+		req.on("data", (c) => {
+			raw += c;
+		});
+		req.on("end", () => {
+			seen.push(JSON.parse(raw) as Record<string, unknown>);
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }));
+		});
+	});
+	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	try {
+		await extractionComplete(url)("m", "s", "u", new AbortController().signal);
+		await routerComplete(url, 600)("m", "s", "u", new AbortController().signal);
+		assert.equal(seen[0]!.repeat_penalty, 1, "penalising repeated tokens broke JSON lines");
+		assert.equal(seen[0]!.max_tokens, 2400);
+		assert.equal(seen[0]!.temperature, 0);
+		assert.equal("repeat_penalty" in seen[1]!, false, "prose completions keep the registry's sampling");
+	} finally {
+		server.close();
+	}
 });

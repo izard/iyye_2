@@ -32,7 +32,11 @@ export type Complete = (model: string, system: string, user: string, signal: Abo
  * A completion on the router (as the day summary does): explicit max_tokens, thinking off, a hang detector.
  * `routerUrl` may depend on the model: another machine's model goes to its pass-through (plan 0.012).
  */
-export function routerComplete(routerUrl: string | ((model: string) => string), maxTokens = 1200): Complete {
+export function routerComplete(
+	routerUrl: string | ((model: string) => string),
+	maxTokens = 1200,
+	opts: { repeatPenalty?: number } = {},
+): Complete {
 	return async (model, system, user, signal) => {
 		const base = typeof routerUrl === "string" ? routerUrl : routerUrl(model);
 		const res = await fetch(`${base}/v1/chat/completions`, {
@@ -43,6 +47,7 @@ export function routerComplete(routerUrl: string | ((model: string) => string), 
 				stream: false,
 				max_tokens: maxTokens,
 				temperature: 0,
+				...(opts.repeatPenalty !== undefined ? { repeat_penalty: opts.repeatPenalty } : {}),
 				chat_template_kwargs: { enable_thinking: false },
 				messages: [
 					{ role: "system", content: system },
@@ -65,6 +70,17 @@ export function routerComplete(routerUrl: string | ((model: string) => string), 
 			throw new Error(`the answer ended with ${JSON.stringify(choice.finish_reason ?? null)}, not "stop"`);
 		return choice.message.content;
 	};
+}
+
+/**
+ * The fact extraction's completion (2026-11-01): the registry's repeat penalty (1.2) is lifted for this request,
+ * since penalising repeated tokens broke JSON lines (`"object": null`, bad escapes, unterminated strings). Re-run on
+ * the 77 given-up documents with gemma-4-E4B, it failed 56 as malformed at 1.2 and 4 at 1.0. 2400 tokens: 10 of
+ * them were cut off at 1200, 1 at 2400. At temperature 0 a retry repeats the same answer, so these never recovered.
+ * On 40 documents that had succeeded it kept 81 facts instead of 67, with 2 malformed lines instead of 21.
+ */
+export function extractionComplete(routerUrl: string | ((model: string) => string)): Complete {
+	return routerComplete(routerUrl, 2400, { repeatPenalty: 1 });
 }
 
 /** Extract one document and store the result. Throws when the model failed (nothing is stored). */

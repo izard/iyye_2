@@ -81,8 +81,10 @@ const SALT_KEY = "voice.split_salt";
 const FORGET_EPOCH_KEY = "voice.forget_epoch";
 /** How far back a model's work list reaches (a newly selected model starts with the last two weeks). */
 export const VOICE_BACKLOG_DAYS = 14;
-/** Longer originals are not rephrased (recorded as such). */
+/** Longer originals are not rephrased in acting: a person would wait for them (the shadow takes them afterwards). */
 export const VOICE_MAX_CHARS = 2000;
+/** Longer originals are not rephrased in shadow either (recorded as such). Owner decision 2026-11-01: 6000, from 2000. */
+export const VOICE_SHADOW_MAX_CHARS = 6000;
 /** Below this change ratio an accepted rephrasing is a copy. */
 const UNCHANGED = 0.02;
 const EVAL_SHARE = 0.25;
@@ -252,8 +254,11 @@ export class VoiceShadow {
 			this.insert({ ...base, original: "", status: "forgotten", problem: "forgotten or empty" }, at);
 			return "written";
 		}
-		if (original.length > VOICE_MAX_CHARS) {
-			this.insert({ ...base, original, status: "error", problem: `longer than ${VOICE_MAX_CHARS} characters` }, at);
+		if (original.length > VOICE_SHADOW_MAX_CHARS) {
+			this.insert(
+				{ ...base, original, status: "error", problem: `longer than ${VOICE_SHADOW_MAX_CHARS} characters` },
+				at,
+			);
 			return "written";
 		}
 		// Never loads a model: a lease is refused unless the model is already loaded.

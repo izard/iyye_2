@@ -10,12 +10,13 @@ export const MODEL_CHANNELS: readonly Exclude<Channel, "email">[] = ["web", "tel
 
 /**
  * What a model can be selected for: a chat channel, long-term memory work (0.002 L2), background work (0.007),
- * or the voice (0.009 CH3, shadow). The voice is not a day key: the host never loads, heals or reloads it.
+ * or the voice (0.009 CH3, shadow). The voice is a day selection only while voice acting is on for a surface
+ * (owner decision 2026-11-01; `ModelManager.dayKeys`); otherwise the host never loads, heals or reloads it.
  */
 export type SelectionKey = Channel | "memory" | "background" | "voice";
 export const SELECTION_KEYS: readonly SelectionKey[] = ["web", "telegram", "memory", "background", "voice"];
 
-/** The selections loaded by day and unloaded at night: the chat channels and background work. */
+/** The selections loaded by day and unloaded at night: the chat channels and background work (and the voice, see above). */
 export const DAY_KEYS: readonly SelectionKey[] = ["web", "telegram", "background"];
 
 /** The model currently selected for a channel or for memory, if any. */

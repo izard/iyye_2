@@ -68,6 +68,11 @@ export interface ModelManagerDeps {
 	loadMode?: string | null;
 	/** A model another of the owner's machines serves (plan 0.012), for background work only. */
 	remote?: Pick<RemoteModels, "has" | "acquire" | "status" | "endpoint"> | null;
+	/**
+	 * Whether the voice's selection is a day selection now (owner decision 2026-11-01: while voice acting is on
+	 * for a surface): loaded at waking, healed by day and unloaded at night like the chat models.
+	 */
+	voiceByDay?: () => boolean;
 	log: Logger;
 	now?: () => Date;
 	newId?: () => string;
@@ -163,6 +168,7 @@ export class ModelManager {
 			monotonicMs: () => Number(process.hrtime.bigint() / 1_000_000n), // counts sleep on macOS: see AwakeStopwatch
 			defaultMemoryModel: "",
 			defaultBackgroundModel: "",
+			voiceByDay: () => false,
 			...deps,
 			loadMode: deps.loadMode ?? null,
 			remote: deps.remote ?? null,
@@ -576,7 +582,7 @@ export class ModelManager {
 				while (awake.elapsed() < this.d.unloadTimeoutMs && !this.stopping) {
 					const s = (await this.d.client.listModels()).get(name);
 					if (!s || s.value === "unloaded") {
-						const selectedBy = DAY_KEYS.filter((c) => getSelectedModel(this.d.db, c) === name);
+						const selectedBy = this.dayKeys().filter((c) => getSelectedModel(this.d.db, c) === name);
 						return {
 							ok: true,
 							message:
@@ -726,11 +732,16 @@ export class ModelManager {
 	private daySelected(): string[] {
 		return [
 			...new Set(
-				DAY_KEYS.map((c) => getSelectedModel(this.d.db, c)).filter(
-					(m): m is string => m !== null && !this.isRemote(m),
-				),
+				this.dayKeys()
+					.map((c) => getSelectedModel(this.d.db, c))
+					.filter((m): m is string => m !== null && !this.isRemote(m)),
 			),
 		];
+	}
+
+	/** The day selections now: `DAY_KEYS`, and the voice last (after the models people need) while it counts. */
+	dayKeys(): readonly SelectionKey[] {
+		return this.d.voiceByDay() ? [...DAY_KEYS, "voice"] : DAY_KEYS;
 	}
 
 	/** Whether a model is served by another of the owner's machines (plan 0.012). */

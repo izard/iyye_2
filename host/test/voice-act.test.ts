@@ -18,8 +18,8 @@ import { Scheduler } from "../src/kernel/scheduler.ts";
 import type { ActionRow } from "../src/outbox/outbox.ts";
 import { type Db, migrate, openDb } from "../src/state/db.ts";
 import { type EventRow, getEvent } from "../src/state/events.ts";
-import { VoiceActor } from "../src/voice/act.ts";
-import { VoiceShadow } from "../src/voice/shadow.ts";
+import { actingOn, VoiceActor } from "../src/voice/act.ts";
+import { VOICE_MAX_CHARS, VoiceShadow } from "../src/voice/shadow.ts";
 
 const NOW = new Date("2026-10-11T12:00:00.000Z");
 const quiet = { warn() {}, info() {}, error() {}, debug() {} } as never;
@@ -146,7 +146,8 @@ test("on and accepted: the rephrasing goes out and the attempt is recorded as de
 test("any doubt delivers the original byte for byte", async () => {
 	const cases: [string, Opts, (db: Db, e: EventRow) => void, RegExp | null][] = [
 		["web", {}, () => {}, null],
-		["not loaded", { loaded: false }, () => {}, /not available: voice-m is not loaded/],
+		["not loaded", { loaded: false }, () => {}, null],
+		["long", {}, () => {}, null],
 		[
 			"failure",
 			{
@@ -199,11 +200,14 @@ test("any doubt delivers the original byte for byte", async () => {
 		v.command(["on", "all"], "owner_web");
 		const e = event(db, label === "web" ? { channel: "web", contact: "owner", scope: "owner" } : {});
 		prep(db, e);
-		const r = await v.rephrase(e, ORIGINAL, never);
-		assert.equal(r.content, ORIGINAL, label);
+		const text = label === "long" ? `${ORIGINAL} ${"x".repeat(VOICE_MAX_CHARS)}` : ORIGINAL;
+		const r = await v.rephrase(e, text, never);
+		assert.equal(r.content, text, label);
 		r.record(action(db, `a-${label}`, e, r.content));
 		const s = samples(db);
 		if (label === "web") assert.equal(s.length, 0, "the web chat is never rephrased");
+		else if (label === "not loaded" || label === "long")
+			assert.equal(s.length, 0, `${label}: no attempt and no sample, so the shadow takes it afterwards`);
 		else {
 			assert.equal(s[0]!.delivered, 0, label);
 			if (why) assert.match(s[0]!.problem ?? "", why, label);
@@ -296,4 +300,49 @@ test("the shadow loop never repeats an action the acting voice already tried", a
 	});
 	assert.equal(shadow.pending(), 0);
 	assert.equal(await shadow.drainOnce(), 0);
+});
+
+test("a message too long for acting, or sent while the model was not loaded, is left to the shadow", async () => {
+	for (const label of ["long", "not loaded"] as const) {
+		const db = setup();
+		const { v } = actor(db, label === "not loaded" ? { loaded: false } : {});
+		assert.equal(actingOn(db), false);
+		v.command(["on", "contacts"], "owner_web");
+		assert.equal(actingOn(db), true, "acting on for a surface makes the voice model a day model");
+		const e = event(db);
+		const text = label === "long" ? `${ORIGINAL} ${"Thanks again. ".repeat(160)}`.trim() : ORIGINAL;
+		const r = await v.rephrase(e, text, never);
+		assert.equal(r.content, text);
+		db.prepare(
+			"INSERT INTO actions (id, event_id, kind, route_json, content_hash, idempotency_key, state, created_at, content) VALUES ('a1', ?, 'reply', ?, 'h', 'k1', 'delivered', ?, ?)",
+		).run(e.id, JSON.stringify({ channel: "telegram", chatId: 42 }), NOW.toISOString(), r.content);
+		r.record("a1");
+		const character = new Character({ db, stateDir: null, now: () => NOW });
+		let maxTokens = 0;
+		const shadow = new VoiceShadow({
+			db,
+			log: quiet,
+			device: new DeviceSlot(),
+			models: {
+				selected: () => "voice-m",
+				acquire: async (name) => ({ model: name, valid: () => true, release() {} }),
+			},
+			background: { blockedReason: () => null, yieldReason: () => null },
+			complete: async (_m, _s, u, max) => {
+				maxTokens = max;
+				return `Sure thing! ${/<<<\n([\s\S]*)\n>>>/.exec(u)![1]}`;
+			},
+			character,
+			names: () => ["Julia"],
+			now: () => NOW,
+		});
+		assert.equal(await shadow.drainOnce(), 1, label);
+		const s = samples(db);
+		assert.equal(s.length, 1, label);
+		assert.equal(s[0]!.acting, 0, `${label}: the shadow's own sample`);
+		assert.equal(s[0]!.original, text, label);
+		if (label === "long") assert.ok(maxTokens > 1200, "a long original gets room for its rephrasing");
+		v.command(["off", "all"], "owner_web");
+		assert.equal(actingOn(db), false);
+	}
 });

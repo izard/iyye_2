@@ -43,7 +43,7 @@ import { DecisionService } from "./decisions/service.ts";
 import { ToolkitSelectionShadow, ToolkitSelector } from "./decisions/toolkit-selection.ts";
 import { auditUntracedCitations, ensureBeliefTimelines } from "./facts/beliefs.ts";
 import { FactsCommand } from "./facts/commands.ts";
-import { FactExtractor, routerComplete } from "./facts/extractor.ts";
+import { extractionComplete, FactExtractor, routerComplete } from "./facts/extractor.ts";
 import { FactNight } from "./facts/night.ts";
 import { createLocalModelRuntime, outputCap, thinkingLevelFor } from "./integration/pi/runtime.ts";
 import { PiConversations } from "./integration/pi/sessions.ts";
@@ -103,7 +103,7 @@ import { type Db, openDb } from "./state/db.ts";
 import { emailInboxReport, spoofNoticesToday } from "./state/email-inbox.ts";
 import { getJob } from "./state/jobs.ts";
 import { getKv } from "./state/kv.ts";
-import { DAY_KEYS, seedSelectedModel } from "./state/models.ts";
+import { seedSelectedModel } from "./state/models.ts";
 import { recentSentNote, sentReport } from "./state/sent.ts";
 import { recordIyyeEntry } from "./state/stm.ts";
 import { appendFeed } from "./state/web.ts";
@@ -122,7 +122,7 @@ import { sandboxToolkit } from "./tools/sandbox.ts";
 import { thinkComplete, thinkingToolkit } from "./tools/thinking.ts";
 import { visionToolkit } from "./tools/vision.ts";
 import { WEB_TOOLKIT, webFetchTool, webSearchTool } from "./tools/web.ts";
-import { VoiceActor } from "./voice/act.ts";
+import { actingOn, VoiceActor } from "./voice/act.ts";
 import { VoiceCommands } from "./voice/commands.ts";
 import { routerVoice } from "./voice/prompt.ts";
 import { VoiceShadow } from "./voice/shadow.ts";
@@ -209,6 +209,7 @@ async function main(): Promise<number> {
 		defaultBackgroundModel: config.backgroundModel,
 		loadMode: config.llamaLoadMode,
 		remote,
+		voiceByDay: () => actingOn(db),
 		healthIntervalMs: config.healthIntervalS * 1000,
 		log,
 	});
@@ -600,7 +601,7 @@ async function main(): Promise<number> {
 		deviceFor,
 		models,
 		background,
-		complete: routerComplete(modelUrl),
+		complete: extractionComplete(modelUrl),
 		energy: adenosine,
 		enabled: config.facts.extract,
 	});
@@ -679,7 +680,7 @@ async function main(): Promise<number> {
 		log,
 	});
 	// The fact ledger (plan 0.011): one completion per document, on the router, thinking off.
-	const factComplete = routerComplete(router.url);
+	const factComplete = extractionComplete(router.url);
 	// Day and night (plan 0.002 L4/L5): STM moves into LTM only while asleep.
 	const rhythm = new Rhythm({
 		db,
@@ -787,12 +788,15 @@ async function main(): Promise<number> {
 					await outbox.notifyOwner({ key: `day-summary:${day - 1}`, content: summary });
 				}
 				const status = await models.status();
-				const missing = DAY_KEYS.map((k) => models.selected(k)).filter(
-					(m): m is string =>
-						m !== null &&
-						!models.isRemote(m) &&
-						!status.models.some((s) => s.name === m && s.status === "loaded"),
-				);
+				const missing = models
+					.dayKeys()
+					.map((k) => models.selected(k))
+					.filter(
+						(m): m is string =>
+							m !== null &&
+							!models.isRemote(m) &&
+							!status.models.some((s) => s.name === m && s.status === "loaded"),
+					);
 				const problems = wakeProblems({
 					db,
 					services: {
@@ -867,7 +871,7 @@ async function main(): Promise<number> {
 		llamaServer: config.llamaServer,
 		geoHttp: config.self.geolocation ? webHttp : null,
 		live: () => ({
-			models: Object.fromEntries(DAY_KEYS.map((k) => [k, models.selected(k)])),
+			models: Object.fromEntries(models.dayKeys().map((k) => [k, models.selected(k)])),
 			loaded: models.loadedNow(),
 			mode: rhythm.mode(),
 			day: Number(getKv(db, "rhythm.day")) || null,
