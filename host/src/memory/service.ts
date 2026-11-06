@@ -80,6 +80,8 @@ export interface MemoryServiceOptions {
 	/** Tests: a fake database; defaults to the conda PostgreSQL in `<installDir>/pg`. */
 	database?: MemoryDatabase;
 	restartBackoffMs?: number[];
+	/** Tests: the installed Hindsight version; defaults to the venv's `hindsight_api-<version>.dist-info`. */
+	hindsightVersion?: string | null;
 }
 
 export const DEFAULT_MEMORY_MODELS: MemoryModels = {
@@ -90,8 +92,9 @@ export const DEFAULT_MEMORY_MODELS: MemoryModels = {
 };
 
 export class MemoryService {
-	private readonly o: Required<Omit<MemoryServiceOptions, "database" | "hindsightCommand">> & {
+	private readonly o: Required<Omit<MemoryServiceOptions, "database" | "hindsightCommand" | "hindsightVersion">> & {
 		hindsightCommand: string[];
+		hindsightVersion: string | null;
 	};
 	private readonly db: MemoryDatabase;
 	private readonly hindsight: SupervisedProcess;
@@ -108,6 +111,8 @@ export class MemoryService {
 			restartBackoffMs: [5000, 30_000, 120_000],
 			...opts,
 			hindsightCommand: opts.hindsightCommand ?? [join(opts.installDir, ".venv", "bin", "hindsight-api")],
+			hindsightVersion:
+				opts.hindsightVersion !== undefined ? opts.hindsightVersion : installedHindsight(opts.installDir),
 		};
 		this.db =
 			opts.database ??
@@ -222,6 +227,18 @@ export class MemoryService {
 			this.set("needs provisioning", "run: cd host && node scripts/provision-memory.ts");
 			return;
 		}
+		// Hindsight's migrations only go forward, and an older Hindsight starts on a newer database without a
+		// word (0.10.2 on 1.2.0's, seen 2026-11-06): never let it.
+		const last = this.lastVersion();
+		const installed = this.o.hindsightVersion;
+		if (last && installed && compareVersions(installed, last) < 0) {
+			this.set(
+				"failed",
+				`${this.o.installDir} has Hindsight ${installed}, but the memory database was last run by ${last}: ` +
+					"set IYYE2_MEMORY_DIR to that install (memory/UPGRADE-1.2.0.md)",
+			);
+			return;
+		}
 		this.running = true;
 		mkdirSync(this.o.stateDir, { recursive: true, mode: 0o700 });
 		this.loop = this.supervise();
@@ -298,6 +315,26 @@ export class MemoryService {
 
 	// ---------------------------------------------------------------- internals
 
+	private get versionFile(): string {
+		return join(this.o.stateDir, "hindsight_version");
+	}
+
+	/** The newest Hindsight version that has run on this database (its migrations applied), if recorded. */
+	private lastVersion(): string | null {
+		try {
+			return readFileSync(this.versionFile, "utf8").trim() || null;
+		} catch {
+			return null;
+		}
+	}
+
+	private recordVersion(): void {
+		const v = this.o.hindsightVersion;
+		const last = this.lastVersion();
+		if (!v || (last && compareVersions(v, last) <= 0)) return;
+		writeFileSync(this.versionFile, `${v}\n`, { mode: 0o600 });
+	}
+
 	private async supervise(): Promise<void> {
 		let failures = 0;
 		while (this.running) {
@@ -308,6 +345,7 @@ export class MemoryService {
 				}
 				failures = 0;
 				this.set("up", `Hindsight on 127.0.0.1:${this.o.hindsightPort}`);
+				this.recordVersion();
 				await this.pause(this.o.healthIntervalMs);
 			} catch (err) {
 				if (!this.running) break;
@@ -379,4 +417,33 @@ export function hasCachedModel(hfHome: string, model: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/** The Hindsight version installed in `<installDir>/.venv` (from its dist-info), or null. */
+export function installedHindsight(installDir: string): string | null {
+	const lib = join(installDir, ".venv", "lib");
+	try {
+		for (const py of readdirSync(lib)) {
+			const site = join(lib, py, "site-packages");
+			if (!existsSync(site)) continue;
+			for (const d of readdirSync(site)) {
+				const m = /^hindsight_api-(.+)\.dist-info$/.exec(d);
+				if (m) return m[1]!;
+			}
+		}
+	} catch {
+		// no venv
+	}
+	return null;
+}
+
+/** Compares dotted release versions numerically ("0.10.2" < "1.2.0"); a pre-release suffix is ignored. */
+export function compareVersions(a: string, b: string): number {
+	const parts = (v: string) => v.split(/[.+-]/).map((p) => Number.parseInt(p, 10) || 0);
+	const [x, y] = [parts(a), parts(b)];
+	for (let i = 0; i < Math.max(x.length, y.length); i++) {
+		const d = (x[i] ?? 0) - (y[i] ?? 0);
+		if (d !== 0) return d;
+	}
+	return 0;
 }

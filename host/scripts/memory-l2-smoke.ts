@@ -17,7 +17,7 @@
 import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { loadConfig, PROJECT_ROOT } from "../src/config.ts";
+import { loadConfig } from "../src/config.ts";
 import { DeviceSlot } from "../src/kernel/device.ts";
 import { consoleLogger } from "../src/log.ts";
 import { MemoryGate } from "../src/memory/gate.ts";
@@ -78,7 +78,7 @@ const models = new ModelManager({
 	log,
 });
 const memory = new MemoryService({
-	installDir: join(PROJECT_ROOT, "memory"),
+	installDir: config.memory.installDir, // IYYE2_MEMORY_DIR selects another install
 	stateDir: join(stateDir, "memory"),
 	hindsightPort: await freePort(),
 	dbPort: await freePort(),

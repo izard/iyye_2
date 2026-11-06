@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { PROJECT_ROOT } from "../src/config.ts";
 import { silentLogger } from "../src/log.ts";
 import { PostgresCluster } from "../src/memory/postgres.ts";
-import { DEFAULT_MEMORY_MODELS, type MemoryDatabase, MemoryService } from "../src/memory/service.ts";
+import { compareVersions, DEFAULT_MEMORY_MODELS, type MemoryDatabase, MemoryService } from "../src/memory/service.ts";
 import { freePort, waitFor } from "./model-helpers.ts";
 
 const FAKE_HINDSIGHT = fileURLToPath(new URL("./fixtures/fake-hindsight.mjs", import.meta.url));
@@ -62,7 +62,15 @@ describe("memory service", () => {
 		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 	});
 
-	async function service(opts: { stateDir?: string; db?: MemoryDatabase; port?: number; installDir?: string } = {}) {
+	async function service(
+		opts: {
+			stateDir?: string;
+			db?: MemoryDatabase;
+			port?: number;
+			installDir?: string;
+			version?: string | null;
+		} = {},
+	) {
 		const stateDir = opts.stateDir ?? tempDir("iyye-mem-");
 		if (!opts.stateDir) dirs.push(stateDir);
 		const s = new MemoryService({
@@ -79,6 +87,7 @@ describe("memory service", () => {
 			// Launched through node: Hindsight's minimal PATH has no `node` for the script's shebang.
 			hindsightCommand: [process.execPath, FAKE_HINDSIGHT],
 			database: opts.db ?? fakeDb(),
+			hindsightVersion: opts.version ?? null,
 		});
 		services.push(s);
 		return { s, stateDir };
@@ -139,6 +148,29 @@ describe("memory service", () => {
 		} finally {
 			delete process.env.OPENAI_API_KEY;
 		}
+	});
+
+	test("an older Hindsight never starts on a database a newer one has migrated (2026-11-06: 0.10.2 would, silently)", async () => {
+		const stateDir = tempDir("iyye-mem-");
+		dirs.push(stateDir);
+		provision(stateDir);
+		const newer = (await service({ stateDir, version: "1.2.0" })).s;
+		newer.start();
+		await waitFor(() => newer.status.state === "up", 10_000);
+		assert.equal(readFileSync(join(stateDir, "hindsight_version"), "utf8").trim(), "1.2.0");
+		await newer.stop();
+		const older = (await service({ stateDir, version: "0.10.2" })).s;
+		older.start();
+		assert.equal(older.status.state, "failed");
+		assert.match(
+			older.status.detail,
+			/Hindsight 0\.10\.2, but the memory database was last run by 1\.2\.0: set IYYE2_MEMORY_DIR/,
+		);
+		// The same or a newer one starts, and the record only moves forward.
+		const same = (await service({ stateDir, version: "1.2.0" })).s;
+		same.start();
+		await waitFor(() => same.status.state === "up", 10_000);
+		assert.equal(compareVersions("0.10.2", "1.2.0") < 0 && compareVersions("1.10.0", "1.9.9") > 0, true);
 	});
 
 	test("refuses to start Hindsight with anything but a local PostgreSQL URL (no pg0 fallback, no remote DB)", async () => {

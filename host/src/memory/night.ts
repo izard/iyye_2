@@ -142,7 +142,12 @@ export class NightWork {
 			maxAttempts: 3,
 			busyRetryMs: 2000,
 			consolidatePollMs: 2000,
-			consolidateTimeoutMs: 600_000,
+			// Hindsight 1.2.0 re-asks every fact a batch left unplaced, and Iyye's own facts (capped at 0
+			// observations) are always left unplaced: the heaviest live night (85 facts, 71 of them Iyye's)
+			// took 176 s on 0.10.2 and 633 s on 1.2.0 (memory/UPGRADE-1.2.0.md). Past the deadline the gate is
+			// released while Hindsight still works, its model calls meet the pass-through's 503 and it marks
+			// those facts failed, so the deadline must cover a heavy night.
+			consolidateTimeoutMs: 1_800_000,
 			...deps,
 		};
 	}

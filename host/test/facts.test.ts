@@ -989,6 +989,17 @@ describe("F2: beliefs and the nightly merge", () => {
 				ltm.docs.set(`${bank}/${id}`, { ...stored, bank, id, content: "", metadata: {} });
 			const check = () => checkFactOrphans(db, ltm.client(), T0.toISOString());
 
+			// Hindsight 1.2.0's document search also matches text and stops at a cap: the check never relies
+			// on it. An episode quoting "fact:" is not a fact document, and a full search hides nothing.
+			ltm.docs.set("iyye-contact-julia/episode-1", { ...stored, id: "episode-1", content: "see fact: below" });
+			ltm.docSearchCap = 0;
+			assert.deepEqual(
+				{ found: (await check()).found, counts: (await check()).counts },
+				{ found: 1, counts: { missing: 0, unknown: 0, stale: 0 } },
+			);
+			ltm.docSearchCap = 1000;
+			ltm.docs.delete("iyye-contact-julia/episode-1");
+
 			// Its text gone: missing. Nothing is re-stored or deleted by the check.
 			ltm.docs.delete(key);
 			let c = await check();

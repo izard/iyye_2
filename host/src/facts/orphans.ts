@@ -92,14 +92,16 @@ export async function checkFactOrphans(
 	} catch (err) {
 		return { ...out, error: (err as Error).message };
 	}
-	// Hindsight's side: every `fact:` document of every bank not being forgotten.
+	// Hindsight's side: every `fact:` document of every bank not being forgotten. Every document is
+	// listed and filtered here, never searched with `q`: since Hindsight 1.1 `q` also matches document
+	// text and stops at 1000 matches, past which `total` is only a lower bound (false `missing`).
 	const seen = new Set<string>();
 	for (const bank of banks) {
 		if (forgetting.has(bank)) continue;
 		for (let offset = 0; ; ) {
 			let page: { items: { id: string }[]; total: number };
 			try {
-				page = await ltm.listDocuments(bank, { q: "fact:", limit: PAGE, offset });
+				page = await ltm.listDocuments(bank, { limit: PAGE, offset });
 			} catch (err) {
 				if (err instanceof HindsightError && err.status === 404) break; // deleted meanwhile
 				return { ...out, error: (err as Error).message };

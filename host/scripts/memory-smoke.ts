@@ -14,7 +14,7 @@
 import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { PROJECT_ROOT } from "../src/config.ts";
+import { loadConfig } from "../src/config.ts";
 import { consoleLogger } from "../src/log.ts";
 import { DEFAULT_MEMORY_MODELS, MemoryService } from "../src/memory/service.ts";
 
@@ -24,6 +24,7 @@ if (!scratch) {
 	process.exit(2);
 }
 const stateDir = join(scratch, "memory");
+const config = loadConfig(process.env);
 mkdirSync(stateDir, { recursive: true });
 if (flag === "--models-from" && modelsFrom && !existsSync(join(stateDir, "hf"))) {
 	cpSync(modelsFrom, join(stateDir, "hf"), { recursive: true });
@@ -40,7 +41,7 @@ const freePort = () =>
 
 const log = consoleLogger();
 const memory = new MemoryService({
-	installDir: join(PROJECT_ROOT, "memory"),
+	installDir: config.memory.installDir, // IYYE2_MEMORY_DIR selects another install
 	stateDir,
 	hindsightPort: await freePort(),
 	dbPort: await freePort(),

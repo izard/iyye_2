@@ -14,11 +14,11 @@
 
 | Component | Pin | Notes |
 | --- | --- | --- |
-| Hindsight (`hindsight-api`) | 0.10.2 | uv venv, Python 3.11, in `memory/.venv`; full dependency list in `memory/requirements.lock` (torch 2.14.1, sentence-transformers 6.1.0). Clone at `0be6c02b2`. |
-| PostgreSQL / pgvector | 18.6 (`hf773c0a_3`) / 0.8.6 (`h24b1a1f_0`), conda-forge osx-arm64 | `memory/pg`, explicit lock `memory/pg.lock`. Recreate with `conda create -p memory/pg --file memory/pg.lock`. |
+| Hindsight (`hindsight-api`) | 1.2.0 (2026-11-06; the live host runs 0.10.2 until the owner switches, `memory/UPGRADE-1.2.0.md`) | uv venv, Python 3.11. 1.2.0 is installed in its own directory, `iyye_2/memory-1.2.0` (`.venv`, `pg` a link to `../memory/pg`), selected with `IYYE2_MEMORY_DIR`; 0.10.2 stays in `memory/.venv`. Dependency lists: `memory/requirements.lock` (macOS arm64) and `memory/requirements-linux-aarch64.lock` (the Spark; torch 2.14.1+cu130, sentence-transformers 6.1.0 and transformers 5.15.1 held at 0.10.2's versions; dateparser held at 1.4.3, since 1.5.0 breaks Hindsight's date analysis of every query naming a date or weekday); 0.10.2's Spark list is `memory/requirements-linux-aarch64-0.10.2.lock`. Clone at `v1.2.0` (`34a138684`). |
+| PostgreSQL / pgvector | 18.6 (`hf773c0a_3`) / 0.8.6 (`h24b1a1f_0`), conda-forge osx-arm64 | `memory/pg`, explicit lock `memory/pg.lock`. Recreate with `conda create -p memory/pg --file memory/pg.lock`. On the Spark, `memory/pg-linux-aarch64.lock`. Unchanged by the 1.2.0 upgrade. |
 | Embedder / reranker | `BAAI/bge-small-en-v1.5` / `cross-encoder/ms-marco-MiniLM-L-6-v2` | Downloaded by `scripts/provision-memory.ts` (it prints the revisions; record them here). Hindsight runs them on CPU: it declines MPS. |
 
-Hindsight behaviour the host relies on (L0 spike, `memory/SPIKE.md`):
+Hindsight behaviour the host relies on (L0 spike, `memory/SPIKE.md`; every item checked again on 1.2.0 on 2026-11-06, `memory/UPGRADE-1.2.0.md`):
 - It binds 0.0.0.0 unless `--host` is passed.
 - It contacts the HF Hub at every start unless `HF_HUB_OFFLINE=1`.
 - It masks DB credentials in its log.
@@ -35,6 +35,11 @@ Hindsight behaviour the host relies on (L0 spike, `memory/SPIKE.md`):
 - (Provenance) `PATCH …/banks/{id}/config` with `{"updates": {"retain_strategies": {...}}}` defines named strategies (bank config API on by default); an item's `strategy` selects one. `retain_extraction_mode: chunks` stores the text verbatim as one `world` unit with no LLM call. Strategies cannot be set by environment variable.
 - (L3) Recall needs no model call: only the CPU embedder and reranker (about 0.1 s).
 - (L2) llama.cpp 11362 honours `chat_template_kwargs.enable_thinking=false` per request for gemma-4-E4B: no `reasoning_content`.
+- (1.2.0) Retain asks for `response_format: json_object` (no tools), `temperature` 0.1, `max_tokens` 64000, at `POST /v1/chat/completions` only. A reply that is JSON without a top-level `facts` list is now HTTP 500 (0.10.2 stored nothing and answered 200); `{"facts": []}` is still a 200 with 0 units, and prose was a 500 in both.
+- (1.2.0) Consolidation answers one entry per new fact (no setting) and asks again, one by one, about every fact a batch left unplaced, which includes every fact in a scope capped at 0 (Iyye's own). The heaviest live night (85 facts, 71 Iyye's) took 176 s on 0.10.2 and 630 s on 1.2.0, so the night waits up to 1,800 s. In Hindsight's own turn extraction it also handled a correction worse (kept the stale value); the live `ledger` mode never recalls those observations.
+- (1.2.0) `GET …/documents?q=` also matches document text and stops at 1000 matches (`total` is then a lower bound, `total_is_estimate`): never page on a `q` search (the orphan check lists every document).
+- (1.2.0) `HINDSIGHT_API_LLM_TRACE_ENABLED=false` also covers the embedding, reranker and decision-model calls that 1.1 added to the request history (one recorder). The default reranker is the hosted `hs-rerank-1` and the decision model `none`: Iyye sets the local reranker and embedder explicitly. The audit log stays off by default. A timestamp with no UTC offset is read in `HINDSIGHT_API_DEFAULT_TIMEZONE` (UTC); Iyye always sends `Z`.
+- (1.2.0) The migrations from 0.10.2 (six, one of them on `memory_units`) ran in under a second on a copy of the live data, and the first start was healthy after 14 s (MemoryService waits 180 s). They cannot be undone: going back needs the copy of `pgdata` from before. 0.10.2 starts on a database 1.2.0 migrated without refusing, so `MemoryService` refuses an installed version older than the newest one recorded in `<state>/memory/hindsight_version`.
 
 ## Pi request details the host relies on (2026-10-03 incident)
 

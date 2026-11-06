@@ -4,7 +4,7 @@
 /**
  * An in-process stand-in for the Hindsight HTTP API, enough for the gateway
  * and the night job: banks, recall, synchronous retain (documents replaced
- * by id, like 0.10.2), document unit counts, consolidation operations.
+ * by id, like 0.10.2 and 1.2.0), document unit counts, consolidation operations.
  *
  * Recall answers a bank's scripted `recallResults` when set, otherwise its
  * stored documents that share a word (4+ letters) with the query, as
@@ -55,6 +55,8 @@ export class FakeLtm {
 	readonly deletedDocs: string[] = [];
 	unitsFor: (content: string) => number = (c) => (/2\+2|thanks/i.test(c) ? 0 : 1);
 	failRetain = false;
+	/** Hindsight 1.2.0's `DOCUMENT_SEARCH_CAP`: a `q` search of documents stops here. */
+	docSearchCap = 1000;
 	/** This bank's recalls answer HTTP 500 (one bank failing among several). */
 	failRecallFor: string | null = null;
 	down = false;
@@ -249,13 +251,18 @@ export class FakeLtm {
 		if (method === "GET" && rest === "documents") {
 			if (!this.banks.has(bank)) return json(404, { detail: "bank not found" });
 			const q = new URLSearchParams(url.split("?")[1] ?? "");
+			// Like 1.2.0: `q` matches the id or the text, and a search stops at `docSearchCap` matches.
 			const filter = (q.get("q") ?? "").toLowerCase();
-			const all = [...this.docs.values()].filter((d) => d.bank === bank && d.id.toLowerCase().includes(filter));
+			let all = [...this.docs.values()].filter(
+				(d) => d.bank === bank && (d.id.toLowerCase().includes(filter) || d.content.toLowerCase().includes(filter)),
+			);
+			if (filter) all = all.slice(0, this.docSearchCap);
 			const offset = Number(q.get("offset") ?? 0);
 			const limit = Number(q.get("limit") ?? 100);
 			return json(200, {
 				items: all.slice(offset, offset + limit).map((d) => ({ id: d.id })),
 				total: all.length,
+				total_is_estimate: filter !== "" && all.length === this.docSearchCap,
 				limit,
 				offset,
 			});

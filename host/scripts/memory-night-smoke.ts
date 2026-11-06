@@ -8,24 +8,26 @@
  * LTM the way a day turn does. Free scratch ports and a scratch state dir;
  * never touches ~/.iyye2 or a running host.
  *
- *   node scripts/memory-night-smoke.ts <scratch-dir> --models-from <HF_HOME> [model] [--no-thinking] [--facts]
+ *   node scripts/memory-night-smoke.ts <scratch-dir> --models-from <HF_HOME> [model] [--no-thinking] [--facts] [--ledger]
  *
  * `--facts` (plan 0.011) also runs the fact ledger's night first: extraction
  * on the real model, the merge into beliefs, the structured facts stored
  * verbatim, then a tag-filtered recall and a document deletion on the real API.
+ * `--ledger` (implies `--facts`) is the live host's mode since 2026-10-17 (`IYYE2_FACTS_TURNS=ledger`):
+ * people's turns reach Hindsight only as the ledger's structured facts.
  */
 
 import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { loadConfig, PROJECT_ROOT } from "../src/config.ts";
+import { loadConfig } from "../src/config.ts";
 import { extractionComplete } from "../src/facts/extractor.ts";
 import { FactNight, STRUCTURED_TAG } from "../src/facts/night.ts";
 import { DeviceSlot } from "../src/kernel/device.ts";
 import { consoleLogger } from "../src/log.ts";
 import { MemoryGate } from "../src/memory/gate.ts";
 import { MemoryGateway } from "../src/memory/gateway.ts";
-import { HindsightClient } from "../src/memory/hindsight.ts";
+import { HindsightClient, NO_OBSERVATIONS_FROM } from "../src/memory/hindsight.ts";
 import { NightWork } from "../src/memory/night.ts";
 import { MemoryPassthrough } from "../src/memory/passthrough.ts";
 import { DEFAULT_MEMORY_MODELS, MemoryService } from "../src/memory/service.ts";
@@ -45,7 +47,8 @@ if (!scratch || flag !== "--models-from" || !modelsFrom) {
 }
 const model = modelArg && !modelArg.startsWith("--") ? modelArg : "gemma-4-E4B";
 const thinking = !process.argv.includes("--no-thinking");
-const withFacts = process.argv.includes("--facts");
+const ledger = process.argv.includes("--ledger");
+const withFacts = ledger || process.argv.includes("--facts");
 const stateDir = join(scratch, "state");
 mkdirSync(join(stateDir, "memory"), { recursive: true });
 if (!existsSync(join(stateDir, "memory", "hf")))
@@ -88,7 +91,7 @@ const models = new ModelManager({
 	log,
 });
 const memory = new MemoryService({
-	installDir: join(PROJECT_ROOT, "memory"),
+	installDir: config.memory.installDir, // IYYE2_MEMORY_DIR selects another install
 	stateDir: join(stateDir, "memory"),
 	hindsightPort: await freePort(),
 	dbPort: await freePort(),
@@ -186,7 +189,15 @@ try {
 				maxStep: 2,
 			})
 		: null;
-	const outcome = await new NightWork({ db, ltm, gate: timed, log, thinking, facts }).run(() => false);
+	const outcome = await new NightWork({
+		db,
+		ltm,
+		gate: timed,
+		log,
+		thinking,
+		facts,
+		turnExtraction: ledger ? "ledger" : "hindsight",
+	}).run(() => false);
 	console.log(`night: ${JSON.stringify(outcome)} in ${secs(t1)}`);
 	console.log(
 		`episodes: ${(db.prepare("SELECT user_text, state FROM stm_episodes ORDER BY said_at").all() as { user_text: string; state: string }[]).map((e) => `${e.state} ← ${e.user_text.slice(0, 40)}`).join("\n          ")}`,
@@ -204,6 +215,8 @@ try {
 		const speaker = (m.tags ?? []).find((t) => t.startsWith("speaker:")) ?? "untagged";
 		const flagged = /\bflag/i.test(m.text);
 		if (flagged && speaker !== "speaker:iyye") violations++;
+		// The consolidation strategy caps observations from Iyye's words and its probes at 0 (NO_OBSERVATIONS_FROM).
+		if ((m.fact_type ?? m.type) === "observation" && NO_OBSERVATIONS_FROM.includes(speaker)) violations++;
 		console.log(
 			`  ${(m.fact_type ?? m.type ?? "?").padEnd(11)} ${speaker.padEnd(14)} ${flagged ? "FLAG " : "     "}${m.text.slice(0, 110)}`,
 		);
