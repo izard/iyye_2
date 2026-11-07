@@ -400,7 +400,11 @@ export class PiConversations {
 		this.declareToolkits(live, next);
 	}
 
-	/** Declare exactly these toolkits, in the broker's order, with a prompt that lists exactly them. */
+	/**
+	 * Declare exactly these toolkits, with a prompt that lists exactly them (in the broker's order). Pi (since 1.5)
+	 * keeps the tools already declared where they are and appends new ones, so an added toolkit goes last and
+	 * nothing declared earlier ever moves: the longest cached prefix survives an add.
+	 */
 	private declareToolkits(live: LiveSession, active: string[]): void {
 		const kits = (live.tools?.toolkits ?? []).filter((k) => active.includes(k.name));
 		live.active = kits.map((k) => k.name);

@@ -4,10 +4,10 @@
 | --- | --- | --- |
 | Node | >= 22.19.0 (dev: 22.23) | Matches Pi's `engines`. Tests run `.ts` directly via Node type stripping. |
 | better-sqlite3 | 13.0.3 | Ships prebuilt binaries; installs with `--ignore-scripts`. SQLite 3.53.4 in the darwin-arm64 build. |
-| typebox | 1.3.27 | Same version Pi uses; tool parameter schemas. |
-| postal-mime | 4.0.7 | MIME parsing of received mail (plan 0.015); no dependencies, MIT-0. The IMAP and SMTP clients are the host's own (`channels/email/`). |
+| typebox | 1.3.27 | Iyye's tool parameter schemas (plain JSON Schema). Pi 1.5 no longer depends on it: it validates tool arguments as JSON Schema with `@earendil-works/pi-schema` (coercing, e.g. `"3"` → 3; bounds, enums, patterns and `additionalProperties: false` still reject). |
+| postal-mime | 4.2.0 | MIME parsing of received mail (plan 0.015); 4.0.7 had a high-severity advisory (GHSA-f2hq-32vh-53cc, quadratic CPU on a header of many encoded words), fixed in 4.1; no dependencies, MIT-0. The IMAP and SMTP clients are the host's own (`channels/email/`). |
 | typescript / @types/node / @biomejs/biome | 7.0.2 / 22.19.19 / 2.3.5 | Same as the Pi clone's dev tooling. |
-| `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai` | 1.0.0 (exact) | Pi's own `@earendil-works/*` dependencies resolve to 1.0.0 in `package-lock.json`. Clone at `1c1e9c0ef` for source reading. Behaviour below. |
+| `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai` | 1.5.0 (exact, 2026-11-07; was 1.0.0) | Pi's own `@earendil-works/*` dependencies resolve to 1.5.0 in `package-lock.json`; since 1.0.1 Pi ships no shrinkwrap, so Iyye's lockfile pins Pi's transitive dependencies. Clone at `v1.5.0` (`f9a263655`) for source reading. Behaviour below. |
 | llama.cpp `llama-server` | build 11362 (`926862e57`, 2026-10-02), `~/Downloads/llama.cpp/build_27/bin/` (previously build 9542, `6b80c74f2`, in `build_last6/`) | Router mode, behaviour below. Docs for an exact build: `git -C ~/Downloads/llama.cpp show <commit>:tools/server/README.md`. Re-probe with `node scripts/probe-router.ts <llama-server> --tools gemma-4-E4B` before switching builds. |
 
 ## Long-term memory (0.002)
@@ -76,7 +76,7 @@ SearXNG behaviour the host relies on (T0 spike, `web/SPIKE.md`):
 
 ## Known audit finding
 
-`npm audit` reports a high-severity `brace-expansion` (DoS on crafted brace patterns) inside `@earendil-works/pi-coding-agent`'s own pinned dependency tree (via `minimatch`). It is not fixed locally, because `npm audit fix` would override Pi's pins. Pi's glob-using file tools are disabled for every Iyye session (plan M3, `noTools`). Revisit when Pi is upgraded.
+`npm audit` is clean (2026-11-07): Pi 1.5 resolves `brace-expansion` 5.0.12 and a fixed `minimatch` (both flagged under Pi 1.0.0), and postal-mime is 4.2.0.
 
 ## llama.cpp router behaviour (probed 2026-10-02 on builds 9542 and 11362)
 
@@ -103,7 +103,7 @@ Probed with MiniCPM5-2B, qwen3.5-4b and a non-GGUF file; build 11362 re-probed w
 - **Memory accounting (macOS):** on 2026-10-02 the `vm_stat` reclaimable figure (free + inactive + speculative) was 49.4 GB before loading gemma-4-E4B, 46.7 GB after (model process RSS 8.9 GB) and 49.3 GB after stopping. Mapped weights mostly still count as reclaimable, so the host subtracts each loaded model's registry `ram_required_gb` as well.
 - **Readiness:** a reasoning model answering `max_tokens: 1` returns empty `content` with text in `reasoning_content`, and `finish_reason: length` on 11362. Readiness is HTTP 200 plus a `choices` entry.
 
-## Pi 1.0.0 behaviour the host relies on (checked 2026-10-02)
+## Pi behaviour the host relies on (checked on 1.0.0 2026-10-02, again on 1.5.0 2026-11-07)
 
 - `ModelRuntime.create` always registers Pi's built-in hosted providers. Their auth can come from environment variables (`getProviderEnvValue` reads `process.env`) and from ambient files. Hence `lockToLocalProvider` in `src/integration/pi/runtime.ts`; `test/pi.test.ts` asserts it with `OPENAI_API_KEY` set.
 - `PI_OFFLINE` is read once inside `ModelRuntime.create` to disable catalog network refresh.
@@ -113,5 +113,9 @@ Probed with MiniCPM5-2B, qwen3.5-4b and a non-GGUF file; build 11362 re-probed w
 - `prompt()` mid-run throws unless `streamingBehavior` is given. The host never does this, because turns are serialized per scope.
 - **Tool calling:** llama.cpp builds 9542 (gemma-4-E4B and gemma-4-26B) and 11362 (gemma-4-E4B) return OpenAI `tool_calls`, including two in parallel with `{}` arguments, and answers from `role: tool` results. Pi's `openai-completions` handles the streamed `tool_calls` deltas.
 - `openai-completions` sends `stream: true`, `stream_options.include_usage`, `store` and `max_completion_tokens`. llama.cpp build 9542 accepted all of them in the gemma-4-E4B smoke test.
+
+- (1.5.0) `setActiveToolsByName` keeps the tools already active in their order and appends the new ones (earlier versions declared exactly the given order). A toolkit added mid-session is declared last and nothing declared before it moves.
+- (1.3.0) A tool call whose final arguments are malformed JSON fails validation and shows the model its raw text (it used to run with the fields parsed so far); it counts toward the turn guard like any failure.
+- (1.4.0) Recovering from an answer cut off at the output limit no longer leaves the dropped tool call's result behind (which broke every later request of the session); compaction summaries use the model's output limit instead of a fixed one.
 
 On a Pi upgrade, the conformance test "ModelRuntime's methods are the ones lockToLocalProvider was written against" (`test/pi.test.ts`) fails if `ModelRuntime` gained or lost a method. Check any new inference entry point and add it to `GUARDED_METHODS` before updating the expected list.

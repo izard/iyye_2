@@ -4,7 +4,7 @@
 /**
  * Plan 0.004 §3.4: toolkit selection acting. Kev chooses, before a turn,
  * which permitted toolkits to add; a session starts with the always-on ones,
- * only ever adds, keeps the broker's order, and its prompt lists exactly the
+ * only ever adds, appends what it adds (earlier tools never move), and its prompt lists exactly the
  * declared tools, after a reopen and a restart too.
  */
 
@@ -309,13 +309,14 @@ describe("sessions with acting selection", () => {
 			(await conv.turn({ scope: "owner-down", view: { kind: "owner", channel: "web" }, model: "small", text: "hi" }))
 				.ok,
 		);
+		// The always-on toolkits first, then the ones Kev could not rule out, appended (Pi 1.5 keeps declared tools in place).
 		assert.deepEqual(declared(requests().at(-1)!), [
 			"current_time",
+			"reminder_create",
 			"system_status",
 			"web_search",
 			"web_fetch",
 			"run_it",
-			"reminder_create",
 		]);
 		kev.up = true;
 		// Background work never selects: it declares its read-only toolkits and Kev is not asked.
