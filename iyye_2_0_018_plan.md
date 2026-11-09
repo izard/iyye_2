@@ -1,6 +1,6 @@
 # Iyye 2.0.018 — A Coherent Model of Itself and Its Surroundings, and More Initiative: Implementation Plan
 
-2026-11-09. Proposed; nothing here is built. It waits for the owner's decisions in §7.
+2026-11-09. Proposed. W0 (the spike) is done: `host/SPIKE-0.018.md`, and §1, §3 and §7 carry what it changed. Nothing else is built; the rest waits for the owner's decisions in §7.
 
 Owner's direction (2026-11-09): Iyye should do more work on its own. The top priority is to build and keep a coherent model of itself and its surroundings: CPU, GPU, memory, disk, hardware, the LAN, and the people it talks with.
 
@@ -25,7 +25,8 @@ Owner's direction (2026-11-09): Iyye should do more work on its own. The top pri
 | People | 5 contacts, 221 current beliefs (127 about the owner, 22 about contacts), no notes |
 
 **What Iyye does not know, though its records hold it:**
-- **Its network goes away most nights.** Since 2026-10-12 the default route disappeared on 15 evenings between 23:03 and 23:50 local time, and was seen again the next morning (between 07:00 and 10:30, by the first probe after waking). Telegram's "retrying" findings fall in the same minutes. Each one is reported as news. The Ethernet port has no link; Iyye is on Wi-Fi only. The cause is not known.
+- **It is not running at night** (found by W0). On the Spark the host runs in the foreground of the owner's SSH session. The router's Wi-Fi goes off around 23:15, the session closes about 15 minutes later, and the host ends with it; it starts again when the owner logs in and starts it. On all 30 nights since 2026-10-10 it was down for a median of 8.2 hours, and none of the Spark's 29 completed nights ran in the rest window: every one is a catch-up by day. The machine itself never sleeps, and no facet says "I was not running".
+- **Its network goes away every night.** The Spark's log shows the access point gone from about 23:12 to 07:11 (`ssid-not-found`: the router's Wi-Fi is off). The self model caught it on only 15 evenings since 2026-10-12, because the host is usually gone before the next 30-minute probe. Telegram's "retrying" findings fall in the same minutes, and each one is reported as news. The Ethernet port has no link; Iyye is on Wi-Fi only.
 - **A machine it depends on has been away for 15 days.** The thinking model on the MBP is unreachable since 2026-10-25. Iyye cannot tell "the MBP is not on the LAN" from "the MBP is there and its server is not answering".
 - **A request repeats.** The owner asked for AI news and r/LocalLLaMA 17 times on 14 days since 2026-10-13. The recurring-question detector does not see it, because Iyye answers it each time.
 - **What uses its memory and disk.** 73 GB of 121 GB were in use; no record says by what. Swap is never recorded on Linux (the probe is macOS only).
@@ -60,14 +61,15 @@ One store (`self_facts`, as now), more facets. Every field keeps its source and 
 | Facet | Fields | Source (Linux / macOS) | Window |
 | --- | --- | --- | --- |
 | **compute** | CPU load (1, 5, 15 min) and core count; CPU, memory and I/O pressure; GPU utilisation, temperature, power; the hottest sensor | `/proc/loadavg`, `/proc/pressure/*`, `nvidia-smi`, `/sys/class/thermal` / `sysctl` (what it gives without privilege) | 10 min |
-| **memory** | total, available, swap used; memory of each of Iyye's own processes (host, router, each model instance, Hindsight, PostgreSQL, Kev, SearXNG), by role, never by command line | `/proc/meminfo`, `/proc/<pid>/status` for the PIDs the host supervises / `vm_stat`, `ps -o rss` | 10 min |
+| **memory** | total, available, swap used; memory of each of Iyye's own processes (host, router, each model instance, Hindsight, PostgreSQL, Kev, SearXNG), by role, never by command line: resident size and, on the Spark, its GPU share (W0: a resident size leaves the GPU share out, and the GB10 reports no GPU total) | `/proc/meminfo`, `ps` and `nvidia-smi --query-compute-apps` for the PIDs the host supervises / `vm_stat`, `ps -o rss` | 10 min |
 | **storage** | each real filesystem: size, free; the size of Iyye's own directories (state, models, model caches, logs, memory database, sandbox) | `statfs` on the mount list; a bounded directory walk of a fixed list, at night | 1 h; sizes daily |
 | **network** | each interface: kind (Wi-Fi, Ethernet), link up or down, signal; whether a default route exists; whether the gateway answers at the link layer | `ip -j link`, `/proc/net/wireless`, `ip route`, `ip neigh` / `route`, `ifconfig`, `arp` | 10 min |
 | **lan** | hosts in the kernel's neighbour table: an id (hashed hardware address), private address, first and last seen, the owner's label | `ip neigh` / `arp -an`; passive only | 30 min |
 | **peers** | each machine Iyye is configured to use (the MBP's endpoints): on the LAN or not, answering or not, since when | the neighbour table, and the status the host already has | 10 min |
 | **devices** | displays, cameras, microphones, audio outputs: present or not, never their content | `/sys/class/drm`, `/dev/video*`, `/proc/asound` / `system_profiler` | daily |
 | **models** | each registry model: file size, memory when loaded, load time, measured speed (prompt and generation tokens per second from its own requests) | the registry, `model_ops`, the router's timings | on load; daily |
-| **rhythm** | how long each night took and its parts, when the owner is usually active | `energy_ledger`, the night report, `events` | daily |
+| **rhythm** | each night's start, end and parts, and whether it ran in its window; when the owner is usually active | `energy_ledger`, the night report, `events` | daily |
+| **lifecycle** (added by W0) | when the host started; what it runs under (a terminal, an SSH session, a service manager); a heartbeat; at each start, how long it was not running and whether the last run ended with a shutdown | the process's parents by program name, `kv` | at start; 1 min |
 
 - **One source of truth.** The `machine` observation domain and `system_status` read these facets; they stop probing on their own.
 - **Privacy** (as plan 0.010): hardware addresses are hashed before they are stored. Public addresses, serial numbers, host names of other machines and SSIDs are never kept. Private (RFC 1918) addresses are kept, owner-only (§7 decision 2). The lan, peers, place and people facets never reach a contact's turn.
@@ -76,14 +78,15 @@ One store (`self_facts`, as now), more facets. Every field keeps its source and 
 
 - `self_readings` (migration): `(facet, field, at, value)` for numeric fields, one row per probe. Kept 7 days, then folded into hourly rows (min, mean, max, count) kept 90 days. About 40 fields at 10 minutes is 40,000 rows a week.
 - **Recorded asleep too** (§7 decision 1): the vitals probe is cheap and uses no model. Asleep it only writes rows. It raises nothing until Iyye is awake.
-- State changes that are not numbers (link down, service state, peer away, model loaded) are already events with a time: `self_changes`, `service_status`, `model_ops`. Regularities read them there.
+- State changes that are not numbers (link down, service state, peer away, model loaded) are events with a time. `self_changes` and `model_ops` are that already. W0: `service_status` keeps only the current state, and the link is seen only at the next probe, so W2 records each change of a service's state and of the link when it happens.
 
 ### 3.3 What is normal
 
 All deterministic, computed at the end of each night from the records, and inspectable (`/self normal`):
 
-- **Baselines.** For each numeric field: the median and spread of its hourly values over the last 28 days, by hour of the local day, weekdays and weekends apart. A reading is **surprising** when it stays outside the usual band for three probes and also passes the field's own floor (for example memory available below the band *and* below 16 GB), so ordinary noise raises nothing.
-- **Regularities.** An event of one kind (the network away, a service down, a peer away, the owner active) whose start falls within the same 90 minutes of the local day on at least 5 of the last 14 days is a candidate regularity with its usual start, usual end and support. Local time, not UTC: the nightly gap moved by an hour in UTC when summer time ended.
+- **Levels and stocks** (W0). A level (memory, load, temperature, pressure) gets a baseline. A stock that only moves one way (free disk, directory sizes) gets a forecast instead: "lower than usual for this hour" is always true of it. Readings are keyed by the machine, and a new machine starts afresh.
+- **Baselines.** For each numeric level: the median and spread of its hourly values over the last 28 days, by hour of the local day, weekdays and weekends apart. A reading is **surprising** when it stays outside the usual band for three probes and also passes the field's own floor (for example memory available below the band *and* below 16 GB), so ordinary noise raises nothing. A shift that lasts is one episode, open until a reading is back in the band. W0 on five weeks of 2-hourly readings: with the floor, the rule leaves the two lowest readings of the period and nothing else; without it, up to 17 episodes.
+- **Regularities.** An event of one kind (the network away, a service down, a peer away, the owner active) whose start falls within the same 90 minutes of the local day on at least 5 of the last 14 days is a candidate regularity with its usual start, usual end and support. Events the host itself caused (its night's and waking's model operations: `model_ops.requested_by`) are left out: W0 found seven of ten regularities were Iyye's own doing. Local time, not UTC: the nightly gap moved by an hour in UTC when summer time ended.
 - **Expected or a problem is the owner's call** (§7 decision 4). Iyye asks once: "My network goes away around 23:15 most nights and is back by about 07:30. Is that intended?" The answer is stored as an owner statement:
   - *expected*: it stops being a finding and a notice; work is planned around it; a night it does **not** happen is the surprise.
   - *not intended*: it stays a problem, reported once as a pattern with its count, not once a night.
@@ -139,6 +142,7 @@ Every new reason is a record with evidence; Iyye's own text is never one (HLD §
 | An unknown LAN host seen on 3 days; a peer away longer than usual | curiosity | A question: "What is the device that appeared on 2026-11-03?", "The MBP has been away 15 days. Is that expected?" |
 | A forecast past its limit | self-preservation | A notice with the figures and the date; a maintenance proposal when one applies. |
 | A failed dependency | self-preservation | One notice naming the cause. |
+| The host was not running for hours; the night ran outside its window on most of the last 7 days (W0, the lifecycle and rhythm facets) | self-preservation | One notice with the times and what ended the run, then the pattern, not a notice a day. |
 | A recurring request | agency | A proposed routine (§4.1). |
 | An expected event that did not happen; a routine that failed | self-preservation or agency | A notice. |
 
@@ -146,7 +150,7 @@ Knowledge also changes behaviour that exists, with no new permission: background
 
 ### 4.1 Routines
 
-- **Detector:** the owner made the same request (the content-stem match the recurring-question detector uses) on at least 4 different days of the last 14, and each time the turn answered it with read-only tools. The owner's messages are the evidence.
+- **Detector:** the owner made the same request (the content-stem match the recurring-question detector uses, chained: a run of alike turns is one request) on at least 4 different days of the last 14, counting only turns answered with read-only tools. The owner's messages are the evidence. W0: on the live records this finds exactly one request, the news one, nine days after it was first made; without the tools condition it also finds the owner trying a tool.
 - **Proposal:** Iyye proposes a plan with one step of a new kind, `routine`: the owner's own words as the task, a local time taken from when they usually ask, the days, and the channel they usually ask on. It always waits for `/plan approve` (a plan Iyye proposes is never authorized at once).
 - **A run** is a background job like a web investigation: read-only toolkits and `web`, no `messaging`, its answer grounded in the URLs the tools returned. The host delivers it with `Outbox.sendOwn` to the approved route, labelled as the routine's. It counts against the daily web budget. A run that cannot happen (asleep, the network away) is skipped and said so in the next one.
 - **Bounds:** at most `IYYE2_ROUTINES_MAX` (3) active; only the owner's requests; only to the owner. After 7 runs with no reaction Iyye asks whether to keep it; `/plan cancel` ends it.
@@ -172,8 +176,8 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 
 | | What | Exit check |
 | --- | --- | --- |
-| **W0** | Spike, no behaviour. `scripts/world-spike.ts <db copy>` replays the last five weeks through the baseline, regularity and recurring-request rules. Each probe is run on the Spark and the Mac for what it returns and what it costs. | It finds the nightly network gap and the news request, and lists every other regularity it would have raised, for the owner to judge. Thresholds are set from that. Notes in `host/SPIKE-0.018.md`. |
-| **W1** | The compute, memory, storage, devices, models and rhythm facets; `self_readings`; the vitals probe; `/self` views; `machine` and `system_status` read the facets. Swap on Linux. | `/self` answers "what uses the memory" and "what uses the disk" from records. No new signal. |
+| **W0** (done 2026-11-09) | Spike, no behaviour. `scripts/world-spike.ts <db copy>` replays the last five weeks through the baseline, regularity and recurring-request rules. Each probe is run on the Spark and the Mac for what it returns and what it costs. | It finds the nightly network gap and the news request, and lists every other regularity it would have raised, for the owner to judge. Thresholds are set from that. Notes in `host/SPIKE-0.018.md`. |
+| **W1** | The lifecycle, compute, memory, storage, devices, models and rhythm facets; `self_readings`; the vitals probe; `/self` views; `machine` and `system_status` read the facets. Swap on Linux. | `/self` answers "what uses the memory", "what uses the disk" and "when was I not running" from records. No new signal. |
 | **W2** | The network, lan (passive) and peers facets; the dependency map; causes in service signals and notices. | A simulated network loss gives one finding that names it. The MBP's state says which of the two cases it is. |
 | **W3** | Baselines, regularities and forecasts; their signals journal-only for a week, then acting; the confirming question. | The week's journal against the owner's judgement: no more than one unwanted signal a day. |
 | **W4** | Investigations of surprises; `disk_usage`; `self_model`; the about-me note for Iyye's own work. | A staged memory drop is explained with cited readings. |
@@ -196,6 +200,7 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 | 7 | Iyye's own web sessions get an about-me note without place, people and LAN? | Yes. |
 | 8 | A plan a person proposed whose dated first step passed more than 3 days ago: ask the owner once, then let it lapse? Today such a plan keeps agency's need at 0.89 (four plans wait for approval). | Yes. |
 | 9 | Order: this plan before CH1b (plan 0.009) and N2 (plan 0.017)? | The owner's call. W0–W2 touch neither. |
+| 10 | (From W0.) How the host is run. Today it ends every night with the owner's SSH session, so no night runs in its window and nothing is answered or sent for about 8 hours. | Run it under a service manager that outlives the login (a systemd user service with lingering), or at least in `tmux`. A wired network, or Wi-Fi left on at night, would keep Telegram reachable too. The owner's setup and the owner's call; nothing in this plan changes it. |
 
 ## 8. Risks
 
