@@ -389,7 +389,7 @@ As built (`memory/gateway.ts`):
 | `IYYE2_MEMORY_PASSTHROUGH_PORT` | `8187` | the lease-gated OpenAI-compatible pass-through |
 | `IYYE2_MEMORY_MODEL` | `gemma-4-E4B` | initial memory model; `/use <model> memory` overrides it |
 | `IYYE2_MEMORY_DIR` | `iyye_2/memory` | where `.venv` (Hindsight) and `pg` (PostgreSQL) are installed |
-| `IYYE2_MEMORY_EMBEDDINGS_MODEL` / `IYYE2_MEMORY_RERANKER_MODEL` | `BAAI/bge-small-en-v1.5` / `cross-encoder/ms-marco-MiniLM-L-6-v2` | local models (§8.5) |
+| `IYYE2_MEMORY_EMBEDDINGS_MODEL` / `IYYE2_MEMORY_RERANKER_MODEL` | `BAAI/bge-small-en-v1.5` / `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (was `cross-encoder/ms-marco-MiniLM-L-6-v2` until 2026-11-08) | local models (§8.5) |
 | `IYYE2_MEMORY_TEXT_LANGUAGE` | `english` | keyword-search dictionary (§8.5) |
 | `IYYE2_SLEEP_WINDOW` | `02:00-06:00` | local rest window: the night's STM → LTM transfer and consolidation |
 | `IYYE2_MEMORY_THINKING` | `1` | model reasoning on for night extraction |

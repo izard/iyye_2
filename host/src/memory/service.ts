@@ -86,7 +86,7 @@ export interface MemoryServiceOptions {
 
 export const DEFAULT_MEMORY_MODELS: MemoryModels = {
 	embeddings: "BAAI/bge-small-en-v1.5",
-	reranker: "cross-encoder/ms-marco-MiniLM-L-6-v2",
+	reranker: "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
 	textSearchLanguage: "english",
 	storedLanguage: "English",
 };

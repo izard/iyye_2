@@ -82,7 +82,8 @@ const ITEM_CHARS = 400;
  * A bank that is neither the reader's own nor about a person the question
  * names contributes only items at least this relevant (Hindsight's reranker
  * score; 2026-10-06: a real match scored ~0.99, an unrelated bank's best
- * ~0.00001). Not used as a cut for the reader's own banks: the reranker does
+ * ~0.00001; checked again for the multilingual reranker on 2026-11-08, see
+ * PINS.md). Not used as a cut for the reader's own banks: the reranker does
  * not know who "we" or "my son" is, so a true match can score low.
  */
 export const STRONG_RELEVANCE = 0.3;

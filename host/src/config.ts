@@ -409,7 +409,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			sleepWindow: window(env.IYYE2_SLEEP_WINDOW || "02:00-06:00"),
 			thinking: env.IYYE2_MEMORY_THINKING !== "0",
 			embeddingsModel: env.IYYE2_MEMORY_EMBEDDINGS_MODEL || "BAAI/bge-small-en-v1.5",
-			rerankerModel: env.IYYE2_MEMORY_RERANKER_MODEL || "cross-encoder/ms-marco-MiniLM-L-6-v2",
+			rerankerModel: env.IYYE2_MEMORY_RERANKER_MODEL || "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
 			textSearchLanguage: env.IYYE2_MEMORY_TEXT_LANGUAGE || "english",
 		},
 		web: {
