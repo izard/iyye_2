@@ -89,6 +89,7 @@ Iyye first keeps an accurate, current model of *what and where it is*: the machi
 - **Need per motivation** = `clamp(Σ signal weights × recency, 0, 1)`, smoothed per sweep: `need ← need × (1 − α) + raw × α` (α = 0.3), journaled (`motivation_samples`).
 - **Temperament** (0.009 §2.1) multiplies need for curiosity, agency and social (bounded [0.7, 1.3]); self-preservation is never scaled down by character.
 - **An opportunity** is created when a motivation's smoothed need stays ≥ `θ` (0.6) for `k` (3) consecutive sweeps, for its strongest evidence cluster not already open, settled or suspended. The existing `opportunities` table gains `motivation`, `signal_kind` and `action_kind` (migration), so S5's investigations become the curiosity case of one mechanism.
+- **Not only the strongest (2026-11-09):** a signal strong enough to hold the need at `θ` by itself, for `k` sweeps in a row, opens its own opportunity even when a stronger one is on top. From 2026-10-13 to 11-09 a machine that stayed unreachable (0.9) was always the strongest self-preservation signal, and no later outage opened anything. Weaker signals still open only as the strongest. A service the host no longer reports loses its `service_status` row (a removed one had held the need at 0.99 for four weeks).
 - **Kev's initiative role** (now per motivation) classifies each opportunity: act, ask, defer or nothing. Shadow first, as S5; the deterministic fallback is the kind's default action below.
 
 ## 5. What each motivation may do (existing actions only)

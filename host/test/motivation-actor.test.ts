@@ -156,6 +156,62 @@ describe("the actor", () => {
 		assert.match(r.sent[0]!.content, /^Self-preservation: Telegram has been retrying for 4\.\d h: timeout\./);
 	});
 
+	test("a lasting outage on top does not keep a later one from opening; a weak signal does not ride on it; a removed service is gone", async () => {
+		const r = rig();
+		const services: Record<string, { state: string; detail?: string }> = {
+			"the thinking model on mbp": { state: "unreachable", detail: "connect ENETUNREACH" },
+			Telegram: { state: "connected" },
+		};
+		recordServices(r.db, () => services, T0);
+		const tracker = new MotivationTracker({
+			db: r.db,
+			log: silentLogger,
+			actor: r.actor,
+			mode: () => "awake",
+			// A weak reason (0.4) beside the strong ones.
+			sources: {
+				selfGaps: () => [],
+				healing: () => [],
+				sleep: () => ({ sleptOnBattery: true, asleepMinutes: 120 }),
+			},
+			now: () => r.clock.now,
+			alpha: 0.5,
+			threshold: 0.55,
+			sustain: 2,
+		});
+		const sweeps = async (from: number, n: number) => {
+			for (let i = 0; i < n; i++) {
+				r.clock.now = after(from + i * 10 * MIN);
+				recordServices(r.db, () => services, r.clock.now);
+				await tracker.sweep();
+			}
+		};
+		await sweeps(H, 6);
+		assert.equal(r.sent.length, 1);
+		assert.match(r.sent[0]!.content, /the thinking model on mbp has been unreachable/);
+		// Two days on it is still unreachable, the strongest signal (0.9), and Telegram goes down.
+		services.Telegram = { state: "retrying", detail: "timeout" };
+		await sweeps(48 * H, 1);
+		assert.equal(r.sent.length, 1, "not at its first sweep: it must last as a need must");
+		await sweeps(48 * H + 10 * MIN, 2);
+		assert.equal(r.sent.length, 2);
+		assert.match(r.sent[1]!.content, /Telegram has been retrying/);
+		assert.deepEqual(
+			rows(r.db).map((o) => o.cluster.split("@")[0]),
+			["service:the thinking model on mbp", "service:Telegram"],
+			"the night on battery (0.4) opened nothing",
+		);
+		// The owner takes the thinking model out of the configuration: no row, no signal, the opportunity closes.
+		delete services["the thinking model on mbp"];
+		await sweeps(49 * H, 1);
+		assert.deepEqual(
+			serviceStatuses(r.db).map((s) => s.name),
+			["Telegram"],
+		);
+		assert.equal(rows(r.db)[0]!.status, "settled");
+		assert.equal(rows(r.db)[1]!.status, "running");
+	});
+
 	test("notices: a cooldown per kind of trouble, a daily cap, held while asleep and while the owner talks", async () => {
 		const r = rig();
 		const outage = (since: string) =>

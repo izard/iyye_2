@@ -11,6 +11,10 @@
  *   not ("retrying in 12 s" changes on every retry).
  * - The error text keeps no retry countdown and no bot token (a second line
  *   of defence: the poller scrubs its own token already).
+ * - A service the host no longer reports (taken out of the configuration) is
+ *   no longer watched, and its row goes. 2026-10-20: the background model on
+ *   the MBP was removed while "unreachable", and its row held
+ *   self-preservation at 0.99 for four weeks.
  */
 
 import type { Db } from "../state/db.ts";
@@ -44,6 +48,8 @@ export function recordServices(db: Db, probe: ServiceProbe, now: Date): void {
 	const at = now.toISOString();
 	const services = probe();
 	db.transaction(() => {
+		const names = Object.keys(services);
+		db.prepare(`DELETE FROM service_status WHERE name NOT IN (${names.map(() => "?").join(", ")})`).run(...names);
 		for (const [name, s] of Object.entries(services)) {
 			const old = db.prepare("SELECT * FROM service_status WHERE name = ?").get(name) as
 				| ServiceStatusRow

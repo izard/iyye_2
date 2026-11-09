@@ -128,6 +128,7 @@ export class MotivationTracker {
 				const sustained = smoothed >= this.d.threshold ? (prev?.sustained ?? 0) + 1 : 0;
 				const top = [...mine].sort((a, b) => strength(b, now) - strength(a, now));
 				const first = top.find((s) => !JOURNAL_ONLY.has(s.kind));
+				const heldAlone = this.heldAlone(m);
 				this.d.db
 					.prepare(
 						`INSERT INTO motivation_samples (id, at, motivation, raw, smoothed, sustained, signals_json, would_open)
@@ -149,9 +150,19 @@ export class MotivationTracker {
 					// the motivation could act on is queued, so an unanswered contradiction does not hold the only slot
 					// for a week, and a stronger signal with another action (an urgent plan, a failed reply) does not
 					// keep an intention or a past event from ever opening.
-					for (const sig of counted)
-						if (sig !== first && QUEUED.has(actionFor(m, sig.kind) ?? ""))
+					// So does every signal strong enough to hold the need at the threshold by itself, once it has been that
+					// strong for as long as a need must be sustained. Only the strongest used to open: a permanent one on
+					// top (2026-10-13 to 11-09: a machine that stayed unreachable, at 0.9) kept every later outage from
+					// ever opening. A weaker signal still opens only as the strongest: it must not ride on a need that
+					// another signal holds up (HLD §11.2 credit).
+					for (const sig of counted) {
+						if (sig === first) continue;
+						if (
+							QUEUED.has(actionFor(m, sig.kind) ?? "") ||
+							(strength(sig, now) >= this.d.threshold && heldAlone(sig.cluster))
+						)
 							openings.push({ motivation: m, signal: sig });
+					}
 				}
 			}
 			this.d.db
@@ -159,6 +170,31 @@ export class MotivationTracker {
 				.run(new Date(now.getTime() - this.d.keepDays * 86_400_000).toISOString());
 		})();
 		return { openings, current: new Set(signals.map((s) => s.cluster)) };
+	}
+
+	/**
+	 * Whether a cluster's signal was at or above the threshold in each of the last `sustain − 1` samples of its
+	 * motivation (with this sweep, `sustain` in a row). Read before this sweep's sample is written. A sample
+	 * keeps its ten strongest signals, which is where a signal this strong is.
+	 */
+	private heldAlone(m: Motivation): (cluster: string) => boolean {
+		const n = this.d.sustain - 1;
+		if (n <= 0) return () => true;
+		const samples = (
+			this.d.db
+				.prepare(
+					"SELECT signals_json FROM motivation_samples WHERE motivation = ? ORDER BY at DESC, rowid DESC LIMIT ?",
+				)
+				.all(m, n) as { signals_json: string }[]
+		).map(
+			(r) =>
+				new Set(
+					(JSON.parse(r.signals_json) as { cluster: string; strength: number }[])
+						.filter((s) => s.strength >= this.d.threshold)
+						.map((s) => s.cluster),
+				),
+		);
+		return (cluster) => samples.length === n && samples.every((strong) => strong.has(cluster));
 	}
 
 	/** The latest sample of a motivation: restores the smoothing and the sustain count after a restart. */
