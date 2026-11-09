@@ -50,6 +50,8 @@ export interface MemoryDatabase {
 	url(): string;
 	/** Run SQL in a database (the real cluster; fakes may leave it out). */
 	psql?(database: string, sql: string): Promise<string>;
+	/** The server's process, when it runs (the real cluster). */
+	pid?(): number | null;
 }
 
 export interface MemoryModels {
@@ -140,6 +142,11 @@ export class MemoryService {
 
 	get status(): MemoryStatus {
 		return this.current;
+	}
+
+	/** Hindsight's and PostgreSQL's processes, for the self model's memory by role (plan 0.018 W1). */
+	get pids(): { hindsight: number | null; database: number | null } {
+		return { hindsight: this.hindsight.pid, database: this.db.pid?.() ?? null };
 	}
 
 	get baseUrl(): string {

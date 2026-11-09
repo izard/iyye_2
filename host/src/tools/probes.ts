@@ -50,6 +50,17 @@ export interface SystemStatusDeps {
 	loadedModels: () => Promise<string[]>;
 	/** Volumes to report; the home folder's by default. */
 	paths?: string[];
+	/**
+	 * Disk, memory and load from the self model's own probes, fresh (plan 0.018 W1: one source of truth).
+	 * When given, the tool does not probe them itself.
+	 */
+	vitals?: () => Promise<{
+		diskFreeGb: number;
+		diskTotalGb: number;
+		memAvailableGb: number | null;
+		swapUsedGb: number | null;
+		load: [number, number, number];
+	}>;
 }
 
 export function systemStatusTool(deps: SystemStatusDeps): IyyeTool<typeof NO_ARGS> {
@@ -62,25 +73,34 @@ export function systemStatusTool(deps: SystemStatusDeps): IyyeTool<typeof NO_ARG
 		parameters: NO_ARGS,
 		run: async () => {
 			const lines: string[] = [];
-			for (const p of deps.paths ?? [homedir()]) {
+			const v = deps.vitals ? await deps.vitals().catch(() => null) : null;
+			if (v) {
+				lines.push(
+					`Disk (volume of home folder): ${v.diskFreeGb.toFixed(1)} GB free of ${v.diskTotalGb.toFixed(1)} GB`,
+				);
+				lines.push(
+					v.memAvailableGb === null
+						? "Memory: unknown"
+						: `Memory available for new work: ${v.memAvailableGb.toFixed(1)} GB${v.swapUsedGb ? ` (swap in use: ${v.swapUsedGb.toFixed(1)} GB)` : ""}`,
+				);
+			}
+			for (const p of v ? [] : (deps.paths ?? [homedir()])) {
 				const s = statfsSync(p);
 				const gb = (blocks: number) => ((blocks * s.bsize) / 2 ** 30).toFixed(1);
 				lines.push(
 					`Disk (volume of ${p === homedir() ? "home folder" : p}): ${gb(s.bavail)} GB free of ${gb(s.blocks)} GB`,
 				);
 			}
-			try {
-				lines.push(`Memory available for new work: ${deps.memory().toFixed(1)} GB`);
-			} catch {
-				lines.push("Memory: unknown");
+			if (!v) {
+				try {
+					lines.push(`Memory available for new work: ${deps.memory().toFixed(1)} GB`);
+				} catch {
+					lines.push("Memory: unknown");
+				}
 			}
 			const up = uptime();
 			lines.push(`Uptime: ${Math.floor(up / 86400)} d ${Math.floor((up % 86400) / 3600)} h`);
-			lines.push(
-				`CPU load (1/5/15 min): ${loadavg()
-					.map((l) => l.toFixed(2))
-					.join(" / ")}`,
-			);
+			lines.push(`CPU load (1/5/15 min): ${(v?.load ?? loadavg()).map((l) => l.toFixed(2)).join(" / ")}`);
 			const models = await deps.loadedModels().catch(() => null);
 			lines.push(`Loaded models: ${models === null ? "unknown" : models.length > 0 ? models.join(", ") : "none"}`);
 			return lines.join("\n");

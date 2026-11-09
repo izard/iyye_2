@@ -8,8 +8,10 @@
  * - **Facets:** hardware, power, sleep (the last day's sleep history),
  *   versions, network, place (an estimate from the network, and the place
  *   the owner stated), and the owner's statements about people (social).
- *   Disk, memory and services are not probed again here: they come from the
- *   latest `machine` observation (one source of truth). The social circle
+ *   Since plan 0.018 W1 the machine's vitals (load, memory and what uses it,
+ *   disk, devices, models), the host's runs and the nights are facets too,
+ *   kept current by `SelfUpkeep` (`upkeep.ts`), which the `machine`
+ *   observation now reads (one source of truth). The social circle
  *   itself (who writes, how often, trust) is derived live from records.
  * - **Observe and record only (M0b):** probes run on their own while Iyye is
  *   awake, when a facet is due; nothing here notifies anyone or asks a
@@ -55,7 +57,22 @@ import {
 	type Versions,
 } from "./probes.ts";
 
-export type Facet = "hardware" | "power" | "sleep" | "versions" | "network" | "place" | "social";
+export type Facet =
+	| "hardware"
+	| "power"
+	| "sleep"
+	| "versions"
+	| "network"
+	| "place"
+	| "social"
+	// Plan 0.018 W1, kept current by `SelfUpkeep` (`upkeep.ts`).
+	| "lifecycle"
+	| "compute"
+	| "memory"
+	| "storage"
+	| "devices"
+	| "models"
+	| "rhythm";
 export type Source = "probe" | "owner" | "estimate";
 
 export interface SelfFact {
@@ -86,6 +103,19 @@ const PLATFORM_PROBED: ReadonlySet<Facet> = new Set(["hardware", "power", "sleep
 
 const STABLE: ReadonlySet<Facet> = new Set(["hardware", "versions", "network", "place"]);
 const RETAINED: ReadonlySet<Facet> = new Set(["hardware", "versions", "place"]);
+/** Single fields of otherwise volatile facets whose changes are kept (what the host runs under, which devices are there). */
+const STABLE_FIELDS: ReadonlySet<string> = new Set([
+	"lifecycle.under",
+	"devices.displays",
+	"devices.cameras",
+	"devices.audio",
+]);
+
+/** What `SelfUpkeep` adds to the owner's views (plan 0.018 W1). */
+export interface SelfBody {
+	command(args: string[]): string | null;
+	aboutLines(): string[];
+}
 
 export interface SelfModelDeps {
 	db: Db;
@@ -179,6 +209,7 @@ export class SelfModel {
 	private running: Promise<void> | null = null;
 	/** Why a facet's last probe failed, until it succeeds. */
 	private readonly errors = new Map<Facet, string>();
+	private body: SelfBody | null = null;
 
 	constructor(deps: SelfModelDeps) {
 		this.d = {
@@ -193,6 +224,11 @@ export class SelfModel {
 			live: () => ({ models: {}, loaded: [], mode: "awake", day: null }),
 			...deps,
 		};
+	}
+
+	/** The vitals, runs and nights (`SelfUpkeep`): their `/self` views and about-me lines. */
+	attach(body: SelfBody): void {
+		this.body = body;
 	}
 
 	start(): void {
@@ -326,7 +362,7 @@ export class SelfModel {
 							source_ref = excluded.source_ref, observed_at = excluded.observed_at`,
 					)
 					.run(facet, field, json, source, ref, at);
-				if (STABLE.has(facet) && old?.value_json !== json) {
+				if ((STABLE.has(facet) || STABLE_FIELDS.has(`${facet}.${field}`)) && old?.value_json !== json) {
 					changed.push(field);
 					this.d.db
 						.prepare(
@@ -359,6 +395,8 @@ export class SelfModel {
 		const [sub, ...rest] = args;
 		const now = this.d.now();
 		if (!sub) return this.report();
+		const fromBody = this.body?.command(args);
+		if (fromBody !== null && fromBody !== undefined) return fromBody;
 		if (sub === "set" && (rest[0] === "place" || rest[0] === "expected-hardware")) {
 			const text = rest.slice(1).join(" ").trim().slice(0, 300);
 			if (!text) return `usage: /self set ${rest[0]} <text>`;
@@ -400,7 +438,7 @@ export class SelfModel {
 				.run(field[0], field[1]).changes;
 			return n ? "cleared" : "nothing to clear";
 		}
-		return "usage: /self · /self set place <text> · /self set expected-hardware <text> · /self relation <contact> <text> · /self clear …";
+		return "usage: /self · /self memory · /self disk · /self runs · /self history [field] [days] · /self set place <text> · /self set expected-hardware <text> · /self relation <contact> <text> · /self clear …";
 	}
 
 	// ---------------------------------------------------------------- reading
@@ -607,6 +645,7 @@ export class SelfModel {
 				`- Disk and memory: ${r.diskFreeGb} GB of ${r.diskTotalGb} GB free, ${r.memAvailableGb} GB memory available; services: ${svc.length ? svc.join(", ") : "all fine"} [${age(machine.at)}]`,
 			);
 		}
+		lines.push(...(this.body?.aboutLines() ?? []));
 		const live = this.d.live();
 		const v = this.describeFacet("versions");
 		lines.push(
@@ -661,6 +700,7 @@ export class SelfModel {
 		}
 		const gaps = this.gaps();
 		out.push(gaps.length ? "gaps (curiosity signals):" : "no gaps", ...gaps.map((g) => `  ${g.kind}: ${g.why}`));
+		if (this.body) out.push("more: /self memory · /self disk · /self runs · /self history [field] [days]");
 		out.push("set: /self set place <text> · /self set expected-hardware <text> · /self relation <contact> <text>");
 		return out.join("\n");
 	}

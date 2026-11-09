@@ -13,7 +13,8 @@
  * console on the host's terminal.
  */
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { EmailPoller } from "./channels/email/poller.ts";
@@ -58,7 +59,7 @@ import { focusReport } from "./kernel/focus.ts";
 import { openPlansNote, PlanRunner } from "./kernel/plans.ts";
 import { recover } from "./kernel/recovery.ts";
 import { ReminderCommands } from "./kernel/reminder-commands.ts";
-import { Rhythm } from "./kernel/rhythm.ts";
+import { Rhythm, windowStartFor } from "./kernel/rhythm.ts";
 import { Scheduler } from "./kernel/scheduler.ts";
 import { wakeMessage, wakeProblems } from "./kernel/wake-check.ts";
 import { consoleLogger, type Logger } from "./log.ts";
@@ -98,6 +99,7 @@ import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./p
 import { guardClientRequests } from "./process/client-requests.ts";
 import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
+import { SelfUpkeep } from "./self/upkeep.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
 import { emailInboxReport, spoofNoticesToday } from "./state/email-inbox.ts";
@@ -259,6 +261,8 @@ async function main(): Promise<number> {
 		effect: "read",
 		tools: [
 			systemStatusTool({
+				// The self model's own probes, fresh (plan 0.018 W1); `upkeep` is created below and read when the tool runs.
+				vitals: () => upkeep.current(),
 				memory: systemMemoryProbe,
 				loadedModels: async () =>
 					(await models.status()).models.filter((m) => m.status === "loaded").map((m) => m.name),
@@ -877,6 +881,57 @@ async function main(): Promise<number> {
 			day: Number(getKv(db, "rhythm.day")) || null,
 		}),
 	});
+	// Plan 0.018 W1: the machine's vitals, what uses memory and disk, the host's runs and the nights (records only).
+	const upkeep = new SelfUpkeep({
+		db,
+		log,
+		self: selfModel,
+		mode: () => rhythm.mode(),
+		vitalsMs: config.self.vitalsS * 1000,
+		processes: () => {
+			const mem = memory.pids;
+			return [
+				{ role: "the host", pid: process.pid },
+				{ role: "the model router", pid: router.pid ?? 0, router: true },
+				{ role: "long-term memory", pid: mem.hindsight ?? 0 },
+				{ role: "the memory database", pid: mem.database ?? 0 },
+				{ role: "the decision service", pid: decisions.pid ?? 0 },
+				{ role: "web search", pid: searxng.pid ?? 0 },
+			];
+		},
+		paths: { home: homedir(), state: config.stateDir, models: registry.modelsDir },
+		dirs: () => {
+			let children: string[] = [];
+			try {
+				children = readdirSync(config.stateDir, { withFileTypes: true })
+					.filter((e) => e.isDirectory())
+					.map((e) => e.name);
+			} catch {
+				children = [];
+			}
+			return {
+				...Object.fromEntries(children.map((c) => [`state/${c}`, join(config.stateDir, c)])),
+				models: registry.modelsDir,
+				"memory install": config.memory.installDir,
+			};
+		},
+		models: () => registry.models.map((m) => ({ name: m.name, path: m.remote ? null : m.path })),
+		rhythm: () => ({
+			mode: rhythm.mode(),
+			sleptAt: getKv(db, "rhythm.slept_at"),
+			reason: getKv(db, "rhythm.sleep_reason"),
+			lastNightAt: getKv(db, "rhythm.last_night_at"),
+			interruptedAt: getKv(db, "rhythm.interrupted_at"),
+			summary: getKv(db, "rhythm.last_summary"),
+		}),
+		inRestWindow: (at) => windowStartFor(at, config.memory.sleepWindow) !== null,
+		process: {
+			ppid: process.ppid,
+			env: process.env,
+			terminal: Boolean(process.stdout.isTTY || process.stderr.isTTY),
+		},
+	});
+	selfModel.attach(upkeep);
 	// Plan 0.010 M0: the four motivations' needs, in shadow (journaled, nothing acts on them).
 	// Plan 0.010 M1: the motivations act (notices, the owner's self-model questions, model maintenance).
 	const actor = new MotivationActor({
@@ -1174,6 +1229,7 @@ async function main(): Promise<number> {
 		db,
 		domains: [
 			machineDomain({
+				vitals: () => upkeep.current(),
 				memoryGb: systemMemoryProbe,
 				loadedModels: async () =>
 					(await models.status()).models.filter((m) => m.status === "loaded").map((m) => m.name),
@@ -1267,6 +1323,8 @@ async function main(): Promise<number> {
 			}
 			shuttingDown = true;
 			log.info(`${signal}: stopping`);
+			// A shutdown is the only way a run is marked as ended (plan 0.018 W1: a run without it was killed).
+			upkeep.shutdown();
 			clearInterval(keepAlive);
 			if (serviceTimer) clearInterval(serviceTimer);
 			try {
@@ -1290,6 +1348,7 @@ async function main(): Promise<number> {
 				await plans.stop();
 				await motivation.stop();
 				await selfModel.stop();
+				await upkeep.stop();
 				await decisions.stop();
 				await searxng.stop();
 				await passthrough.stop();
@@ -1355,6 +1414,7 @@ async function main(): Promise<number> {
 	commitmentClock.start();
 	plans.start();
 	selfModel.start();
+	upkeep.start();
 	motivation.start();
 	adenosine.start();
 	searxng.start();

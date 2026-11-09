@@ -95,6 +95,16 @@ export class PostgresCluster {
 		);
 	}
 
+	/** The postmaster's PID from the cluster's own `postmaster.pid`; null when it is not running. */
+	pid(): number | null {
+		try {
+			const pid = Number(readFileSync(join(this.dataDir, "postmaster.pid"), "utf8").split("\n")[0]);
+			return Number.isInteger(pid) && pid > 1 ? pid : null;
+		} catch {
+			return null;
+		}
+	}
+
 	/** True when a postmaster is running on this cluster's data directory. */
 	async running(): Promise<boolean> {
 		try {

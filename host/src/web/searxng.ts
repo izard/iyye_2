@@ -100,6 +100,11 @@ export class SearxngService {
 		return this.current;
 	}
 
+	/** The service's process, for the self model's memory by role (plan 0.018 W1). */
+	get pid(): number | null {
+		return this.proc.pid;
+	}
+
 	get baseUrl(): string {
 		return `http://127.0.0.1:${this.o.port}`;
 	}

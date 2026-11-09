@@ -98,6 +98,8 @@ export interface Config {
 		socialHours: [number, number];
 		/** Plan 0.010 M4: initiative's daily device-time budget in minutes (owner decision 7), split by §7's shares. */
 		initiativeBudgetMin: number;
+		/** Plan 0.018 W1: how often load, memory and its users are probed (asleep too). */
+		vitalsS: number;
 	};
 	/**
 	 * The fact ledger (plan 0.011): extraction during the day, the nightly merge into beliefs (and structured
@@ -363,6 +365,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			socialDailyMax: int(env, "IYYE2_SOCIAL_DAILY_MAX", 3, 0, 50),
 			socialHours: hours(env.IYYE2_SOCIAL_HOURS ?? "9-21"),
 			initiativeBudgetMin: int(env, "IYYE2_INITIATIVE_BUDGET_MIN", 120, 0, 1440),
+			vitalsS: int(env, "IYYE2_SELF_VITALS_S", 600, 30, 86_400),
 		},
 		facts: {
 			extract: env.IYYE2_FACTS_EXTRACT !== "0",

@@ -46,6 +46,16 @@ export function combine(changes: Change[]): Change {
 // ---------------------------------------------------------------- machine
 
 export interface MachineDeps {
+	/**
+	 * Disk, memory and swap from the self model's own probes (plan 0.018 W1: one source of truth). When given,
+	 * the domain does not probe them itself; `memoryGb`, `swapUsedGb` and `path` are for hosts without it.
+	 */
+	vitals?: () => Promise<{
+		diskFreeGb: number;
+		diskTotalGb: number;
+		memAvailableGb: number | null;
+		swapUsedGb: number | null;
+	}>;
 	memoryGb: () => number;
 	loadedModels: () => Promise<string[]>;
 	/** Service name → state ("up", "connected", "retrying", …). */
@@ -64,6 +74,18 @@ export function machineDomain(deps: MachineDeps): Domain {
 		description: "this computer: free disk, memory, swap, loaded models, Iyye's services",
 		stalenessMs: 2 * 3_600_000,
 		probe: async () => {
+			if (deps.vitals) {
+				const v = await deps.vitals();
+				return {
+					diskFreeGb: v.diskFreeGb,
+					diskTotalGb: v.diskTotalGb,
+					diskFreePct: v.diskTotalGb > 0 ? Math.round((v.diskFreeGb / v.diskTotalGb) * 1000) / 10 : 0,
+					memAvailableGb: v.memAvailableGb ?? Math.round(deps.memoryGb() * 10) / 10,
+					swapUsedGb: v.swapUsedGb,
+					loadedModels: (await deps.loadedModels()).sort(),
+					services: deps.services(),
+				};
+			}
 			const s = statfsSync(deps.path ?? homedir());
 			const gb = (blocks: number) => Math.round(((blocks * s.bsize) / 2 ** 30) * 10) / 10;
 			const free = gb(s.bavail);

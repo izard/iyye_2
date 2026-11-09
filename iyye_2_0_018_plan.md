@@ -1,6 +1,6 @@
 # Iyye 2.0.018 — A Coherent Model of Itself and Its Surroundings, and More Initiative: Implementation Plan
 
-2026-11-09. Proposed. W0 (the spike) is done: `host/SPIKE-0.018.md`, and §1, §3 and §7 carry what it changed. Nothing else is built; the rest waits for the owner's decisions in §7.
+2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`) and W1 are done; W2 is next.
 
 Owner's direction (2026-11-09): Iyye should do more work on its own. The top priority is to build and keep a coherent model of itself and its surroundings: CPU, GPU, memory, disk, hardware, the LAN, and the people it talks with.
 
@@ -47,7 +47,7 @@ Owner's direction (2026-11-09): Iyye should do more work on its own. The top pri
 
 **Out:**
 - Any shell, interpreter or free-form command for Iyye's own work. Every probe is a fixed command with fixed arguments, and every action is typed (HLD invariant).
-- Active network scanning (§7 decision 2).
+- Frequent or wide network scanning. Rare active probes of the LAN are allowed (§7 decision 2).
 - Reading other machines. Iyye observes that they exist and answer, nothing more.
 - Psychological descriptions of people (HLD §6.4). A card holds what records show.
 - Learned weights for the motivations (Stage 4), camera and microphone content.
@@ -64,7 +64,7 @@ One store (`self_facts`, as now), more facets. Every field keeps its source and 
 | **memory** | total, available, swap used; memory of each of Iyye's own processes (host, router, each model instance, Hindsight, PostgreSQL, Kev, SearXNG), by role, never by command line: resident size and, on the Spark, its GPU share (W0: a resident size leaves the GPU share out, and the GB10 reports no GPU total) | `/proc/meminfo`, `ps` and `nvidia-smi --query-compute-apps` for the PIDs the host supervises / `vm_stat`, `ps -o rss` | 10 min |
 | **storage** | each real filesystem: size, free; the size of Iyye's own directories (state, models, model caches, logs, memory database, sandbox) | `statfs` on the mount list; a bounded directory walk of a fixed list, at night | 1 h; sizes daily |
 | **network** | each interface: kind (Wi-Fi, Ethernet), link up or down, signal; whether a default route exists; whether the gateway answers at the link layer | `ip -j link`, `/proc/net/wireless`, `ip route`, `ip neigh` / `route`, `ifconfig`, `arp` | 10 min |
-| **lan** | hosts in the kernel's neighbour table: an id (hashed hardware address), private address, first and last seen, the owner's label | `ip neigh` / `arp -an`; passive only | 30 min |
+| **lan** | hosts on the local network: an id (hashed hardware address), private address, first and last seen, the owner's label | the kernel's neighbour table (`ip neigh` / `arp -an`) every 30 min; a rare active probe of the local subnet (owner decision 2: at most a few a day, one address at a time at a slow pace, never beyond the local subnet, never a port scan) | 30 min; active: a few a day |
 | **peers** | each machine Iyye is configured to use (the MBP's endpoints): on the LAN or not, answering or not, since when | the neighbour table, and the status the host already has | 10 min |
 | **devices** | displays, cameras, microphones, audio outputs: present or not, never their content | `/sys/class/drm`, `/dev/video*`, `/proc/asound` / `system_profiler` | daily |
 | **models** | each registry model: file size, memory when loaded, load time, measured speed (prompt and generation tokens per second from its own requests) | the registry, `model_ops`, the router's timings | on load; daily |
@@ -177,7 +177,7 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 | | What | Exit check |
 | --- | --- | --- |
 | **W0** (done 2026-11-09) | Spike, no behaviour. `scripts/world-spike.ts <db copy>` replays the last five weeks through the baseline, regularity and recurring-request rules. Each probe is run on the Spark and the Mac for what it returns and what it costs. | It finds the nightly network gap and the news request, and lists every other regularity it would have raised, for the owner to judge. Thresholds are set from that. Notes in `host/SPIKE-0.018.md`. |
-| **W1** | The lifecycle, compute, memory, storage, devices, models and rhythm facets; `self_readings`; the vitals probe; `/self` views; `machine` and `system_status` read the facets. Swap on Linux. | `/self` answers "what uses the memory", "what uses the disk" and "when was I not running" from records. No new signal. |
+| **W1** (done 2026-11-09) | The lifecycle, compute, memory, storage, devices, models and rhythm facets; `self_readings`; the vitals probe; `/self` views; `machine` and `system_status` read the facets. Swap on Linux. | `/self` answers "what uses the memory", "what uses the disk" and "when was I not running" from records. No new signal. |
 | **W2** | The network, lan (passive) and peers facets; the dependency map; causes in service signals and notices. | A simulated network loss gives one finding that names it. The MBP's state says which of the two cases it is. |
 | **W3** | Baselines, regularities and forecasts; their signals journal-only for a week, then acting; the confirming question. | The week's journal against the owner's judgement: no more than one unwanted signal a day. |
 | **W4** | Investigations of surprises; `disk_usage`; `self_model`; the about-me note for Iyye's own work. | A staged memory drop is explained with cited readings. |
@@ -187,12 +187,23 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 
 **Exit gate for the plan:** over two weeks, every surprise in the records has a cited explanation or a question to the owner; the three cases in §1 are handled; notices stay under their caps; the owner marks more of Iyye's own work useful than not (`/motivation useful`).
 
-## 7. Owner decisions
+### W1 as built (2026-11-09)
+
+- `self/vitals.ts` (the probes), `self/readings.ts` (`self_readings`, hourly after a week, 90 days), `self/runs.ts` (`host_runs`, `nights`), `self/upkeep.ts` (`SelfUpkeep`: what is due, asleep too), migration 044, `IYYE2_SELF_VITALS_S`.
+- `/self memory`, `/self disk`, `/self runs`, `/self history [field] [days]`; two more lines in the owner's about-me note (what holds the memory; this run and the week's nights).
+- Memory by role follows the host's own process trees (the PIDs its supervisors hold), so no command line is matched or kept; a model instance is named by its `--alias`.
+- The `machine` observation and `system_status` read `SelfUpkeep.current()`.
+- One pass with every probe on the Spark: 195 ms.
+- **Not in W1:** a model's measured speed (no request timings are recorded yet), the night's parts (only its start, end, window and completion), pressure, GPU and temperatures on macOS (no unprivileged source), and staleness of the new facets as a curiosity signal (W3, with the other signals).
+
+## 7. Owner decisions (accepted 2026-11-09)
+
+The owner accepted every recommendation below, except decision 2: the LAN may be probed actively as well, rarely. Decision 9: this plan goes ahead now. Decision 10: the owner moved the host into `tmux` on 2026-11-09.
 
 | # | Decision | Recommended |
 | --- | --- | --- |
 | 1 | Record vitals while asleep (rows only, nothing raised until awake)? | Yes. The night is when memory is tightest and when the network goes away. |
-| 2 | The LAN: read the kernel's neighbour table and keep private addresses (owner-only) with hashed hardware addresses? Active discovery (ping, mDNS)? | Passive: yes. Active: no for now. |
+| 2 | The LAN: read the kernel's neighbour table and keep private addresses (owner-only) with hashed hardware addresses? Active discovery (ping, mDNS)? | Passive: yes. Active: no for now. **Owner: active too, as rare probes.** |
 | 3 | Infer "the internet" from the Telegram poller and web search, with no new outbound check? | Yes. |
 | 4 | A regularity counts as expected only after the owner confirms it? | Yes. The alternative (automatic after some weeks) would teach Iyye to ignore a real fault. |
 | 5 | Routines: always approved by the owner once, then run unattended; at most 3; the owner's requests only? | Yes. |
@@ -215,8 +226,8 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `IYYE2_SELF_VITALS_S` | `600` | the vitals probe's period |
-| `IYYE2_SELF_LAN` | `passive` | `off`, `passive` |
+| `IYYE2_SELF_VITALS_S` | `600` | the vitals probe's period (built, W1) |
+| `IYYE2_SELF_LAN` | `active` | `off`, `passive`, `active` (passive plus the rare probes) |
 | `IYYE2_SELF_BASELINE_DAYS` | `28` | the baseline's window |
 | `IYYE2_ROUTINES_MAX` | `3` | active routines |
 | `IYYE2_MAINTAIN` | `report` | `off`, `report`, `allowed` |
