@@ -51,6 +51,7 @@ import type { BackgroundJob } from "../state/background.ts";
 import { getCommitment, insertCommitment } from "../state/commitments.ts";
 import { getContact, OWNER_CONTACT_ID } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
+import { getKv, setKv } from "../state/kv.ts";
 import {
 	findPlans,
 	getPlan,
@@ -104,6 +105,12 @@ export interface PlanRunnerDeps {
 	contactMax?: number;
 	/** How long a plan Iyye proposed itself waits for approval before it is dropped. */
 	ownProposalTtlMs?: number;
+	/**
+	 * A plan a person proposed and nobody approved, whose first dated step is this long past: the owner is asked
+	 * once, and `staleGraceMs` later it lapses (owner decision 2026-11-10, plan 0.018 §7 #8).
+	 */
+	staleAfterMs?: number;
+	staleGraceMs?: number;
 	timezone?: string;
 }
 
@@ -122,6 +129,8 @@ export class PlanRunner {
 			maxSteps: 3,
 			contactMax: 5,
 			ownProposalTtlMs: 3 * 86_400_000,
+			staleAfterMs: 3 * 86_400_000,
+			staleGraceMs: 2 * 86_400_000,
 			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 			...deps,
 		};
@@ -386,6 +395,7 @@ export class PlanRunner {
 	private async advanceAll(): Promise<void> {
 		await Promise.resolve(); // so a tick asked for while advancing joins this one
 		this.dropStaleOwnProposals();
+		this.lapseStaleProposals();
 		for (const { id } of plansIn(this.d.db, ["authorized", "active", "suspended"])) {
 			try {
 				// Step by step until nothing changes: a step done now lets the next one start in the same tick.
@@ -490,6 +500,43 @@ export class PlanRunner {
 			if (p.proposed_via !== IYYE_PROPOSED_VIA || p.created_at >= before) continue;
 			if (updatePlan(this.d.db, p.id, this.iso(), { state: "abandoned", reason: "not approved" }, ["proposed"]))
 				this.d.log.info("plans: own proposal dropped", { id: p.id });
+		}
+	}
+
+	/**
+	 * A plan a person proposed that was never approved, and whose first dated step passed days ago, cannot do
+	 * what it was for any more. The owner is asked once; with no approval it lapses. (Until 2026-11-10 such a
+	 * plan stayed "awaiting approval" for good and held agency's need at 0.89.) Plans with no dated step wait
+	 * as before: nothing says they are too late.
+	 */
+	private lapseStaleProposals(): void {
+		const now = this.d.now().getTime();
+		for (const p of plansIn(this.d.db, ["proposed"])) {
+			if (p.proposed_via === IYYE_PROPOSED_VIA) continue;
+			const due = stepsOf(p)
+				.flatMap((s) => ("due_at" in s && typeof s.due_at === "string" && s.status !== "done" ? [s.due_at] : []))
+				.sort()[0];
+			if (!due || now - Date.parse(due) < this.d.staleAfterMs) continue;
+			const key = `plan.stale_asked:${p.id}`;
+			const asked = getKv(this.d.db, key);
+			if (!asked) {
+				setKv(this.d.db, key, this.iso(), this.iso());
+				this.notify(
+					`plan-stale:${p.id}`,
+					`The plan ${quote(p.intent, 120)} that ${proposedBy(this.d.db, p)} proposed ${describeAt(new Date(p.created_at))} was never approved, and its first step was due ${describeAt(new Date(due))}. If it should still run: /plan approve ${p.id.slice(0, 8)}. Otherwise I will drop it in ${Math.round(this.d.staleGraceMs / 86_400_000)} days.`,
+				);
+			} else if (now - Date.parse(asked) >= this.d.staleGraceMs) {
+				if (
+					updatePlan(
+						this.d.db,
+						p.id,
+						this.iso(),
+						{ state: "abandoned", reason: "not approved, and its date passed" },
+						["proposed"],
+					)
+				)
+					this.d.log.info("plans: a stale proposal lapsed", { id: p.id });
+			}
 		}
 	}
 

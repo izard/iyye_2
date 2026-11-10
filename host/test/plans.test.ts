@@ -443,6 +443,68 @@ describe("plans (plan 0.006 C4)", () => {
 		}
 	});
 
+	test("a person's unapproved plan whose date passed: the owner is asked once, then it lapses; approval still runs it", async () => {
+		const h = harness();
+		try {
+			const tool = plansToolkit(h.runner).tools[0]!;
+			const juliaCtx: ToolContext = {
+				scope: "contact:c1",
+				principal: "contact",
+				turn: { route: JULIA_TG, contactId: "c1", eventId: null },
+			};
+			const propose = async (intent: string, steps: object[]) =>
+				full(h, planId(await tool.run({ intent, steps } as never, juliaCtx, undefined)));
+			const dated = await propose("remind me to call mom", [
+				{ kind: "remind", text: "call mom", when: "in 2 hours" },
+			]);
+			const kept = await propose("remind me about the dentist", [
+				{ kind: "remind", text: "dentist", when: "in 3 hours" },
+			]);
+			const undated = await propose("look at my notes", [{ kind: "investigate", text: "What is in notes.md?" }]);
+			const start = h.now();
+			const stale = () => h.notices().filter((n) => /was never approved/.test(n));
+			// Two days after the step was due: nothing yet.
+			h.setNow(new Date(start.getTime() + 2 * 86_400_000));
+			await h.runner.tick();
+			assert.deepEqual(stale(), []);
+			// More than three days after: asked, once, however often the runner looks.
+			h.setNow(new Date(start.getTime() + 3.2 * 86_400_000));
+			await h.runner.tick();
+			await h.runner.tick();
+			assert.equal(stale().length, 2);
+			assert.match(
+				stale()[0]!,
+				new RegExp(
+					`^The plan "remind me to call mom" that "Julia" proposed .* was never approved, and its first step was due .*\\. If it should still run: /plan approve ${dated.slice(0, 8)}\\. Otherwise I will drop it in 2 days\\.$`,
+				),
+			);
+			assert.equal(h.plan(dated).state, "proposed");
+			// The owner approves one of them in time: it is the owner's again, and runs.
+			assert.match(h.runner.approve(kept.slice(0, 8), "owner_web"), /approved/);
+			// Two days after the question the other lapses. The one with no date waits as before.
+			h.setNow(new Date(start.getTime() + 5.3 * 86_400_000));
+			await h.runner.tick();
+			assert.deepEqual(
+				[h.plan(dated).state, h.plan(dated).reason],
+				["abandoned", "not approved, and its date passed"],
+			);
+			assert.notEqual(h.plan(kept).state, "abandoned");
+			assert.equal(h.plan(undated).state, "proposed");
+			assert.equal(stale().length, 2, "no further notice");
+			assert.equal(
+				(
+					h.db
+						.prepare("SELECT count(*) AS n FROM commitments WHERE created_by LIKE ? AND state = 'scheduled'")
+						.get(`%${dated}`) as { n: number }
+				).n,
+				0,
+				"nothing of it is scheduled",
+			);
+		} finally {
+			await h.cleanup();
+		}
+	});
+
 	test("Telegram can at most propose: a contact's plan and the owner's linked Telegram account's both wait for approval", async () => {
 		const h = harness();
 		try {
