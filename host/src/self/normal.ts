@@ -186,7 +186,7 @@ export function baselines(readings: readonly Reading[], now: Date, o: BaselineOp
 	return out;
 }
 
-function bandOf(values: readonly number[], minSpread = 0): Band | null {
+export function bandOf(values: readonly number[], minSpread = 0): Band | null {
 	if (values.length === 0) return null;
 	const m = median(values);
 	const mad = median(values.map((v) => Math.abs(v - m)));

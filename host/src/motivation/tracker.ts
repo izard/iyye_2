@@ -43,6 +43,8 @@ export interface TrackerDeps {
 	sustain?: number;
 	/** Samples older than this are pruned. */
 	keepDays?: number;
+	/** Further signal kinds recorded but not counted yet (plan 0.018 W3: its new kinds, until the owner lets them act). */
+	journalOnly?: ReadonlySet<string>;
 	/** M1: what acts on sustained needs; without it the tracker stays shadow (M0). */
 	actor?: { act(openings: readonly Opening[], current: ReadonlySet<string>): Promise<void> } | null;
 }
@@ -77,6 +79,7 @@ export class MotivationTracker {
 			// (2026-10-07: eight hours of a Telegram outage at 0.59).
 			threshold: 0.55,
 			actor: null,
+			journalOnly: new Set<string>(),
 			sustain: 3,
 			keepDays: 14,
 			...deps,
@@ -121,13 +124,14 @@ export class MotivationTracker {
 				const mine = signals.filter((s) => s.motivation === m);
 				// Signals with no action yet are recorded with the sample but never add to need or open anything:
 				// otherwise they would raise a need that some other signal's action then answers (HLD §11.2 credit).
-				const counted = mine.filter((s) => !JOURNAL_ONLY.has(s.kind));
+				const journal = (kind: string) => JOURNAL_ONLY.has(kind) || this.d.journalOnly.has(kind);
+				const counted = mine.filter((s) => !journal(s.kind));
 				const raw = rawNeed(counted, now);
 				const prev = this.state(m);
 				const smoothed = prev ? prev.smoothed * (1 - this.d.alpha) + raw * this.d.alpha : raw * this.d.alpha;
 				const sustained = smoothed >= this.d.threshold ? (prev?.sustained ?? 0) + 1 : 0;
 				const top = [...mine].sort((a, b) => strength(b, now) - strength(a, now));
-				const first = top.find((s) => !JOURNAL_ONLY.has(s.kind));
+				const first = top.find((s) => !journal(s.kind));
 				const heldAlone = this.heldAlone(m);
 				this.d.db
 					.prepare(

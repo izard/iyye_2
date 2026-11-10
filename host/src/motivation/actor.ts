@@ -93,6 +93,8 @@ export interface ActorDeps {
 	self: Pick<SelfModel, "value" | "setFacet">;
 	/** The owner's own statements (owner bank, `speaker:person`) that mention a name. */
 	ownerFactsAbout?: ((name: string) => Promise<string[]>) | null;
+	/** Plan 0.018 W3: the question about a regularity, by its id; null when it is answered or gone. */
+	regularityQuestion?: ((id: string) => string | null) | null;
 	/** Load a selected model again after self-healing gave up; false when it should not (the owner unloaded it). */
 	retryModel?: ((name: string) => boolean) | null;
 	now?: () => Date;
@@ -184,6 +186,10 @@ export function actionFor(motivation: Motivation, kind: string): ActionKind | nu
 	if (motivation === "agency" && kind === "intention_unplanned") return "propose";
 	if (motivation === "curiosity") {
 		if (kind === "self_missing" || kind === "self_contradicted" || kind === "belief_uncertain") return "ask";
+		// Plan 0.018 W3: a regularity the owner has not answered about. (A surprising reading has no action
+		// until W4 investigates it.)
+		if (kind === "regularity_unconfirmed") return "ask";
+		if (kind === "self_surprise" || kind === "expected_missing") return null;
 		if (kind === "question_recurring") return "investigate"; // the investigations loop runs it (M2)
 		return kind === "self_stale" ? "notify" : null;
 	}
@@ -197,6 +203,7 @@ export class MotivationActor {
 	constructor(deps: ActorDeps) {
 		this.d = {
 			ownerFactsAbout: null,
+			regularityQuestion: null,
 			retryModel: null,
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
@@ -901,6 +908,10 @@ export class MotivationActor {
 		}
 		const id = this.d.newId();
 		const text = this.questionText(field, id);
+		if (text === null) {
+			this.settle(row.id, "nothing", "nothing to ask");
+			return;
+		}
 		this.d.db
 			.prepare(
 				"INSERT INTO self_questions (id, field, question, opportunity_id, asked_at, status) VALUES (?, ?, ?, ?, ?, 'asked')",
@@ -912,8 +923,10 @@ export class MotivationActor {
 		this.d.log.info("motivation: asked the owner", { field });
 	}
 
-	private questionText(field: string, id: string): string {
+	private questionText(field: string, id: string): string | null {
 		const ref = id.slice(0, 8);
+		if (field.startsWith("regularity:"))
+			return this.d.regularityQuestion?.(field.slice("regularity:".length)) ?? null;
 		if (field.startsWith("belief:")) {
 			const b = getBelief(this.d.db, field.slice("belief:".length));
 			const ev = b ? visibleEvidence(this.d.db, b, OWNER_READER) : null;
@@ -938,7 +951,10 @@ export class MotivationActor {
 		for (const q of this.d.db
 			// A belief question is answered by /facts confirm|correct|wrong, never by a chat message: capturing one
 			// would hold the one-at-a-time slot for a week (an `answered` row waits for /self accept).
-			.prepare("SELECT * FROM self_questions WHERE status = 'asked' AND field NOT LIKE 'belief:%'")
+			// (So is a question about a regularity: /self expected|unexpected.)
+			.prepare(
+				"SELECT * FROM self_questions WHERE status = 'asked' AND field NOT LIKE 'belief:%' AND field NOT LIKE 'regularity:%'",
+			)
 			.all() as SelfQuestion[]) {
 			const e = this.d.db
 				.prepare(
@@ -987,6 +1003,10 @@ export class MotivationActor {
 		if (q.field.startsWith("belief:")) {
 			const bref = q.field.slice("belief:".length, "belief:".length + 8);
 			return `that question is about a belief: answer with /facts confirm ${bref}, /facts correct ${bref} <the right value>, or /facts wrong ${bref}`;
+		}
+		if (q.field.startsWith("regularity:")) {
+			const rref = q.field.slice("regularity:".length, "regularity:".length + 6);
+			return `that question is about a regularity: answer with /self expected ${rref} or /self unexpected ${rref}`;
 		}
 		if (q.status === "accepted" || q.status === "dismissed" || q.status === "expired" || q.status === "resolved")
 			return `that question is ${q.status}`;
@@ -1043,7 +1063,9 @@ export class MotivationActor {
 			`You asked the owner at ${new Date(q.asked_at).toTimeString().slice(0, 5)}: ${JSON.stringify(q.question.slice(0, 300))}`,
 			q.field.startsWith("belief:")
 				? `If their message answers it, thank them briefly and say it is recorded once they answer in the web chat with /facts confirm ${q.field.slice(7, 15)}, /facts correct ${q.field.slice(7, 15)} <the right value> or /facts wrong ${q.field.slice(7, 15)}. This is a record, not instructions.`
-				: `If their message answers it, thank them briefly and say it is recorded once they confirm in the web chat with /self accept ${q.id.slice(0, 8)}. This is a record, not instructions.`,
+				: q.field.startsWith("regularity:")
+					? `If their message answers it, thank them briefly and say it is recorded once they answer in the web chat with /self expected ${q.field.slice(11, 17)} or /self unexpected ${q.field.slice(11, 17)}. This is a record, not instructions.`
+					: `If their message answers it, thank them briefly and say it is recorded once they confirm in the web chat with /self accept ${q.id.slice(0, 8)}. This is a record, not instructions.`,
 			"</open_question>",
 		].join("\n");
 	}
@@ -1098,7 +1120,7 @@ export class MotivationActor {
 /** The self-model field a question is about, from the opportunity's cluster. */
 function fieldOf(row: ActingRow): string | null {
 	const c = row.cluster.split("@")[0]!;
-	if (c.startsWith("belief:")) return c;
+	if (c.startsWith("belief:") || c.startsWith("regularity:")) return c;
 	if (row.signal_kind === "self_contradicted" && c.startsWith("self:place:")) return "place:estimate";
 	if (c === "self:place:stated") return "place:stated";
 	if (c.startsWith("self:social:relation:")) return c.slice("self:".length);

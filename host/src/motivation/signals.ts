@@ -53,6 +53,13 @@ export interface SignalSources {
 	network?: () => { online: boolean | null; since: string | null; dependents: string[] } | null;
 	/** Why a failing service fails, when the cause is outside it and known (a machine that is not on the LAN). */
 	cause?: (service: string) => string | null;
+	/**
+	 * Plan 0.018 W3: whether what happens to a subject now ("network", "service:<name>") is its regularity the
+	 * owner has answered about. Then it is not a signal of its own.
+	 */
+	usual?: (subject: string) => boolean;
+	/** Plan 0.018 W3: reasons from what is normal for Iyye (surprises, regularities, forecasts). */
+	expectations?: () => (Omit<Signal, "observedAt"> & { observedAt?: string })[];
 }
 
 const H = 3_600_000;
@@ -111,7 +118,7 @@ export function collectSignals(s: SignalSources): Signal[] {
 	// The network away (plan 0.018 W2): one signal for the cause. It weighs as an outage does, by its duration.
 	const net = s.network?.() ?? null;
 	const offline = net?.online === false;
-	if (net && offline) {
+	if (net && offline && !s.usual?.("network")) {
 		const hours = net.since ? Math.max(0, s.now.getTime() - Date.parse(net.since)) / H : 0;
 		add({
 			motivation: "self_preservation",
@@ -129,6 +136,7 @@ export function collectSignals(s: SignalSources): Signal[] {
 		if (OK_SERVICE_STATES.has(svc.state)) continue;
 		// What needs the network fails with it: that is the network's signal, above.
 		if (net && offline && net.dependents.includes(svc.name)) continue;
+		if (s.usual?.(`service:${svc.name}`)) continue; // its regularity, which the owner has answered about
 		const why = s.cause?.(svc.name) ?? null;
 		const hours = Math.max(0, s.now.getTime() - Date.parse(svc.since)) / H;
 		add({
@@ -195,6 +203,8 @@ export function collectSignals(s: SignalSources): Signal[] {
 			weight: 0.4,
 			text: `the computer slept ${Math.round(sleep.asleepMinutes / 60)} h on battery in the last day`,
 		});
+
+	for (const x of s.expectations?.() ?? []) add(x);
 
 	// ---------------------------------------------------------------- curiosity
 	for (const g of s.selfGaps())

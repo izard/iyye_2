@@ -118,9 +118,9 @@ const STABLE_FIELDS: ReadonlySet<string> = new Set([
 	"link.ethernet",
 ]);
 
-/** What `SelfUpkeep` (plan 0.018 W1) and `SelfSurroundings` (W2) add to the owner's views. */
+/** What `SelfUpkeep` (plan 0.018 W1), `SelfSurroundings` (W2) and `SelfExpectations` (W3) add to the owner's views. */
 export interface SelfBody {
-	command(args: string[]): string | null;
+	command(args: string[], by: string): string | null;
 	aboutLines(): string[];
 }
 
@@ -404,7 +404,7 @@ export class SelfModel {
 		const now = this.d.now();
 		if (!sub) return this.report();
 		for (const body of this.bodyOf.values()) {
-			const reply = body.command(args);
+			const reply = body.command(args, by);
 			if (reply !== null) return reply;
 		}
 		if (sub === "set" && (rest[0] === "place" || rest[0] === "expected-hardware")) {
@@ -448,7 +448,7 @@ export class SelfModel {
 				.run(field[0], field[1]).changes;
 			return n ? "cleared" : "nothing to clear";
 		}
-		return "usage: /self · /self memory · /self disk · /self runs · /self network · /self hosts · /self history [field] [days] · /self set place <text> · /self set expected-hardware <text> · /self relation <contact> <text> · /self clear …";
+		return "usage: /self · /self memory · /self disk · /self runs · /self network · /self hosts · /self normal · /self expected|unexpected <id> · /self history [field] [days] · /self set place <text> · /self set expected-hardware <text> · /self relation <contact> <text> · /self clear …";
 	}
 
 	// ---------------------------------------------------------------- reading
@@ -712,7 +712,7 @@ export class SelfModel {
 		out.push(gaps.length ? "gaps (curiosity signals):" : "no gaps", ...gaps.map((g) => `  ${g.kind}: ${g.why}`));
 		if (this.bodyOf.size)
 			out.push(
-				"more: /self memory · /self disk · /self runs · /self network · /self hosts · /self history [field] [days]",
+				"more: /self memory · /self disk · /self runs · /self network · /self hosts · /self normal · /self history [field] [days]",
 			);
 		out.push("set: /self set place <text> · /self set expected-hardware <text> · /self relation <contact> <text>");
 		return out.join("\n");

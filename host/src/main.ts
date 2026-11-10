@@ -98,8 +98,9 @@ import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
 import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./people/people.ts";
 import { guardClientRequests } from "./process/client-requests.ts";
 import { Sandbox } from "./sandbox/sandbox.ts";
+import { SelfExpectations } from "./self/expectations.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
-import { privateAddressOf, SelfSurroundings } from "./self/surroundings.ts";
+import { type Need, privateAddressOf, SelfSurroundings } from "./self/surroundings.ts";
 import { SelfUpkeep } from "./self/upkeep.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
@@ -576,6 +577,8 @@ async function main(): Promise<number> {
 		// Iyye's own work with the sandbox changes what investigations can do: a new period when switched on.
 		...(sandboxKit && config.sandbox.background ? { sandbox: "background" } : {}),
 		...(monitorKit && config.monitor.background ? { monitor: "background" } : {}),
+		// Plan 0.018 W3: letting the reasons from what is normal act is a new period.
+		...(config.self.signals === "act" ? { selfSignals: "act" } : {}),
 	});
 	const trial = ensureTrial(db, behaviourFingerprint(trialSettings(liveControlsDigest(db))), new Date());
 	log.info("motivation: trial period", { since: trial.start, behaviour: trial.fingerprint });
@@ -950,6 +953,14 @@ async function main(): Promise<number> {
 				]
 			: []),
 	];
+	// What needs what is declared here, not learned (plan 0.018 §3.4).
+	const needs: Record<string, Need> = {
+		Telegram: "internet",
+		"web search": "internet",
+		...(config.self.geolocation ? { "the place estimate": "internet" as const } : {}),
+		...(config.email.on ? { email: "internet" as const } : {}),
+		...Object.fromEntries(peerServers.map((p) => [`${p.serves} on ${p.endpoint}`, { peer: p.endpoint }])),
+	};
 	const surroundings = new SelfSurroundings({
 		db,
 		log,
@@ -969,17 +980,22 @@ async function main(): Promise<number> {
 					error: down?.at.status.detail ?? null,
 				};
 			}),
-		needs: {
-			Telegram: "internet",
-			"web search": "internet",
-			...(config.self.geolocation ? { "the place estimate": "internet" as const } : {}),
-			...(config.email.on ? { email: "internet" as const } : {}),
-			...Object.fromEntries(peerServers.map((p) => [`${p.serves} on ${p.endpoint}`, { peer: p.endpoint }])),
-		},
+		needs,
 		// The observation of the machine should not wait its two hours for this.
 		onLinkChange: () => void observer.lookNow("machine").catch(() => undefined),
 	});
 	selfModel.attach(surroundings);
+	// Plan 0.018 W3: what is normal (baselines, regularities, forecasts), and the reasons that come of it.
+	const window = config.memory.sleepWindow;
+	const expectations = new SelfExpectations({
+		db,
+		log,
+		self: selfModel,
+		mode: () => rhythm.mode(),
+		needs,
+		restWindowMinutes: (window.endMin - window.startMin + 1440) % 1440,
+	});
+	selfModel.attach(expectations);
 	// Plan 0.010 M0: the four motivations' needs, in shadow (journaled, nothing acts on them).
 	// Plan 0.010 M1: the motivations act (notices, the owner's self-model questions, model maintenance).
 	const actor = new MotivationActor({
@@ -987,6 +1003,7 @@ async function main(): Promise<number> {
 		log,
 		mode: () => rhythm.mode(),
 		notifyOwner: (req) => outbox.notifyOwner(req),
+		regularityQuestion: (id) => expectations.question(id),
 		self: selfModel,
 		// The owner's own statements: their bank, the people's words only (never Iyye's, never a contact's).
 		ownerFactsAbout: ltm
@@ -1043,6 +1060,15 @@ async function main(): Promise<number> {
 		actor,
 		mode: () => rhythm.mode(),
 		sweepMs: config.self.motivationSweepS * 1000,
+		// Plan 0.018 W3: a surprising reading has no action until W4; the other new reasons are only journaled
+		// until the owner lets them act (IYYE2_SELF_SIGNALS=act). The question about a regularity is asked either way.
+		journalOnly: new Set([
+			"self_surprise",
+			"expected_missing",
+			...(config.self.signals === "act"
+				? []
+				: ["disk_filling", "nights_outside_window", "nights_too_long", "not_running", "problem_pattern"]),
+		]),
 		threshold: config.self.motivationThreshold,
 		sustain: config.self.motivationSustain,
 		sources: {
@@ -1059,6 +1085,9 @@ async function main(): Promise<number> {
 			// Plan 0.018 W2: the network away is one signal, and a failing service names a cause outside it.
 			network: () => surroundings.network(),
 			cause: (service) => surroundings.cause(service),
+			// Plan 0.018 W3: reasons from what is normal, and what is usual now by the owner's own answer.
+			usual: (subject) => expectations.usual(subject),
+			expectations: () => expectations.signals(),
 		},
 	});
 	// Plan 0.009 CH1a: the character's records and character.json; nothing reads its values yet.
@@ -1281,7 +1310,7 @@ async function main(): Promise<number> {
 		domains: [
 			machineDomain({
 				vitals: () => upkeep.current(),
-				network: () => surroundings.network(),
+				network: () => ({ ...surroundings.network(), usual: expectations.usual("network") }),
 				memoryGb: systemMemoryProbe,
 				loadedModels: async () =>
 					(await models.status()).models.filter((m) => m.status === "loaded").map((m) => m.name),
@@ -1402,6 +1431,7 @@ async function main(): Promise<number> {
 				await selfModel.stop();
 				await upkeep.stop();
 				await surroundings.stop();
+				await expectations.stop();
 				await decisions.stop();
 				await searxng.stop();
 				await passthrough.stop();
@@ -1469,6 +1499,7 @@ async function main(): Promise<number> {
 	selfModel.start();
 	upkeep.start();
 	surroundings.start();
+	expectations.start();
 	motivation.start();
 	adenosine.start();
 	searxng.start();

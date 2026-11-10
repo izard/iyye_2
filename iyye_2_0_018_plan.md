@@ -1,6 +1,6 @@
 # Iyye 2.0.018 — A Coherent Model of Itself and Its Surroundings, and More Initiative: Implementation Plan
 
-2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done; W3 is next.
+2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done. W3 is built; its exit check (a week of its journal against the owner's judgement) is open.
 
 Owner's direction (2026-11-09): Iyye should do more work on its own. The top priority is to build and keep a coherent model of itself and its surroundings: CPU, GPU, memory, disk, hardware, the LAN, and the people it talks with.
 
@@ -179,7 +179,7 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 | **W0** (done 2026-11-09) | Spike, no behaviour. `scripts/world-spike.ts <db copy>` replays the last five weeks through the baseline, regularity and recurring-request rules. Each probe is run on the Spark and the Mac for what it returns and what it costs. | It finds the nightly network gap and the news request, and lists every other regularity it would have raised, for the owner to judge. Thresholds are set from that. Notes in `host/SPIKE-0.018.md`. |
 | **W1** (done 2026-11-09) | The lifecycle, compute, memory, storage, devices, models and rhythm facets; `self_readings`; the vitals probe; `/self` views; `machine` and `system_status` read the facets. Swap on Linux. | `/self` answers "what uses the memory", "what uses the disk" and "when was I not running" from records. No new signal. |
 | **W2** (done 2026-11-10) | The link, lan and peers facets; the dependency map; causes in service signals and notices. | A simulated network loss gives one finding that names it. The MBP's state says which of the two cases it is. |
-| **W3** | Baselines, regularities and forecasts; their signals journal-only for a week, then acting; the confirming question. | The week's journal against the owner's judgement: no more than one unwanted signal a day. |
+| **W3** (built 2026-11-10; the week's check open) | Baselines, regularities and forecasts; their signals journal-only for a week, then acting; the confirming question. | The week's journal against the owner's judgement: no more than one unwanted signal a day. |
 | **W4** | Investigations of surprises; `disk_usage`; `self_model`; the about-me note for Iyye's own work. | A staged memory drop is explained with cited readings. |
 | **W5** | People cards; follow-ups in a person's usual hours. | `/person` shows the card; `/forget` leaves nothing of it. |
 | **W6** | Routines. | The news request is proposed, approved, run and delivered; a skipped run is reported. |
@@ -211,6 +211,19 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
   - On macOS Wi-Fi and Ethernet are not told apart and the signal is not read.
   - A question about an unknown host is W4, and whether the nightly gap is expected is W3. Until then each night gives one finding and one notice about the network, and one finding when it is back.
 - `signals.ts` changed: a new M4 trial period starts with this.
+
+### W3 as built (2026-11-10)
+
+- `self/expectations.ts` (`SelfExpectations`, on `self/normal.ts`'s rules), migration 046 (`self_surprises`, `self_regularities`), `IYYE2_SELF_SIGNALS` (`journal` by default).
+- **Baselines** for eight levels (memory available, swap, load, memory and disk pressure, the hottest sensor, the GPU's temperature, the Wi-Fi's signal): the band of that hour of the local day from the hourly means of 28 days, weekdays and weekends apart once that bucket has 5 days, together until then, nothing before 5 days. A surprise is 4 spreads off, on the side that matters, past the field's floor, for 3 readings in a row; it is one row, open until a reading is back inside.
+- **Regularities**, worked out once a day while awake, from the change records: the network away (the minute-by-minute link; before its first record, the older half-hourly probe), each service not fine (what needs the network and fails inside a network gap is the network's; what needs another machine is that machine's), each machine Iyye uses not answering, and the host not running. Model operations are not looked at at all, so nothing of Iyye's own doing can be found.
+- **The owner's answer:** an unanswered regularity is the signal `regularity_unconfirmed`, and the motivations' own question path asks it (three questions a day, one at a time, not the same one twice in a week). The owner answers with `/self expected <id>` or `/self unexpected <id>`; a chat message is never taken as the answer. With either answer, what happens from an hour before its usual start to two hours after its usual end is `usual`: no `network_away` or service signal, no change in the `machine` observation. A regularity not found for four days is no longer in force; its answer is kept.
+- **Reasons** (`signals()`), all from records: `self_surprise`, `regularity_unconfirmed`, `problem_pattern` (a regularity the owner called not intended: one standing reason), `expected_missing` (three hours past an expected one's usual start with no occurrence), `disk_filling` (a line through 14 days of free disk reaches zero within 30 days), `nights_outside_window` (most of the week's nights), `nights_too_long` (3 of the last 5 outlast the window), `not_running` (the run before was killed and nothing ran for an hour or more).
+- **Journal first:** only the question acts. `self_surprise` and `expected_missing` have no action yet (W4), and the others are recorded with each sample but neither count nor open anything until `IYYE2_SELF_SIGNALS=act` (a new M4 trial period).
+- `/self normal` shows the bands, what is unusual now, the regularities with their answers, and the forecast; the owner's about-me note says what is unusual now and what is usual by the owner's own answer.
+- On a copy of the live records (2026-11-10): one regularity, "the network goes away around 23:34 and is back by about 08:02 (5 of the last 14 days)"; no baseline yet (W1's readings are a day old); no forecast yet.
+- **Not in W3:** the forecast of memory left for the night's model (the baseline of available memory covers it for now); decision 8 (a person's stale proposed plan), which is about plans, not about what is normal, and is still to do.
+- `signals.ts`, `tracker.ts` and `actor.ts` changed: a new M4 trial period starts with this.
 
 ## 7. Owner decisions (accepted 2026-11-09)
 
@@ -245,6 +258,6 @@ The owner accepted every recommendation below, except decision 2: the LAN may be
 | `IYYE2_SELF_VITALS_S` | `600` | the vitals probe's period (built, W1) |
 | `IYYE2_SELF_LAN` | `active` | `off`, `passive`, `active` (passive plus the rare probes; built, W2) |
 | `IYYE2_SELF_LAN_SWEEPS_DAILY` | `3` | active probes of the subnet a day (built, W2) |
-| `IYYE2_SELF_BASELINE_DAYS` | `28` | the baseline's window |
+| `IYYE2_SELF_SIGNALS` | `journal` | `journal`: W3's new reasons are recorded only; `act`: they count and notify (built, W3) |
 | `IYYE2_ROUTINES_MAX` | `3` | active routines |
 | `IYYE2_MAINTAIN` | `report` | `off`, `report`, `allowed` |

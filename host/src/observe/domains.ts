@@ -60,7 +60,7 @@ export interface MachineDeps {
 	 * The link (plan 0.018 W2): whether there is a way out, and the services that need one. Its loss is one
 	 * change that names them; their own states are not reported while it lasts.
 	 */
-	network?: () => { online: boolean | null; dependents: string[] } | null;
+	network?: () => { online: boolean | null; dependents: string[]; usual?: boolean } | null;
 	memoryGb: () => number;
 	loadedModels: () => Promise<string[]>;
 	/** Service name → state ("up", "connected", "retrying", …). */
@@ -80,7 +80,14 @@ export function machineDomain(deps: MachineDeps): Domain {
 		stalenessMs: 2 * 3_600_000,
 		probe: async () => {
 			const net = deps.network?.() ?? null;
-			const link = net ? { online: net.online, needOnline: net.dependents } : {};
+			// `asUsual` (plan 0.018 W3): the network is away in the hours of a regularity the owner has answered about.
+			const link = net
+				? {
+						online: net.online,
+						needOnline: net.dependents,
+						...(net.online === false && net.usual ? { asUsual: true } : {}),
+					}
+				: {};
 			if (deps.vitals) {
 				const v = await deps.vitals();
 				return {
@@ -140,12 +147,12 @@ export function machineDomain(deps: MachineDeps): Domain {
 			const offline = cur.online === false;
 			const wasOffline = prev?.online === false;
 			const needOnline = new Set(((offline ? cur.needOnline : prev?.needOnline) ?? []) as string[]);
-			if (prev && offline && !wasOffline) {
+			if (prev && offline && !wasOffline && cur.asUsual !== true) {
 				changes.push({
 					severity: "threshold",
 					text: `the network is away (no default route)${needOnline.size ? `; ${[...needOnline].join(", ")} cannot be reached without it` : ""}`,
 				});
-			} else if (prev && wasOffline && !offline && cur.online === true) {
+			} else if (prev && wasOffline && !offline && cur.online === true && prev.asUsual !== true) {
 				changes.push({ severity: "minor", text: "the network is back" });
 			}
 			// Services: only a move between fine and broken counts. The first look is a baseline, and
