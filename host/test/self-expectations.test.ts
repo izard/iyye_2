@@ -468,7 +468,10 @@ describe("what is usual is not reported again", () => {
 				sent.push(q.content);
 			},
 			self: r.self,
-			regularityQuestion: (id) => r.exp.question(id),
+			byCommand: (cluster) => {
+				const question = r.exp.question(cluster.slice("regularity:".length));
+				return question ? { question, answer: "/self expected 000001 or /self unexpected 000001" } : null;
+			},
 			now: () => r.clock.now,
 		});
 		const tracker = new MotivationTracker({
@@ -527,7 +530,7 @@ describe("what is usual is not reported again", () => {
 		);
 		assert.match(
 			actor.accept((r.db.prepare("SELECT id FROM self_questions").get() as { id: string }).id, "", "owner_web"),
-			/answer with \/self expected 000001/,
+			/answered with \/self expected 000001 or \/self unexpected 000001/,
 		);
 		// The command answers it: the question closes, and nothing is asked again.
 		r.self.command(["expected", "000001"], "owner_web");

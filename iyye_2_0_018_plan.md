@@ -1,6 +1,6 @@
 # Iyye 2.0.018 — A Coherent Model of Itself and Its Surroundings, and More Initiative: Implementation Plan
 
-2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done. W3 is built; its exit check (a week of its journal against the owner's judgement) is open.
+2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done. W3 is built; its exit check (a week of its journal against the owner's judgement) is open. W4 is done, and so is decision 8; W5 is next.
 
 Owner's direction (2026-11-09): Iyye should do more work on its own. The top priority is to build and keep a coherent model of itself and its surroundings: CPU, GPU, memory, disk, hardware, the LAN, and the people it talks with.
 
@@ -127,7 +127,7 @@ A card per person, derived from records each time it is read. Nothing new is sto
 
 - **`/self`** by facet, each line with its age and a mark when it is unusual now; `/self history <field>`, `/self normal`, `/self hosts`, `/self host <id> <label>`, `/self host <id> forget`.
 - **`<about_me>`** stays short: what is unusual now, what is expected today, and the stable lines. Live figures still come from tools.
-- **A read tool**, `self_model(facet)`, in the `monitor` toolkit (effect `private`: the owner and Iyye's own work, never contacts). It returns one facet with ages, the baseline and the last changes.
+- **A read tool**, `self_model(facet)`, in a toolkit of its own, `self` (effect `private`: the owner and Iyye's own work, never contacts; built in W4). It returns one facet as the owner's `/self` view shows it.
 - **Iyye's own work gets an about-me note too** (today only the owner's turns do). In sessions that can search the web it carries no place, no people and no LAN: their queries leave the machine (§7 decision 7).
 - **Memory:** a stable change, and a regularity the owner confirmed, is retained once in `iyye-self`, as stable facets are today.
 
@@ -180,7 +180,7 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 | **W1** (done 2026-11-09) | The lifecycle, compute, memory, storage, devices, models and rhythm facets; `self_readings`; the vitals probe; `/self` views; `machine` and `system_status` read the facets. Swap on Linux. | `/self` answers "what uses the memory", "what uses the disk" and "when was I not running" from records. No new signal. |
 | **W2** (done 2026-11-10) | The link, lan and peers facets; the dependency map; causes in service signals and notices. | A simulated network loss gives one finding that names it. The MBP's state says which of the two cases it is. |
 | **W3** (built 2026-11-10; the week's check open) | Baselines, regularities and forecasts; their signals journal-only for a week, then acting; the confirming question. | The week's journal against the owner's judgement: no more than one unwanted signal a day. |
-| **W4** | Investigations of surprises; `disk_usage`; `self_model`; the about-me note for Iyye's own work. | A staged memory drop is explained with cited readings. |
+| **W4** (done 2026-11-10) | Investigations of surprises; `disk_usage`; `self_model`; the about-me note for Iyye's own work. | A staged memory drop is explained with cited readings. |
 | **W5** | People cards; follow-ups in a person's usual hours. | `/person` shows the card; `/forget` leaves nothing of it. |
 | **W6** | Routines. | The news request is proposed, approved, run and delivered; a skipped run is reported. |
 | **W7** | Maintenance, report-only, then allowed actions. | `/maintain` figures match the disk; an allowed action is recorded with what it removed. |
@@ -222,8 +222,21 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 - **Journal first:** only the question acts. `self_surprise` and `expected_missing` have no action yet (W4), and the others are recorded with each sample but neither count nor open anything until `IYYE2_SELF_SIGNALS=act` (a new M4 trial period).
 - `/self normal` shows the bands, what is unusual now, the regularities with their answers, and the forecast; the owner's about-me note says what is unusual now and what is usual by the owner's own answer.
 - On a copy of the live records (2026-11-10): one regularity, "the network goes away around 23:34 and is back by about 08:02 (5 of the last 14 days)"; no baseline yet (W1's readings are a day old); no forecast yet.
-- **Not in W3:** the forecast of memory left for the night's model (the baseline of available memory covers it for now); decision 8 (a person's stale proposed plan), which is about plans, not about what is normal, and is still to do.
+- **Not in W3:** the forecast of memory left for the night's model (the baseline of available memory covers it for now).
 - `signals.ts`, `tracker.ts` and `actor.ts` changed: a new M4 trial period starts with this.
+
+### W4 as built (2026-11-10)
+
+- **`tools/self.ts`, the `self` toolkit** (effect `private`: the owner and Iyye's own work, never contacts; always declared in the owner's sessions, last): `self_model(facet)` with the facets memory, disk, compute, network, runs, normal and models, and `disk_usage`, which measures Iyye's directories now. It is its own toolkit rather than part of `monitor`, so Iyye's own work has it whether or not `IYYE2_MONITOR_BACKGROUND` is on. The facet is a word that only chooses among the fixed ones; an unknown word gets the list back as the result.
+- **For an investigation, `self_model("memory")` compares:** what each of Iyye's processes holds and usually holds (the mean of the last seven days), which one differs most, and what programs that are not Iyye's hold in all.
+- **A surprising reading is investigated** (`self_surprise` → an opportunity of domain `machine`, at most 2 a day; the 0.007 S5 loop runs it in a session with `self`, `machine`, and `monitor` and the sandbox when Iyye's own work has them). Its answer must cite at least one figure the tools returned that the reading itself did not hold, and no figure they did not return.
+- **Exit check, with the real model** (`scripts/self-investigate-smoke.ts`, gemma-4-E4B on a scratch router on the Spark, staged records: 9 GB available because a model never loaded before holds 63 GB): 8 of 8 investigations were accepted at the first step, about 4 s each, and every answer named the new model with its 63.0 GB. The first run was 1 of 5, and showed three things, now fixed: the model restates the reading in every answer (which the first rule refused), it gave up on the tool after one facet the schema rejected, and it needed the report to say plainly which process differs most.
+- **Two more questions the owner answers by command** (through the motivations' question path, like a regularity):
+  - a machine Iyye uses that has not answered for 3 days: `/self peer <name> away` (its silence is no trouble until it answers again; `service_down` for what needs it is not signalled) or `/self peer <name> back`;
+  - a host that is new to the local network (first seen after the first two days of records) and was there on 3 days: `/self host <id> <name>` or `/self host <id> forget`. The hosts found in the first two days are listed and never asked about.
+- **The note for Iyye's own work** (`SelfModel.aboutOwnWork`, `PiConversations.backgroundNotes`): hardware, what its processes hold, this run, what is unusual and usual, the link. No place, no people, no host of the local network, no other machine; not in a plan's steps.
+- **Decision 8** (`kernel/plans.ts`): a plan a person proposed that nobody approved, three days past its first dated step, is asked about once ("… /plan approve <id> … otherwise I will drop it in 2 days") and lapses two days later as abandoned, "not approved, and its date passed". Plans with no dated step wait as before.
+- `actor.ts` and `investigations.ts` changed: a new M4 trial period starts with this.
 
 ## 7. Owner decisions (accepted 2026-11-09)
 

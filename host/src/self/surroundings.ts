@@ -68,6 +68,16 @@ export type PeerState =
 	| "unknown: the network is away"
 	| "unknown";
 
+/** A reason for the motivation tracker, as `motivation/signals.ts` takes them. */
+export interface SurroundingsReason {
+	motivation: "curiosity";
+	kind: string;
+	cluster: string;
+	evidence: string[];
+	weight: number;
+	text: string;
+}
+
 /** What a service needs that is outside this machine. */
 export type Need = "internet" | { peer: string };
 
@@ -82,6 +92,10 @@ export interface SurroundingsDeps {
 	/** `off`: no LAN records. `passive`: the neighbour table. `active`: also the rare probe of the subnet. */
 	lan: "off" | "passive" | "active";
 	sweepsPerDay?: number;
+	/** A machine silent this long is asked about (plan 0.018 W4). */
+	peerAwayMs?: number;
+	/** A host first seen after the first two days of records, and on this many days, is asked about. */
+	unknownHostDays?: number;
 	/** Told at once when the way out appears or disappears. */
 	onLinkChange?: (online: boolean) => void;
 	detailsMs?: number;
@@ -114,6 +128,8 @@ export class SelfSurroundings {
 	constructor(deps: SurroundingsDeps) {
 		this.d = {
 			sweepsPerDay: 3,
+			peerAwayMs: 3 * 24 * HOUR,
+			unknownHostDays: 3,
 			onLinkChange: () => undefined,
 			detailsMs: 10 * MIN,
 			lanMs: 30 * MIN,
@@ -282,6 +298,132 @@ export class SelfSurroundings {
 	private peers(now: Date): void {
 		const fields = Object.fromEntries(this.d.peers().map((p) => [p.endpoint, this.peerState(p)]));
 		if (Object.keys(fields).length) this.d.self.setFacet("peers", fields, "probe", null, now);
+		// A machine the owner said is away is expected again once it answers.
+		for (const p of this.d.peers())
+			if (p.answering && this.expectedAway(p.endpoint)) this.setAway(p.endpoint, false, now);
+	}
+
+	/** The owner said this machine is away for now (`/self peer <name> away`): its silence is no trouble. */
+	expectedAway(endpoint: string): boolean {
+		return getKv(this.d.db, `self.peer.away:${endpoint}`) === "1";
+	}
+
+	private setAway(endpoint: string, away: boolean, now: Date): void {
+		setKv(this.d.db, `self.peer.away:${endpoint}`, away ? "1" : "0", now.toISOString());
+	}
+
+	/** Since when a peer has not answered: its last change away from "answering" with none back since; null if it answers. */
+	private silentSince(endpoint: string): string | null {
+		const state = this.d.self.value<PeerState>("peers", endpoint);
+		if (state === null || state === "answering") return null;
+		const rows = this.d.db
+			.prepare("SELECT new_json, at FROM self_changes WHERE facet = 'peers' AND field = ? ORDER BY at DESC")
+			.all(endpoint) as { new_json: string; at: string }[];
+		let since: string | null = null;
+		for (const r of rows) {
+			if (JSON.parse(r.new_json) === "answering") break;
+			since = r.at;
+		}
+		return since;
+	}
+
+	/** Whether a subject's trouble is as the owner said it would be: a service whose machine is expected away. */
+	usual(subject: string): boolean {
+		if (!subject.startsWith("service:")) return false;
+		const need = this.d.needs[subject.slice("service:".length)];
+		return need !== undefined && need !== "internet" && this.expectedAway(need.peer);
+	}
+
+	/**
+	 * Reasons from the surroundings, for the motivation tracker (plan 0.018 W4): a machine Iyye uses that has
+	 * been silent for days with no word from the owner, and a host that is new to the local network and keeps
+	 * coming. Both are questions the owner answers by command.
+	 */
+	reasons(now: Date = this.d.now()): SurroundingsReason[] {
+		const out: SurroundingsReason[] = [];
+		for (const p of this.d.peers()) {
+			const since = this.silentSince(p.endpoint);
+			if (!since || this.expectedAway(p.endpoint) || now.getTime() - Date.parse(since) < this.d.peerAwayMs) continue;
+			const days = Math.floor((now.getTime() - Date.parse(since)) / (24 * HOUR));
+			out.push({
+				motivation: "curiosity",
+				kind: "peer_long_away",
+				cluster: `peer:${p.endpoint}`,
+				evidence: [`self_facts:peers:${p.endpoint}`],
+				weight: 0.6,
+				text: `${p.endpoint} (${p.serves}) has not answered for ${days} days; the owner has not said whether that is expected`,
+			});
+		}
+		if (this.d.lan !== "off")
+			for (const h of this.newHosts())
+				out.push({
+					motivation: "curiosity",
+					kind: "lan_unknown_host",
+					cluster: `lan:${h.id}`,
+					evidence: [`lan_hosts:${h.id}`],
+					weight: 0.6,
+					text: `a device that is new to the local network has been there on ${h.days_seen} days since ${h.first_seen.slice(0, 10)}, and has no name`,
+				});
+		return out;
+	}
+
+	/**
+	 * Hosts worth a question: unnamed, not the gateway or a machine Iyye uses, seen on several days, and first
+	 * seen after the first two days of records (those are the household as Iyye found it: listed, not asked about).
+	 */
+	private newHosts(): LanHost[] {
+		const hosts = listHosts(this.d.db);
+		if (hosts.length === 0) return [];
+		const first = hosts.reduce((a, h) => (h.first_seen < a ? h.first_seen : a), hosts[0]!.first_seen);
+		const settled = new Date(Date.parse(first) + 48 * HOUR).toISOString();
+		const known = this.known();
+		return hosts.filter(
+			(h) => h.label === null && !known.has(h.id) && h.first_seen > settled && h.days_seen >= this.d.unknownHostDays,
+		);
+	}
+
+	/** The question behind a reason's cluster ("peer:<name>", "lan:<id>"), and how the owner answers it; null when it no longer stands. */
+	question(cluster: string): { question: string; answer: string } | null {
+		if (cluster.startsWith("peer:")) {
+			const endpoint = cluster.slice("peer:".length);
+			const p = this.d.peers().find((x) => x.endpoint === endpoint);
+			const since = this.silentSince(endpoint);
+			if (!p || !since || this.expectedAway(endpoint)) return null;
+			const answer = `/self peer ${endpoint} away (it is expected to be away: I stop treating that as trouble until it answers again) or /self peer ${endpoint} back (it should be there)`;
+			return {
+				question: `A question about my surroundings: ${endpoint}, which I use for ${p.serves}, has not answered since ${this.local(since)}. Is that expected? Answer here in the web chat with ${answer}.`,
+				answer,
+			};
+		}
+		if (cluster.startsWith("lan:")) {
+			const h = listHosts(this.d.db).find((x) => x.id === cluster.slice("lan:".length));
+			if (!h || h.label !== null) return null;
+			const ref = h.id.slice(0, 6);
+			const answer = `/self host ${ref} <its name> or /self host ${ref} forget`;
+			return {
+				question: `A question about my surroundings: a device I do not know (${h.address ?? "no address"}) has been on the local network on ${h.days_seen} days since ${this.local(h.first_seen).slice(0, 10)}. What is it? Answer here in the web chat with ${answer}.`,
+				answer,
+			};
+		}
+		return null;
+	}
+
+	private peer(args: string[]): string {
+		const [endpoint, word] = args;
+		const p = this.d.peers().find((x) => x.endpoint === endpoint);
+		if (!p || (word !== "away" && word !== "back"))
+			return `usage: /self peer <name> away | back${
+				this.d.peers().length
+					? ` (names: ${this.d
+							.peers()
+							.map((x) => x.endpoint)
+							.join(", ")})`
+					: " (no machine is configured)"
+			}`;
+		this.setAway(p.endpoint, word === "away", this.d.now());
+		return word === "away"
+			? `noted: ${p.endpoint} is expected to be away. Its silence is no trouble until it answers again.`
+			: `noted: ${p.endpoint} should be there. If it stays silent, that is trouble again.`;
 	}
 
 	// ---------------------------------------------------------------- lan
@@ -360,6 +502,8 @@ export class SelfSurroundings {
 		const online = this.d.self.value<boolean>("link", "online");
 		if (need === "internet") return online === false ? "the network is away" : null;
 		const state = this.d.self.value<PeerState>("peers", need.peer);
+		if (state !== "answering" && state !== null && this.expectedAway(need.peer))
+			return `${need.peer} is expected to be away`;
 		if (state === "on the LAN, not answering")
 			return `${need.peer} is on the local network, but its server does not answer`;
 		if (state === "not on the LAN") return `${need.peer} is not on the local network`;
@@ -396,8 +540,20 @@ export class SelfSurroundings {
 	private peerLines(): string[] {
 		return this.d.peers().map((p) => {
 			const state = this.d.self.value<PeerState>("peers", p.endpoint) ?? "not looked at yet";
-			return `${p.endpoint} (${p.serves}): ${state}`;
+			return `${p.endpoint} (${p.serves}): ${state}${state !== "answering" && this.expectedAway(p.endpoint) ? " (expected to be away: the owner said so)" : ""}`;
 		});
+	}
+
+	/** The link alone, for Iyye's own work: no host, no machine of the owner's. */
+	linkReport(): string {
+		const line = this.linkLine();
+		return line ? `network: ${line}` : "the network has not been looked at yet";
+	}
+
+	/** The same for the about-me note of Iyye's own work. */
+	workLines(): string[] {
+		const line = this.linkLine();
+		return line ? [`- Network: ${line}.`] : [];
 	}
 
 	/** `/self network`: the link, its last changes, and the machines Iyye uses. */
@@ -476,6 +632,8 @@ export class SelfSurroundings {
 	/** `/self network | hosts | host …`; null when the words are not these. */
 	command(args: string[]): string | null {
 		switch (args[0]) {
+			case "peer":
+				return this.peer(args.slice(1));
 			case "network":
 				return this.networkReport();
 			case "hosts":

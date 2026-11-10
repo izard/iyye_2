@@ -20,8 +20,14 @@
  *   observation that goes through the importance check like any finding, and
  *   the opportunity is settled. Otherwise the step is asked again, and after
  *   3 steps the attempt is fruitless: cooldown, and suspension after 3.
- * - Machine findings are not investigated yet: no read-only tool can say what
- *   uses the disk. Only repository findings raise questions in 0.007.
+ * - Repository findings raise questions here (0.007). The owner's recurring
+ *   questions are opened by the motivations and browse the web (0.010 M2).
+ * - **A surprising reading** (plan 0.018 W4, domain `machine`) is opened by the
+ *   motivations too and looked into with Iyye's own records (`self_model`,
+ *   `disk_usage`, and the host's readings when its own work has them). Its
+ *   answer needs at least one figure those tools returned in this attempt
+ *   that the reading itself did not hold: the reading is what is being
+ *   explained, not evidence.
  */
 
 import type { InitiativeShadow } from "../decisions/initiative.ts";
@@ -166,7 +172,13 @@ export class Investigations {
 						[o.evidence_text, o.question, ...calls.map((c) => `${c.args_json}\n${c.result ?? ""}`)].join("\n"),
 					);
 		const usedTools = calls.some((c) => c.outcome === "ok");
-		if (usedTools && check.cited.length > 0 && check.invented.length === 0) {
+		// A surprising reading (plan 0.018 W4): the answer may name the reading it explains, but that is not its
+		// evidence. At least one figure must be one the tools returned and the question did not already hold.
+		// (The real model restates the reading in every answer: 2026-11-10 smoke.)
+		const restates =
+			o.domain === "machine" &&
+			checkCitations(answer, `${o.evidence_text}\n${o.question}`).invented.every((t) => check.invented.includes(t));
+		if (usedTools && check.cited.length > 0 && check.invented.length === 0 && !restates) {
 			this.settle(o, answer);
 			return;
 		}
@@ -174,14 +186,16 @@ export class Investigations {
 			? "it used no tool"
 			: check.invented.length
 				? `it names ${check.invented.slice(0, 3).join(", ")}, which the tools did not return`
-				: "it cites nothing the tools returned";
+				: restates
+					? "it only repeats the reading, with no figure from the tools that explains it"
+					: "it cites nothing the tools returned";
 		if (o.steps < this.d.maxSteps) {
 			this.update(o.id, { steps: o.steps + 1 });
 			// Self-contained: if this step's session is lost (a restart, the night), it still carries the question.
 			this.d.worker.enqueue({
 				origin: `${ORIGIN}${o.id}`,
 				session: o.session!,
-				prompt: `${HOST_NOTE_PREFIX} That answer is not accepted: ${why}. Use the tools and answer again, citing ${o.domain === "conversation" ? "the URLs of the pages they returned" : "commit hashes, file names or figures from their results"}.\n\n${this.firstPrompt(o)}`,
+				prompt: `${HOST_NOTE_PREFIX} That answer is not accepted: ${why}. Use the tools and answer again, citing ${o.domain === "conversation" ? "the URLs of the pages they returned" : o.domain === "machine" ? "figures (GB, MB, %) from their results" : "commit hashes, file names or figures from their results"}.\n\n${this.firstPrompt(o)}`,
 			});
 			return;
 		}
@@ -322,6 +336,13 @@ export class Investigations {
 				"Answer in at most four sentences, citing the URL of every page you used. An answer without a URL the tools returned is not accepted.",
 			].join("\n");
 		}
+		if (o.domain === "machine")
+			return [
+				`Investigation: ${o.evidence_text}.`,
+				o.question,
+				"Look at your own records first: self_model with the facet that fits (memory, disk, compute, normal), and disk_usage for the disk. If you also have gpu_status, top_processes or pressure, use them for what your records do not show.",
+				"Do not guess. Answer in at most four sentences, citing the figures (GB, MB, %) the tools returned. If the tools do not show the cause, say what they do show and that the cause is not visible to you. An answer that cites no figure the tools returned is not accepted.",
+			].join("\n");
 		return [
 			`Investigation: ${o.question}`,
 			`Evidence, observed by Iyye's ${o.domain} probe: ${o.evidence_text}`,

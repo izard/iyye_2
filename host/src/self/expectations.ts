@@ -769,6 +769,11 @@ export class SelfExpectations {
 		}
 	}
 
+	/** The same for Iyye's own work: these are about the machine, not about the owner. */
+	workLines(): string[] {
+		return this.aboutLines();
+	}
+
 	/** Lines for the owner's about-me note: what is unusual now, and what is expected. */
 	aboutLines(): string[] {
 		const now = this.d.now();

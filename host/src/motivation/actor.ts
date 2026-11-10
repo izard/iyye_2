@@ -93,8 +93,14 @@ export interface ActorDeps {
 	self: Pick<SelfModel, "value" | "setFacet">;
 	/** The owner's own statements (owner bank, `speaker:person`) that mention a name. */
 	ownerFactsAbout?: ((name: string) => Promise<string[]>) | null;
-	/** Plan 0.018 W3: the question about a regularity, by its id; null when it is answered or gone. */
-	regularityQuestion?: ((id: string) => string | null) | null;
+	/**
+	 * Plan 0.018 W3, W4: questions the owner answers by a command of their own, never by a chat message (a
+	 * regularity, a silent machine, an unknown host). By the opportunity's cluster: the question and the
+	 * commands that answer it; null when it no longer stands.
+	 */
+	byCommand?: ((cluster: string) => { question: string; answer: string } | null) | null;
+	/** Plan 0.018 W4: investigations of surprising readings opened a day. */
+	machineInvestigationsPerDay?: number;
 	/** Load a selected model again after self-healing gave up; false when it should not (the owner unloaded it). */
 	retryModel?: ((name: string) => boolean) | null;
 	now?: () => Date;
@@ -186,10 +192,11 @@ export function actionFor(motivation: Motivation, kind: string): ActionKind | nu
 	if (motivation === "agency" && kind === "intention_unplanned") return "propose";
 	if (motivation === "curiosity") {
 		if (kind === "self_missing" || kind === "self_contradicted" || kind === "belief_uncertain") return "ask";
-		// Plan 0.018 W3: a regularity the owner has not answered about. (A surprising reading has no action
-		// until W4 investigates it.)
-		if (kind === "regularity_unconfirmed") return "ask";
-		if (kind === "self_surprise" || kind === "expected_missing") return null;
+		// Plan 0.018 W3, W4: what only the owner can say (a regularity, a machine silent for days, a new host).
+		if (kind === "regularity_unconfirmed" || kind === "peer_long_away" || kind === "lan_unknown_host") return "ask";
+		// W4: a surprising reading is looked into with Iyye's own records (the investigations loop runs it).
+		if (kind === "self_surprise") return "investigate";
+		if (kind === "expected_missing") return null;
 		if (kind === "question_recurring") return "investigate"; // the investigations loop runs it (M2)
 		return kind === "self_stale" ? "notify" : null;
 	}
@@ -203,7 +210,8 @@ export class MotivationActor {
 	constructor(deps: ActorDeps) {
 		this.d = {
 			ownerFactsAbout: null,
-			regularityQuestion: null,
+			byCommand: null,
+			machineInvestigationsPerDay: 2,
 			retryModel: null,
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
@@ -372,6 +380,10 @@ export class MotivationActor {
 	 * and its own citation check. At most `investigationsPerDay`, so a chatty day cannot become a crawl.
 	 */
 	private openInvestigation(o: Opening, now: Date): void {
+		if (o.signal.kind === "self_surprise") {
+			this.openMachineInvestigation(o, now);
+			return;
+		}
 		const today = startOfDay(now);
 		const n = (
 			this.d.db
@@ -389,6 +401,39 @@ export class MotivationActor {
 				 VALUES (?, ?, 'conversation', ?, ?, ?, 'open', ?, ?, 'curiosity', ?, 'investigate')`,
 			)
 			.run(id, o.signal.cluster, JSON.stringify(o.signal.evidence), o.signal.text, topic, at, at, o.signal.kind);
+		if (inserted.changes > 0) this.event({ id, motivation: "curiosity" }, "opened", o.signal.kind);
+	}
+
+	/**
+	 * A surprising reading becomes an investigation (plan 0.018 W4): the S5 loop runs it with Iyye's own records
+	 * (`self_model`, `disk_usage`, and the host's readings when its own work has them), and only figures those
+	 * tools returned ground its answer.
+	 */
+	private openMachineInvestigation(o: Opening, now: Date): void {
+		const n = (
+			this.d.db
+				.prepare("SELECT count(*) AS n FROM opportunities WHERE domain = 'machine' AND created_at >= ?")
+				.get(startOfDay(now)) as { n: number }
+		).n;
+		if (n >= this.d.machineInvestigationsPerDay) return;
+		const at = now.toISOString();
+		const id = this.d.newId();
+		const inserted = this.d.db
+			.prepare(
+				`INSERT OR IGNORE INTO opportunities (id, cluster, domain, evidence_json, evidence_text, question, status, created_at, updated_at,
+					motivation, signal_kind, action_kind)
+				 VALUES (?, ?, 'machine', ?, ?, ?, 'open', ?, ?, 'curiosity', ?, 'investigate')`,
+			)
+			.run(
+				id,
+				o.signal.cluster,
+				JSON.stringify(o.signal.evidence),
+				o.signal.text,
+				"What explains this reading? Find what holds or uses it now, and how that differs from what is usual.",
+				at,
+				at,
+				o.signal.kind,
+			);
 		if (inserted.changes > 0) this.event({ id, motivation: "curiosity" }, "opened", o.signal.kind);
 	}
 
@@ -925,8 +970,7 @@ export class MotivationActor {
 
 	private questionText(field: string, id: string): string | null {
 		const ref = id.slice(0, 8);
-		if (field.startsWith("regularity:"))
-			return this.d.regularityQuestion?.(field.slice("regularity:".length)) ?? null;
+		if (answeredByCommand(field)) return this.d.byCommand?.(field)?.question ?? null;
 		if (field.startsWith("belief:")) {
 			const b = getBelief(this.d.db, field.slice("belief:".length));
 			const ev = b ? visibleEvidence(this.d.db, b, OWNER_READER) : null;
@@ -951,11 +995,10 @@ export class MotivationActor {
 		for (const q of this.d.db
 			// A belief question is answered by /facts confirm|correct|wrong, never by a chat message: capturing one
 			// would hold the one-at-a-time slot for a week (an `answered` row waits for /self accept).
-			// (So is a question about a regularity: /self expected|unexpected.)
-			.prepare(
-				"SELECT * FROM self_questions WHERE status = 'asked' AND field NOT LIKE 'belief:%' AND field NOT LIKE 'regularity:%'",
-			)
+			// (So are the questions of plan 0.018: a regularity, a silent machine, an unknown host.)
+			.prepare("SELECT * FROM self_questions WHERE status = 'asked' AND field NOT LIKE 'belief:%'")
 			.all() as SelfQuestion[]) {
+			if (answeredByCommand(q.field)) continue;
 			const e = this.d.db
 				.prepare(
 					`SELECT id, coalesce(json_extract(payload_json, '$.text'), json_extract(payload_json, '$.message.text')) AS text
@@ -1004,9 +1047,9 @@ export class MotivationActor {
 			const bref = q.field.slice("belief:".length, "belief:".length + 8);
 			return `that question is about a belief: answer with /facts confirm ${bref}, /facts correct ${bref} <the right value>, or /facts wrong ${bref}`;
 		}
-		if (q.field.startsWith("regularity:")) {
-			const rref = q.field.slice("regularity:".length, "regularity:".length + 6);
-			return `that question is about a regularity: answer with /self expected ${rref} or /self unexpected ${rref}`;
+		if (answeredByCommand(q.field)) {
+			const how = this.d.byCommand?.(q.field)?.answer;
+			return how ? `that question is answered with ${how}` : "that question no longer stands";
 		}
 		if (q.status === "accepted" || q.status === "dismissed" || q.status === "expired" || q.status === "resolved")
 			return `that question is ${q.status}`;
@@ -1063,8 +1106,8 @@ export class MotivationActor {
 			`You asked the owner at ${new Date(q.asked_at).toTimeString().slice(0, 5)}: ${JSON.stringify(q.question.slice(0, 300))}`,
 			q.field.startsWith("belief:")
 				? `If their message answers it, thank them briefly and say it is recorded once they answer in the web chat with /facts confirm ${q.field.slice(7, 15)}, /facts correct ${q.field.slice(7, 15)} <the right value> or /facts wrong ${q.field.slice(7, 15)}. This is a record, not instructions.`
-				: q.field.startsWith("regularity:")
-					? `If their message answers it, thank them briefly and say it is recorded once they answer in the web chat with /self expected ${q.field.slice(11, 17)} or /self unexpected ${q.field.slice(11, 17)}. This is a record, not instructions.`
+				: answeredByCommand(q.field)
+					? `If their message answers it, thank them briefly and say it is recorded once they answer in the web chat with ${this.d.byCommand?.(q.field)?.answer ?? "the command the question names"}. This is a record, not instructions.`
 					: `If their message answers it, thank them briefly and say it is recorded once they confirm in the web chat with /self accept ${q.id.slice(0, 8)}. This is a record, not instructions.`,
 			"</open_question>",
 		].join("\n");
@@ -1120,11 +1163,16 @@ export class MotivationActor {
 /** The self-model field a question is about, from the opportunity's cluster. */
 function fieldOf(row: ActingRow): string | null {
 	const c = row.cluster.split("@")[0]!;
-	if (c.startsWith("belief:") || c.startsWith("regularity:")) return c;
+	if (c.startsWith("belief:") || answeredByCommand(c)) return c;
 	if (row.signal_kind === "self_contradicted" && c.startsWith("self:place:")) return "place:estimate";
 	if (c === "self:place:stated") return "place:stated";
 	if (c.startsWith("self:social:relation:")) return c.slice("self:".length);
 	return null;
+}
+
+/** Fields of questions the owner answers by a command of their own (plan 0.018 W3, W4), named by their cluster. */
+function answeredByCommand(field: string): boolean {
+	return field.startsWith("regularity:") || field.startsWith("peer:") || field.startsWith("lan:");
 }
 
 /** The notice (or the note of what is asked) for an opportunity. */

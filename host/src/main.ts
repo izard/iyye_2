@@ -111,7 +111,7 @@ import { seedSelectedModel } from "./state/models.ts";
 import { recentSentNote, sentReport } from "./state/sent.ts";
 import { recordIyyeEntry } from "./state/stm.ts";
 import { appendFeed } from "./state/web.ts";
-import { ToolBroker, type Toolkit } from "./tools/broker.ts";
+import { PLAN_STEP_SCOPE, ToolBroker, type Toolkit } from "./tools/broker.ts";
 import { emailToolkit } from "./tools/email.ts";
 import { GuardedHttp } from "./tools/http.ts";
 import { memorySearchTool } from "./tools/memory-search.ts";
@@ -123,6 +123,7 @@ import { projectToolkit } from "./tools/project.ts";
 import { remindersToolkit } from "./tools/reminders.ts";
 import { toolsReport } from "./tools/report.ts";
 import { sandboxToolkit } from "./tools/sandbox.ts";
+import { selfToolkit } from "./tools/self.ts";
 import { thinkComplete, thinkingToolkit } from "./tools/thinking.ts";
 import { visionToolkit } from "./tools/vision.ts";
 import { WEB_TOOLKIT, webFetchTool, webSearchTool } from "./tools/web.ts";
@@ -257,6 +258,31 @@ async function main(): Promise<number> {
 	const webHttp = new GuardedHttp();
 	// Toolkits in declaration order: the order the model sees, always (plan 0.004 §3.4).
 	// Read-only toolkits are for everyone, owner and contacts (owner decision, plan 0.004 §8).
+	// Plan 0.018 W4: Iyye's own records about its body. The self model's keepers are created below; they are
+	// read only when a tool runs.
+	const selfKit = selfToolkit({
+		facet: async (facet) => {
+			switch (facet) {
+				case "memory":
+					await upkeep.current();
+					return upkeep.memoryReport({ compare: true });
+				case "disk":
+					return upkeep.diskReport();
+				case "compute":
+					await upkeep.current();
+					return upkeep.computeReport();
+				case "network":
+					return surroundings.linkReport();
+				case "runs":
+					return upkeep.runsReport();
+				case "normal":
+					return expectations.report();
+				case "models":
+					return upkeep.modelsReport();
+			}
+		},
+		diskUsage: () => upkeep.diskUsage(),
+	});
 	const machineToolkit: Toolkit = {
 		name: "machine",
 		description: "the state of the computer you run on",
@@ -427,6 +453,8 @@ async function main(): Promise<number> {
 			...(visionKit ? [visionKit] : []),
 			// Last (plan 0.014): email from Iyye's own mailbox, the owner and trusted contacts.
 			...(emailKit ? [emailKit] : []),
+			// Last (plan 0.018 W4): Iyye's own records about its body, effect `private`.
+			selfKit,
 		],
 	});
 	const runtime = await createLocalModelRuntime({ routerUrl: router.url, registry });
@@ -548,8 +576,14 @@ async function main(): Promise<number> {
 				// Last (2026-10-12): the sandbox for Iyye's own work, only when switched on (a new M4 trial period).
 				...(sandboxKit && config.sandbox.background ? [sandboxKit] : []),
 				...(monitorKit && config.monitor.background ? [monitorKit] : []),
+				// Last (plan 0.018 W4): Iyye's own records about its body; what investigations of a surprising
+				// reading look at first.
+				selfKit,
 			],
 		}),
+		// Plan 0.018 W4 (owner decision 7): what Iyye knows about the machine, in its own work too. Nothing of the
+		// owner's is in it. Not in a plan's steps: their question may be a contact's.
+		backgroundNotes: (scope) => (scope.startsWith(PLAN_STEP_SCOPE) ? null : selfModel.aboutOwnWork()),
 	});
 	// Plan 0.010 M4: initiative's allowances, one initiative job at a time, and its priority (read durable rows).
 	const ledger = new InitiativeLedger({
@@ -1003,7 +1037,14 @@ async function main(): Promise<number> {
 		log,
 		mode: () => rhythm.mode(),
 		notifyOwner: (req) => outbox.notifyOwner(req),
-		regularityQuestion: (id) => expectations.question(id),
+		// Plan 0.018 W3, W4: questions the owner answers by command (a regularity, a silent machine, a new host).
+		byCommand: (cluster) => {
+			if (!cluster.startsWith("regularity:")) return surroundings.question(cluster);
+			const id = cluster.slice("regularity:".length);
+			const question = expectations.question(id);
+			const ref = id.slice(0, 6);
+			return question ? { question, answer: `/self expected ${ref} or /self unexpected ${ref}` } : null;
+		},
 		self: selfModel,
 		// The owner's own statements: their bank, the people's words only (never Iyye's, never a contact's).
 		ownerFactsAbout: ltm
@@ -1060,10 +1101,10 @@ async function main(): Promise<number> {
 		actor,
 		mode: () => rhythm.mode(),
 		sweepMs: config.self.motivationSweepS * 1000,
-		// Plan 0.018 W3: a surprising reading has no action until W4; the other new reasons are only journaled
-		// until the owner lets them act (IYYE2_SELF_SIGNALS=act). The question about a regularity is asked either way.
+		// Plan 0.018 W3: reasons from what is normal are only journaled until the owner lets them act
+		// (IYYE2_SELF_SIGNALS=act). Questions to the owner, and since W4 the investigation of a surprising
+		// reading, act either way; an expected event that did not happen has no action yet.
 		journalOnly: new Set([
-			"self_surprise",
 			"expected_missing",
 			...(config.self.signals === "act"
 				? []
@@ -1086,8 +1127,8 @@ async function main(): Promise<number> {
 			network: () => surroundings.network(),
 			cause: (service) => surroundings.cause(service),
 			// Plan 0.018 W3: reasons from what is normal, and what is usual now by the owner's own answer.
-			usual: (subject) => expectations.usual(subject),
-			expectations: () => expectations.signals(),
+			usual: (subject) => expectations.usual(subject) || surroundings.usual(subject),
+			expectations: () => [...expectations.signals(), ...surroundings.reasons()],
 		},
 	});
 	// Plan 0.009 CH1a: the character's records and character.json; nothing reads its values yet.

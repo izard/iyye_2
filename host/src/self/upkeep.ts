@@ -397,8 +397,28 @@ export class SelfUpkeep {
 		return new Date(iso).toLocaleString("sv-SE", { timeZone: this.d.timezone }).slice(0, 16);
 	}
 
-	/** What uses the memory, from the last probe. */
-	memoryReport(): string {
+	/**
+	 * What each role usually holds (resident and GPU together): the mean of its hourly means over the last
+	 * seven days, today left out. Null for a role with no such history (a model loaded for the first time).
+	 */
+	private usualUse(role: string, now: Date): number | null {
+		const machine = this.machine;
+		const today = now.toISOString().slice(0, 10);
+		const mean = (field: string) => {
+			const rows = hourly(this.d.db, "memory", field, machine, new Date(now.getTime() - 7 * DAY)).filter(
+				(r) => !r.hour.startsWith(today),
+			);
+			return rows.length ? rows.reduce((a, r) => a + r.mean, 0) / rows.length : null;
+		};
+		const resident = mean(`resident:${role}`);
+		return resident === null ? null : resident + (mean(`gpu:${role}`) ?? 0);
+	}
+
+	/**
+	 * What uses the memory, from the last probe. `compare`: also what each role usually holds, and what programs
+	 * that are not Iyye's hold in all (for an investigation of why memory is short).
+	 */
+	memoryReport(o: { compare?: boolean } = {}): string {
 		const now = this.d.now();
 		const v = <T>(f: string) => this.d.self.value<T>("memory", f);
 		const procs = v<ProcessUse[]>("processes");
@@ -410,15 +430,99 @@ export class SelfUpkeep {
 		return [
 			`memory [${this.ago(this.factAt("memory", "processes"), now)}]: ${v<number>("availableGb") ?? "?"} GB of ${v<number>("totalGb") ?? "?"} GB available${swap ? `; swap ${v<number>("swapUsedGb") ?? "?"} of ${swap} GB used` : ""}`,
 			`what Iyye's own processes hold (resident${gpu ? " + on the GPU" : ""}, GB):`,
-			...procs.map(
-				(p) =>
-					`  ${p.role}${p.processes > 1 ? ` (${p.processes} processes)` : ""} — ${p.residentGb.toFixed(1)}${p.gpuGb === null ? "" : ` + ${p.gpuGb.toFixed(1)}`}`,
-			),
+			...procs.map((p) => {
+				const usual = o.compare ? this.usualUse(p.role, now) : null;
+				const all = p.residentGb + (p.gpuGb ?? 0);
+				return `  ${p.role}${p.processes > 1 ? ` (${p.processes} processes)` : ""} — ${p.residentGb.toFixed(1)}${p.gpuGb === null ? "" : ` + ${p.gpuGb.toFixed(1)}`}${
+					!o.compare
+						? ""
+						: usual === null
+							? ` = ${all.toFixed(1)} GB (no history of it: new)`
+							: ` = ${all.toFixed(1)} GB (usually ${usual.toFixed(1)} GB)`
+				}`;
+			}),
 			procs.length
 				? `  in all — ${total((p) => p.residentGb)}${gpu ? ` + ${total((p) => p.gpuGb)}` : ""}`
 				: "  none of Iyye's processes was found",
-			"history: /self history memory.availableGb",
+			...(o.compare
+				? [this.othersLine(procs), ...this.differsMost(procs, now)]
+				: ["history: /self history memory.availableGb"]),
 		].join("\n");
+	}
+
+	/** Which of Iyye's own processes holds most more than it usually does, by at least a gigabyte: where to look first. */
+	private differsMost(procs: readonly ProcessUse[], now: Date): string[] {
+		let top: { role: string; all: number; more: number; fresh: boolean } | null = null;
+		for (const p of procs) {
+			const all = p.residentGb + (p.gpuGb ?? 0);
+			const usual = this.usualUse(p.role, now);
+			const more = all - (usual ?? 0);
+			if (more >= 1 && (!top || more > top.more)) top = { role: p.role, all, more, fresh: usual === null };
+		}
+		if (!top) return ["none of Iyye's own processes holds a gigabyte more than it usually does"];
+		return [
+			`what differs most from usual: ${top.role} holds ${top.all.toFixed(1)} GB, ${top.fresh ? "and it has no history (it was not there before)" : `${top.more.toFixed(1)} GB more than it usually does`}`,
+		];
+	}
+
+	/** What programs that are not Iyye's hold: what is in use, less what Iyye's own processes hold. An estimate. */
+	private othersLine(procs: readonly ProcessUse[]): string {
+		const total = this.d.self.value<number>("memory", "totalGb");
+		const available = this.d.self.value<number>("memory", "availableGb");
+		if (total === null || available === null) return "what other programs hold is not known";
+		const own = procs.reduce((a, p) => a + p.residentGb + (p.gpuGb ?? 0), 0);
+		const others = Math.max(0, total - available - own);
+		return `other programs (not Iyye's) and the system hold about ${others.toFixed(1)} GB (in use ${(total - available).toFixed(1)} GB, less Iyye's own ${own.toFixed(1)} GB)`;
+	}
+
+	/** Load, pressure, the GPU and the hottest sensor, from the last probe. */
+	computeReport(): string {
+		const now = this.d.now();
+		const v = <T>(f: string) => this.d.self.value<T>("compute", f);
+		if (v<number>("load1") === null) return "the load has not been probed yet";
+		const pct = (f: string) => (v<number>(f) === null ? "?" : `${v<number>(f)}%`);
+		return [
+			`load [${this.ago(this.factAt("compute", "load1"), now)}]: ${v<number>("load1")} / ${v<number>("load5")} / ${v<number>("load15")} (1, 5, 15 min) on ${v<number>("cores")} cores`,
+			...(v<number>("cpuPressure") === null
+				? []
+				: [
+						`work waiting in the last minute: CPU ${pct("cpuPressure")}, memory ${pct("memoryPressure")}, disk ${pct("ioPressure")}`,
+					]),
+			...(v<number>("gpuUtilPct") === null
+				? []
+				: [
+						`GPU: ${pct("gpuUtilPct")} busy, ${v<number>("gpuTempC") ?? "?"} °C, ${v<number>("gpuPowerW") ?? "?"} W`,
+					]),
+			...(v<number>("hottestC") === null ? [] : [`the hottest sensor: ${v<number>("hottestC")} °C`]),
+		].join("\n");
+	}
+
+	/** Each model: its file, how long it took to load, and what it held when last seen loaded. */
+	modelsReport(): string {
+		const rows = this.d.db
+			.prepare("SELECT field, value_json FROM self_facts WHERE facet = 'models' ORDER BY field")
+			.all() as { field: string; value_json: string }[];
+		if (rows.length === 0) return "the models have not been looked at yet";
+		return [
+			"models (file; last load; memory when last seen loaded, resident + on the GPU):",
+			...rows.map((r) => {
+				const m = JSON.parse(r.value_json) as {
+					fileGb?: number | null;
+					loadSeconds?: number;
+					residentGb?: number;
+					gpuGb?: number | null;
+				};
+				return `  ${r.field} — ${m.fileGb === null || m.fileGb === undefined ? "not on this machine" : `${m.fileGb} GB`}${m.loadSeconds === undefined ? "" : `; loaded in ${m.loadSeconds} s`}${m.residentGb === undefined ? "" : `; ${m.residentGb} + ${m.gpuGb ?? 0} GB`}`;
+			}),
+		].join("\n");
+	}
+
+	/** Measure Iyye's own directories now (the daily measurement, on request) and report the disk. */
+	async diskUsage(): Promise<string> {
+		const now = this.d.now();
+		await this.attempt("storage", now, () => this.storage(now));
+		await this.attempt("sizes", now, () => this.sizes(now));
+		return this.diskReport();
 	}
 
 	/** What uses the disk, from the last probes. */
@@ -511,6 +615,11 @@ export class SelfUpkeep {
 			default:
 				return null;
 		}
+	}
+
+	/** The same for Iyye's own work: nothing in them is the owner's (no place, people or network). */
+	workLines(): string[] {
+		return this.aboutLines();
 	}
 
 	/** Lines for the owner's about-me note: what uses the memory, and how this run and the last nights went. */

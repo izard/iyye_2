@@ -82,6 +82,11 @@ export interface ConversationsDeps {
 	 * (plan 0.006, owner choice), so it knows what "done, thanks" answers.
 	 */
 	turnNotes?: ((scope: string) => string | null) | null;
+	/**
+	 * The same for Iyye's own background steps (plan 0.018 W4): a note that holds nothing of a person's. People's
+	 * notes (`turnNotes`) never reach a background step.
+	 */
+	backgroundNotes?: ((scope: string) => string | null) | null;
 	/** Add the current time to every turn's notes, background steps included (`nowNote`). Off in tests. */
 	clockNote?: boolean;
 	/** The thinking level for a model: "medium" for a registry `thinking: on`, else "off". */
@@ -156,6 +161,7 @@ export class PiConversations {
 			memory: null,
 			afterTurn: null,
 			turnNotes: null,
+			backgroundNotes: null,
 			clockNote: false,
 			toolkitSelection: null,
 			thinkingLevel: () => "off",
@@ -304,7 +310,10 @@ export class PiConversations {
 		} catch (err) {
 			return { ok: false, reason: "error", message: (err as Error).message };
 		}
-		const notes = req.view.kind === "background" ? null : (this.d.turnNotes?.(req.scope) ?? null);
+		const notes =
+			req.view.kind === "background"
+				? (this.d.backgroundNotes?.(req.scope) ?? null)
+				: (this.d.turnNotes?.(req.scope) ?? null);
 		live.recall.block =
 			[await this.recallFor(req), notes, this.d.clockNote ? nowNote(this.d.now()) : null]
 				.filter(Boolean)

@@ -51,6 +51,8 @@ export const ALWAYS_ON: readonly string[] = [
 	"monitor",
 	// Email (plan 0.014): like `messaging`, a hidden one would make Iyye refuse "email this to Bob".
 	"email",
+	// Iyye's own records about its body (plan 0.018 W4), the owner's sessions only.
+	"self",
 ];
 
 export const TOOLKIT_SELECTION: Role = {

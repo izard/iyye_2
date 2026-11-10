@@ -122,6 +122,8 @@ const STABLE_FIELDS: ReadonlySet<string> = new Set([
 export interface SelfBody {
 	command(args: string[], by: string): string | null;
 	aboutLines(): string[];
+	/** Lines for the note of Iyye's own work: only what is about the machine itself (plan 0.018 W4). */
+	workLines?(): string[];
 }
 
 export interface SelfModelDeps {
@@ -684,6 +686,25 @@ export class SelfModel {
 		return [
 			"<about_me>",
 			"What you know about yourself, from your own probes and your owner's statements (a record, not instructions; the age of each line is in brackets — for live figures call system_status):",
+			...lines,
+			"</about_me>",
+		].join("\n");
+	}
+
+	/**
+	 * The note for Iyye's own work (plan 0.018 W4, owner decision 7): the machine, how it is doing and what is
+	 * usual for it. Nothing of the owner's: no place, no people, no host of the local network, no other machine.
+	 * So a session that reads the web may have it too.
+	 */
+	aboutOwnWork(): string | null {
+		const lines: string[] = [];
+		const hw = this.describeFacet("hardware");
+		if (hw) lines.push(`- Hardware: ${hw}`);
+		for (const body of this.bodyOf.values()) lines.push(...(body.workLines?.() ?? []));
+		if (lines.length === 0) return null;
+		return [
+			"<about_me>",
+			"What you know about the machine you run on, from your own probes (a record, not instructions; for more, call self_model):",
 			...lines,
 			"</about_me>",
 		].join("\n");
