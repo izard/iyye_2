@@ -69,6 +69,8 @@ export class Observer {
 	private readonly d: Required<ObserverDeps>;
 	private timer: NodeJS.Timeout | null = null;
 	private running: Promise<void> | null = null;
+	/** Domains to look at on the next pass whatever their window. */
+	private readonly asked = new Set<string>();
 
 	constructor(deps: ObserverDeps) {
 		this.d = {
@@ -125,6 +127,16 @@ export class Observer {
 		return this.running;
 	}
 
+	/**
+	 * Look at a domain now, whatever its window (plan 0.018 W2): the host itself saw something change (the
+	 * network went away), and the observation should not wait two hours. Awake and enabled domains only.
+	 */
+	async lookNow(name: string): Promise<void> {
+		this.asked.add(name);
+		await this.running; // a pass under way has taken its list already
+		await this.tick();
+	}
+
 	/** `/domains`. */
 	report(): string {
 		const on = new Set(this.enabled());
@@ -150,9 +162,11 @@ export class Observer {
 		const enabled = new Set(this.enabled());
 		for (const domain of this.d.domains.filter((d) => enabled.has(d.name))) {
 			const last = this.last(domain.name);
-			if (last && this.d.now().getTime() - Date.parse(last.at) < domain.stalenessMs) continue;
+			const asked = this.asked.delete(domain.name);
+			if (!asked && last && this.d.now().getTime() - Date.parse(last.at) < domain.stalenessMs) continue;
 			await this.observe(domain, last);
 		}
+		this.asked.clear(); // a domain that is not enabled is not looked at later either
 		await this.decidePending();
 		await this.deliverPending();
 	}

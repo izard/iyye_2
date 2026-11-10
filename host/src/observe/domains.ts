@@ -56,6 +56,11 @@ export interface MachineDeps {
 		memAvailableGb: number | null;
 		swapUsedGb: number | null;
 	}>;
+	/**
+	 * The link (plan 0.018 W2): whether there is a way out, and the services that need one. Its loss is one
+	 * change that names them; their own states are not reported while it lasts.
+	 */
+	network?: () => { online: boolean | null; dependents: string[] } | null;
 	memoryGb: () => number;
 	loadedModels: () => Promise<string[]>;
 	/** Service name → state ("up", "connected", "retrying", …). */
@@ -74,6 +79,8 @@ export function machineDomain(deps: MachineDeps): Domain {
 		description: "this computer: free disk, memory, swap, loaded models, Iyye's services",
 		stalenessMs: 2 * 3_600_000,
 		probe: async () => {
+			const net = deps.network?.() ?? null;
+			const link = net ? { online: net.online, needOnline: net.dependents } : {};
 			if (deps.vitals) {
 				const v = await deps.vitals();
 				return {
@@ -84,6 +91,7 @@ export function machineDomain(deps: MachineDeps): Domain {
 					swapUsedGb: v.swapUsedGb,
 					loadedModels: (await deps.loadedModels()).sort(),
 					services: deps.services(),
+					...link,
 				};
 			}
 			const s = statfsSync(deps.path ?? homedir());
@@ -98,6 +106,7 @@ export function machineDomain(deps: MachineDeps): Domain {
 				swapUsedGb: (deps.swapUsedGb ?? macSwapUsedGb)(),
 				loadedModels: (await deps.loadedModels()).sort(),
 				services: deps.services(),
+				...link,
 			};
 		},
 		compare: (prev, cur) => {
@@ -126,6 +135,19 @@ export function machineDomain(deps: MachineDeps): Domain {
 			if (swap !== null && prevSwap !== null && swap - prevSwap >= 4) {
 				changes.push({ severity: "threshold", text: `swap use grew from ${prevSwap} GB to ${swap} GB` });
 			}
+			// The network (plan 0.018 W2): its loss and its return are one change each, and they carry the services
+			// that need it. The first look is a baseline.
+			const offline = cur.online === false;
+			const wasOffline = prev?.online === false;
+			const needOnline = new Set(((offline ? cur.needOnline : prev?.needOnline) ?? []) as string[]);
+			if (prev && offline && !wasOffline) {
+				changes.push({
+					severity: "threshold",
+					text: `the network is away (no default route)${needOnline.size ? `; ${[...needOnline].join(", ")} cannot be reached without it` : ""}`,
+				});
+			} else if (prev && wasOffline && !offline && cur.online === true) {
+				changes.push({ severity: "minor", text: "the network is back" });
+			}
 			// Services: only a move between fine and broken counts. The first look is a baseline, and
 			// starting/restarting are neither (every restart passes through them).
 			const svc = (cur.services ?? {}) as Record<string, string>;
@@ -133,6 +155,8 @@ export function machineDomain(deps: MachineDeps): Domain {
 			for (const [name, state] of Object.entries(svc)) {
 				const was = prevSvc[name];
 				if (was === undefined || TRANSITIONAL.has(state) || TRANSITIONAL.has(was)) continue;
+				// What needs the network went with it, or came back with it: said above, once.
+				if ((offline || wasOffline) && needOnline.has(name)) continue;
 				if (!OK_STATES.has(state) && OK_STATES.has(was)) {
 					changes.push({ severity: "threshold", text: `${name} is ${state}` });
 				} else if (OK_STATES.has(state) && !OK_STATES.has(was)) {

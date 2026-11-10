@@ -99,6 +99,7 @@ import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./p
 import { guardClientRequests } from "./process/client-requests.ts";
 import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
+import { privateAddressOf, SelfSurroundings } from "./self/surroundings.ts";
 import { SelfUpkeep } from "./self/upkeep.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
 import { type Db, openDb } from "./state/db.ts";
@@ -932,6 +933,53 @@ async function main(): Promise<number> {
 		},
 	});
 	selfModel.attach(upkeep);
+	// Plan 0.018 W2: the link, the local network and the machines Iyye uses; the cause of an outage that is
+	// outside the service that shows it. The other machine may serve two models: one peer, both its servers.
+	const peerServers = [
+		...(remote && config.remote.model
+			? [{ endpoint: remote.endpoint, serves: "the background model", url: config.remote.model.url, at: remote }]
+			: []),
+		...(thinkingRemote && thinkingConfig
+			? [
+					{
+						endpoint: thinkingRemote.endpoint,
+						serves: "the thinking model",
+						url: thinkingConfig.url,
+						at: thinkingRemote,
+					},
+				]
+			: []),
+	];
+	const surroundings = new SelfSurroundings({
+		db,
+		log,
+		self: selfModel,
+		mode: () => rhythm.mode(),
+		lan: config.self.lan,
+		sweepsPerDay: config.self.lanSweepsDaily,
+		peers: () =>
+			[...new Set(peerServers.map((p) => p.endpoint))].map((endpoint) => {
+				const servers = peerServers.filter((p) => p.endpoint === endpoint);
+				const down = servers.find((p) => p.at.status.state !== "up");
+				return {
+					endpoint,
+					serves: servers.map((p) => p.serves).join(" and "),
+					address: privateAddressOf(servers[0]!.url),
+					answering: !down,
+					error: down?.at.status.detail ?? null,
+				};
+			}),
+		needs: {
+			Telegram: "internet",
+			"web search": "internet",
+			...(config.self.geolocation ? { "the place estimate": "internet" as const } : {}),
+			...(config.email.on ? { email: "internet" as const } : {}),
+			...Object.fromEntries(peerServers.map((p) => [`${p.serves} on ${p.endpoint}`, { peer: p.endpoint }])),
+		},
+		// The observation of the machine should not wait its two hours for this.
+		onLinkChange: () => void observer.lookNow("machine").catch(() => undefined),
+	});
+	selfModel.attach(surroundings);
 	// Plan 0.010 M0: the four motivations' needs, in shadow (journaled, nothing acts on them).
 	// Plan 0.010 M1: the motivations act (notices, the owner's self-model questions, model maintenance).
 	const actor = new MotivationActor({
@@ -1008,6 +1056,9 @@ async function main(): Promise<number> {
 				const m = selfModel.value<number>("sleep", "asleepMinutes");
 				return v === null || m === null ? null : { sleptOnBattery: v, asleepMinutes: m };
 			},
+			// Plan 0.018 W2: the network away is one signal, and a failing service names a cause outside it.
+			network: () => surroundings.network(),
+			cause: (service) => surroundings.cause(service),
 		},
 	});
 	// Plan 0.009 CH1a: the character's records and character.json; nothing reads its values yet.
@@ -1230,6 +1281,7 @@ async function main(): Promise<number> {
 		domains: [
 			machineDomain({
 				vitals: () => upkeep.current(),
+				network: () => surroundings.network(),
 				memoryGb: systemMemoryProbe,
 				loadedModels: async () =>
 					(await models.status()).models.filter((m) => m.status === "loaded").map((m) => m.name),
@@ -1349,6 +1401,7 @@ async function main(): Promise<number> {
 				await motivation.stop();
 				await selfModel.stop();
 				await upkeep.stop();
+				await surroundings.stop();
 				await decisions.stop();
 				await searxng.stop();
 				await passthrough.stop();
@@ -1415,6 +1468,7 @@ async function main(): Promise<number> {
 	plans.start();
 	selfModel.start();
 	upkeep.start();
+	surroundings.start();
 	motivation.start();
 	adenosine.start();
 	searxng.start();

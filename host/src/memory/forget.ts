@@ -35,6 +35,7 @@ import { factDocId, queueDocDeletions, queueFactDocDeletions } from "../facts/ni
 import { forgetFacts } from "../facts/store.ts";
 import type { Logger } from "../log.ts";
 import { forgetMotivationRecords } from "../motivation/actor.ts";
+import { forgetHostLabels } from "../self/lan.ts";
 import { forgetSelfFacts } from "../self/model.ts";
 import { accountsOf, type Contact, OWNER_CONTACT_ID, resolvePerson, scopeFor } from "../state/contacts.ts";
 import type { Db } from "../state/db.ts";
@@ -362,6 +363,8 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 		// The same replies are copied into reply-review rows (future training data): those go too, for good.
 		// The owner's statements about who they are (plan 0.010 self model).
 		forgetSelfFacts(db, [t.person.id]);
+		// The owner's names for hosts on the local network that name them (plan 0.018 W2: "Julia's phone").
+		forgetHostLabels(db, (label) => mentionsAny(label, t.names));
 		// The owner's notes about them (plan 0.005 Stage 2).
 		forgetNotes(db, [t.person.id]);
 		// The voice's shadow samples of messages to them and their labels, and their conversation's mood (plan 0.009).

@@ -100,6 +100,12 @@ export interface Config {
 		initiativeBudgetMin: number;
 		/** Plan 0.018 W1: how often load, memory and its users are probed (asleep too). */
 		vitalsS: number;
+		/**
+		 * Plan 0.018 W2 (owner decision 2): `off`, `passive` (the kernel's neighbour table) or `active` (also an
+		 * echo request to each address of the local subnet, at most `lanSweepsDaily` times a day).
+		 */
+		lan: "off" | "passive" | "active";
+		lanSweepsDaily: number;
 	};
 	/**
 	 * The fact ledger (plan 0.011): extraction during the day, the nightly merge into beliefs (and structured
@@ -366,6 +372,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			socialHours: hours(env.IYYE2_SOCIAL_HOURS ?? "9-21"),
 			initiativeBudgetMin: int(env, "IYYE2_INITIATIVE_BUDGET_MIN", 120, 0, 1440),
 			vitalsS: int(env, "IYYE2_SELF_VITALS_S", 600, 30, 86_400),
+			lan: oneOf(env, "IYYE2_SELF_LAN", ["off", "passive", "active"] as const, "active"),
+			lanSweepsDaily: int(env, "IYYE2_SELF_LAN_SWEEPS_DAILY", 3, 0, 24),
 		},
 		facts: {
 			extract: env.IYYE2_FACTS_EXTRACT !== "0",

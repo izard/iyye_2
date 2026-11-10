@@ -136,6 +136,7 @@ const HELP = [
 	"/email — mail Iyye received, and whether it answered",
 	"/self — what Iyye knows about itself (hardware, power, sleep, versions, place, people) and its gaps; /self set place|expected-hardware <text>, /self relation <contact> <text>",
 	"/self memory — what holds the memory, by Iyye's own processes; /self disk — the filesystems and Iyye's directories; /self runs — when the host was running, and the nights; /self history [field] [days]",
+	"/self network — the link, its last changes and the machines Iyye uses; /self hosts — who is on the local network; /self host <id> <name> | forget",
 	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened",
 	"/motivation report [days] — what each motivation opened, tried, resolved and was held back from (the trial period by default); /motivation trace <id>; /motivation useful <id> yes|no",
 	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts confirm <id>, /facts correct <id> <text>, /facts wrong <id>; /facts private|share <id>; /facts why <id>; /facts report; /facts orphans [restore | delete [confirm]]",

@@ -72,7 +72,11 @@ export type Facet =
 	| "storage"
 	| "devices"
 	| "models"
-	| "rhythm";
+	| "rhythm"
+	// Plan 0.018 W2, kept current by `SelfSurroundings` (`surroundings.ts`).
+	| "link"
+	| "lan"
+	| "peers";
 export type Source = "probe" | "owner" | "estimate";
 
 export interface SelfFact {
@@ -101,7 +105,7 @@ export const WINDOWS_MS: Record<"hardware" | "power" | "sleep" | "versions" | "n
  */
 const PLATFORM_PROBED: ReadonlySet<Facet> = new Set(["hardware", "power", "sleep"]);
 
-const STABLE: ReadonlySet<Facet> = new Set(["hardware", "versions", "network", "place"]);
+const STABLE: ReadonlySet<Facet> = new Set(["hardware", "versions", "network", "place", "peers"]);
 const RETAINED: ReadonlySet<Facet> = new Set(["hardware", "versions", "place"]);
 /** Single fields of otherwise volatile facets whose changes are kept (what the host runs under, which devices are there). */
 const STABLE_FIELDS: ReadonlySet<string> = new Set([
@@ -109,9 +113,12 @@ const STABLE_FIELDS: ReadonlySet<string> = new Set([
 	"devices.displays",
 	"devices.cameras",
 	"devices.audio",
+	"link.online",
+	"link.wifi",
+	"link.ethernet",
 ]);
 
-/** What `SelfUpkeep` adds to the owner's views (plan 0.018 W1). */
+/** What `SelfUpkeep` (plan 0.018 W1) and `SelfSurroundings` (W2) add to the owner's views. */
 export interface SelfBody {
 	command(args: string[]): string | null;
 	aboutLines(): string[];
@@ -209,7 +216,8 @@ export class SelfModel {
 	private running: Promise<void> | null = null;
 	/** Why a facet's last probe failed, until it succeeds. */
 	private readonly errors = new Map<Facet, string>();
-	private body: SelfBody | null = null;
+	/** One of each kind: attaching another of the same kind replaces it. */
+	private readonly bodyOf = new Map<string, SelfBody>();
 
 	constructor(deps: SelfModelDeps) {
 		this.d = {
@@ -226,9 +234,9 @@ export class SelfModel {
 		};
 	}
 
-	/** The vitals, runs and nights (`SelfUpkeep`): their `/self` views and about-me lines. */
+	/** The vitals, runs and nights (`SelfUpkeep`), the network and its hosts (`SelfSurroundings`): their `/self` views and about-me lines. */
 	attach(body: SelfBody): void {
-		this.body = body;
+		this.bodyOf.set(body.constructor.name, body);
 	}
 
 	start(): void {
@@ -395,8 +403,10 @@ export class SelfModel {
 		const [sub, ...rest] = args;
 		const now = this.d.now();
 		if (!sub) return this.report();
-		const fromBody = this.body?.command(args);
-		if (fromBody !== null && fromBody !== undefined) return fromBody;
+		for (const body of this.bodyOf.values()) {
+			const reply = body.command(args);
+			if (reply !== null) return reply;
+		}
 		if (sub === "set" && (rest[0] === "place" || rest[0] === "expected-hardware")) {
 			const text = rest.slice(1).join(" ").trim().slice(0, 300);
 			if (!text) return `usage: /self set ${rest[0]} <text>`;
@@ -438,7 +448,7 @@ export class SelfModel {
 				.run(field[0], field[1]).changes;
 			return n ? "cleared" : "nothing to clear";
 		}
-		return "usage: /self · /self memory · /self disk · /self runs · /self history [field] [days] · /self set place <text> · /self set expected-hardware <text> · /self relation <contact> <text> · /self clear …";
+		return "usage: /self · /self memory · /self disk · /self runs · /self network · /self hosts · /self history [field] [days] · /self set place <text> · /self set expected-hardware <text> · /self relation <contact> <text> · /self clear …";
 	}
 
 	// ---------------------------------------------------------------- reading
@@ -645,7 +655,7 @@ export class SelfModel {
 				`- Disk and memory: ${r.diskFreeGb} GB of ${r.diskTotalGb} GB free, ${r.memAvailableGb} GB memory available; services: ${svc.length ? svc.join(", ") : "all fine"} [${age(machine.at)}]`,
 			);
 		}
-		lines.push(...(this.body?.aboutLines() ?? []));
+		for (const body of this.bodyOf.values()) lines.push(...body.aboutLines());
 		const live = this.d.live();
 		const v = this.describeFacet("versions");
 		lines.push(
@@ -700,7 +710,10 @@ export class SelfModel {
 		}
 		const gaps = this.gaps();
 		out.push(gaps.length ? "gaps (curiosity signals):" : "no gaps", ...gaps.map((g) => `  ${g.kind}: ${g.why}`));
-		if (this.body) out.push("more: /self memory · /self disk · /self runs · /self history [field] [days]");
+		if (this.bodyOf.size)
+			out.push(
+				"more: /self memory · /self disk · /self runs · /self network · /self hosts · /self history [field] [days]",
+			);
 		out.push("set: /self set place <text> · /self set expected-hardware <text> · /self relation <contact> <text>");
 		return out.join("\n");
 	}

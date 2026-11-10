@@ -11,6 +11,10 @@
  *   not ("retrying in 12 s" changes on every retry).
  * - The error text keeps no retry countdown and no bot token (a second line
  *   of defence: the poller scrubs its own token already).
+ * - Every change of state is also a row in `self_changes` (facet
+ *   `services`; plan 0.018 W2): the table itself keeps only the current
+ *   state, and W0 could place an outage only to within the two hours of the
+ *   machine observation.
  * - A service the host no longer reports (taken out of the configuration) is
  *   no longer watched, and its row goes. 2026-10-20: the background model on
  *   the MBP was removed while "unreachable", and its row held
@@ -56,6 +60,10 @@ export function recordServices(db: Db, probe: ServiceProbe, now: Date): void {
 				| undefined;
 			const failing = !OK_SERVICE_STATES.has(s.state);
 			const error = failing && s.detail ? cleanError(s.detail) : null;
+			if (old?.state !== s.state)
+				db.prepare(
+					"INSERT INTO self_changes (id, facet, field, old_json, new_json, source, at) VALUES (?, 'services', ?, ?, ?, 'probe', ?)",
+				).run(crypto.randomUUID(), name, old ? JSON.stringify(old.state) : null, JSON.stringify(s.state), at);
 			if (!old) {
 				db.prepare(
 					"INSERT INTO service_status (name, state, since, last_error, last_error_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",

@@ -12,6 +12,7 @@ import { describe, test } from "node:test";
 import { handleOwnerCommand } from "../src/kernel/commands.ts";
 import { silentLogger } from "../src/log.ts";
 import { forgetRecords, forgetTarget } from "../src/memory/forget.ts";
+import { labelHost, listHosts, recordHosts } from "../src/self/lan.ts";
 import { describeModels, latestMachine, SelfModel, selfNoteFor } from "../src/self/model.ts";
 import {
 	type Exec,
@@ -383,9 +384,29 @@ describe("the self model", () => {
 		assert.equal(selfNoteFor("contact:jacob-1", r.model, r.db), null, "a contact's turn never gets it");
 		assert.equal(selfNoteFor("owner", r.model, r.db), about);
 
+		// The owner's names for hosts on the local network (plan 0.018 W2): one names Jacob, one does not.
+		recordHosts(
+			r.db,
+			[
+				{ ip: "192.168.1.20", mac: "aa:aa:aa:00:00:01" },
+				{ ip: "192.168.1.21", mac: "aa:aa:aa:00:00:02" },
+			],
+			new Date(),
+		);
+		const [h1, h2] = listHosts(r.db);
+		labelHost(r.db, h1!.id, "Jacob's phone");
+		labelHost(r.db, h2!.id, "the printer");
+
 		const t = forgetTarget(r.db, getContact(r.db, "jacob-1")!);
 		assert.ok(typeof t !== "string");
 		forgetRecords(r.db, t, "owner_web", new Date().toISOString());
+		assert.deepEqual(
+			listHosts(r.db)
+				.map((h) => h.label ?? "unnamed")
+				.sort(),
+			["the printer", "unnamed"],
+			"the host stays, unnamed",
+		);
 		assert.equal(r.model.value("social", "relation:jacob-1"), null);
 		assert.equal(
 			(r.db.prepare("SELECT count(*) AS n FROM self_changes WHERE facet = 'social'").get() as { n: number }).n,

@@ -1,6 +1,6 @@
 # Iyye 2.0.018 — A Coherent Model of Itself and Its Surroundings, and More Initiative: Implementation Plan
 
-2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`) and W1 are done; W2 is next.
+2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done; W3 is next.
 
 Owner's direction (2026-11-09): Iyye should do more work on its own. The top priority is to build and keep a coherent model of itself and its surroundings: CPU, GPU, memory, disk, hardware, the LAN, and the people it talks with.
 
@@ -178,7 +178,7 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 | --- | --- | --- |
 | **W0** (done 2026-11-09) | Spike, no behaviour. `scripts/world-spike.ts <db copy>` replays the last five weeks through the baseline, regularity and recurring-request rules. Each probe is run on the Spark and the Mac for what it returns and what it costs. | It finds the nightly network gap and the news request, and lists every other regularity it would have raised, for the owner to judge. Thresholds are set from that. Notes in `host/SPIKE-0.018.md`. |
 | **W1** (done 2026-11-09) | The lifecycle, compute, memory, storage, devices, models and rhythm facets; `self_readings`; the vitals probe; `/self` views; `machine` and `system_status` read the facets. Swap on Linux. | `/self` answers "what uses the memory", "what uses the disk" and "when was I not running" from records. No new signal. |
-| **W2** | The network, lan (passive) and peers facets; the dependency map; causes in service signals and notices. | A simulated network loss gives one finding that names it. The MBP's state says which of the two cases it is. |
+| **W2** (done 2026-11-10) | The link, lan and peers facets; the dependency map; causes in service signals and notices. | A simulated network loss gives one finding that names it. The MBP's state says which of the two cases it is. |
 | **W3** | Baselines, regularities and forecasts; their signals journal-only for a week, then acting; the confirming question. | The week's journal against the owner's judgement: no more than one unwanted signal a day. |
 | **W4** | Investigations of surprises; `disk_usage`; `self_model`; the about-me note for Iyye's own work. | A staged memory drop is explained with cited readings. |
 | **W5** | People cards; follow-ups in a person's usual hours. | `/person` shows the card; `/forget` leaves nothing of it. |
@@ -195,6 +195,22 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 - The `machine` observation and `system_status` read `SelfUpkeep.current()`.
 - One pass with every probe on the Spark: 195 ms.
 - **Not in W1:** a model's measured speed (no request timings are recorded yet), the night's parts (only its start, end, window and completion), pressure, GPU and temperatures on macOS (no unprivileged source), and staleness of the new facets as a curiosity signal (W3, with the other signals).
+
+### W2 as built (2026-11-10)
+
+- `self/network.ts` (the probes), `self/lan.ts` (`lan_hosts`, migration 045), `self/surroundings.ts` (`SelfSurroundings`), `IYYE2_SELF_LAN` (`active` by default), `IYYE2_SELF_LAN_SWEEPS_DAILY` (3).
+- **The link** is read every minute from the kernel's files (`/sys/class/net`, `/proc/net/route`; 6 ms, no process started): a way out or not, Wi-Fi and Ethernet up or down. Its changes are rows in `self_changes` when they happen. Signal, rate and whether the gateway answers: every 10 minutes. It is the facet `link`; the older `network` facet (the opaque network id the place estimate follows) is unchanged.
+- **Every change of a service's state** is a row in `self_changes` too (facet `services`), within the minute.
+- **The local network:** the neighbour table every 30 minutes, and the active probe (one echo request to each address of the subnet, one at a time: 253 addresses took 312 s on the Spark and found 9 hosts where the table alone had 3). At most 3 a day, 4 hours apart, awake, online, only a private subnet of /22 or smaller. A host is a hash of its hardware address, its private address, first and last seen and the days seen; `/self hosts`, `/self host <id> <name>`, `/self host <id> forget`. The gateway and the machines Iyye uses are named by Iyye itself. `/forget <person>` removes the owner's names for hosts that name the person.
+- **Peers:** each machine Iyye uses is `answering`, `on the LAN, not answering`, `not on the LAN`, or unknown while the network is away, from the neighbour table and the last error (a refused connection is an answer from the machine itself). Changes are recorded.
+- **Causes** (`needs`, declared in `main.ts`): Telegram, web search, the place estimate and email need a way out; each remote model needs its machine.
+  - Signals: no default route is one `network_away` signal, and the services that need the network are not signalled beside it; a failing remote model's signal says which case its machine is in.
+  - The `machine` observation: the loss and the return are one change each, naming what needs the network; the link's change asks for a look at once (`Observer.lookNow`) instead of within two hours.
+- **Not in W2:**
+  - "The internet" is never claimed to be there or gone while a default route exists (decision 3): only the certain case is a cause.
+  - On macOS Wi-Fi and Ethernet are not told apart and the signal is not read.
+  - A question about an unknown host is W4, and whether the nightly gap is expected is W3. Until then each night gives one finding and one notice about the network, and one finding when it is back.
+- `signals.ts` changed: a new M4 trial period starts with this.
 
 ## 7. Owner decisions (accepted 2026-11-09)
 
@@ -227,7 +243,8 @@ The owner accepted every recommendation below, except decision 2: the LAN may be
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `IYYE2_SELF_VITALS_S` | `600` | the vitals probe's period (built, W1) |
-| `IYYE2_SELF_LAN` | `active` | `off`, `passive`, `active` (passive plus the rare probes) |
+| `IYYE2_SELF_LAN` | `active` | `off`, `passive`, `active` (passive plus the rare probes; built, W2) |
+| `IYYE2_SELF_LAN_SWEEPS_DAILY` | `3` | active probes of the subnet a day (built, W2) |
 | `IYYE2_SELF_BASELINE_DAYS` | `28` | the baseline's window |
 | `IYYE2_ROUTINES_MAX` | `3` | active routines |
 | `IYYE2_MAINTAIN` | `report` | `off`, `report`, `allowed` |

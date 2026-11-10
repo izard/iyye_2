@@ -46,6 +46,13 @@ export interface SignalSources {
 	healing: () => { model: string; attempts: number; gaveUp: boolean; lastError: string }[];
 	/** The self model's sleep facet: did the computer sleep on battery in the last day, and how long. */
 	sleep: () => { sleptOnBattery: boolean; asleepMinutes: number } | null;
+	/**
+	 * The link (plan 0.018 W2): whether there is a way out, since when, and the services that need one. While
+	 * there is none, their outages are this one signal's, not one each.
+	 */
+	network?: () => { online: boolean | null; since: string | null; dependents: string[] } | null;
+	/** Why a failing service fails, when the cause is outside it and known (a machine that is not on the LAN). */
+	cause?: (service: string) => string | null;
 }
 
 const H = 3_600_000;
@@ -101,11 +108,28 @@ export function collectSignals(s: SignalSources): Signal[] {
 				});
 			}
 	}
+	// The network away (plan 0.018 W2): one signal for the cause. It weighs as an outage does, by its duration.
+	const net = s.network?.() ?? null;
+	const offline = net?.online === false;
+	if (net && offline) {
+		const hours = net.since ? Math.max(0, s.now.getTime() - Date.parse(net.since)) / H : 0;
+		add({
+			motivation: "self_preservation",
+			kind: "network_away",
+			cluster: `network@${net.since ?? "unknown"}`,
+			evidence: ["self_facts:link:online"],
+			weight: Math.min(0.9, 0.6 + 0.05 * hours),
+			text: `the network has been away for ${hours < 1 ? `${Math.round(hours * 60)} min` : `${hours.toFixed(1)} h`} (no default route)${net.dependents.length ? `; ${net.dependents.join(", ")} cannot be reached without it` : ""}`,
+		});
+	}
 	// Services, from `service_status` (M1): current, with the outage's duration and its cause. A long outage
 	// weighs more (0.6, +0.05 an hour, at most 0.9: 2026-10-07's eight hours of "retrying" sat at 0.59).
 	// The episode (since when) is in the cluster: a later outage of the same service is a new one.
 	for (const svc of serviceStatuses(db)) {
 		if (OK_SERVICE_STATES.has(svc.state)) continue;
+		// What needs the network fails with it: that is the network's signal, above.
+		if (net && offline && net.dependents.includes(svc.name)) continue;
+		const why = s.cause?.(svc.name) ?? null;
 		const hours = Math.max(0, s.now.getTime() - Date.parse(svc.since)) / H;
 		add({
 			motivation: "self_preservation",
@@ -113,7 +137,7 @@ export function collectSignals(s: SignalSources): Signal[] {
 			cluster: `service:${svc.name}@${svc.since}`,
 			evidence: [`service_status:${svc.name}`],
 			weight: Math.min(0.9, 0.6 + 0.05 * hours),
-			text: `${svc.name} has been ${svc.state} for ${hours < 1 ? `${Math.round(hours * 60)} min` : `${hours.toFixed(1)} h`}${svc.last_error ? `: ${svc.last_error}` : ""}`,
+			text: `${svc.name} has been ${svc.state} for ${hours < 1 ? `${Math.round(hours * 60)} min` : `${hours.toFixed(1)} h`}${why ? ` (${why})` : svc.last_error ? `: ${svc.last_error}` : ""}`,
 		});
 	}
 	for (const h of s.healing())
