@@ -60,6 +60,7 @@ import { openPlansNote, PlanRunner } from "./kernel/plans.ts";
 import { recover } from "./kernel/recovery.ts";
 import { ReminderCommands } from "./kernel/reminder-commands.ts";
 import { Rhythm, windowStartFor } from "./kernel/rhythm.ts";
+import { RoutineRunner, routineNote } from "./kernel/routines.ts";
 import { Scheduler } from "./kernel/scheduler.ts";
 import { wakeMessage, wakeProblems } from "./kernel/wake-check.ts";
 import { consoleLogger, type Logger } from "./log.ts";
@@ -81,6 +82,7 @@ import { pidAlive, RouterProcess } from "./models/router.ts";
 import { MotivationActor, motivationNamed } from "./motivation/actor.ts";
 import { InitiativeLedger, SHARES } from "./motivation/budget.ts";
 import { makeComposer } from "./motivation/compose.ts";
+import { recurringRequests } from "./motivation/detectors.ts";
 import {
 	behaviourFingerprint,
 	ensureTrial,
@@ -107,6 +109,7 @@ import { recentReminderNote, remindersChip, remindersToday } from "./state/commi
 import { getContact } from "./state/contacts.ts";
 import { type Db, openDb } from "./state/db.ts";
 import { emailInboxReport, spoofNoticesToday } from "./state/email-inbox.ts";
+import type { EventRow } from "./state/events.ts";
 import { getJob } from "./state/jobs.ts";
 import { getKv } from "./state/kv.ts";
 import { seedSelectedModel } from "./state/models.ts";
@@ -478,6 +481,8 @@ async function main(): Promise<number> {
 			[
 				recentReminderNote(db, scope, new Date()),
 				recentSentNote(db, scope, new Date()),
+				// What a routine sent here on its own today (plan 0.018 W6), so a reply to it makes sense.
+				routineNote(db, scope, new Date()),
 				// What this conversation planned and what is still open (2026-10-13): records, not memory.
 				openPlansNote(db, scope),
 				// The owner's notes shared with this person (plan 0.005 Stage 2); owner-only notes never.
@@ -635,6 +640,7 @@ async function main(): Promise<number> {
 			log.info("background: step settled", { id: job.id, origin: job.origin });
 			investigations.onStepSettled(job);
 			plans.onStepSettled(job);
+			routines.onStepSettled(job);
 		},
 	});
 	// Plan 0.011 F1: facts extracted during the day, one document at a time, on background work's rules.
@@ -904,6 +910,16 @@ async function main(): Promise<number> {
 		outbox,
 		log,
 		contactMax: config.commitments.contactPlansMax,
+		routinesMax: config.self.routinesMax,
+	});
+	// Plan 0.018 W6: routines the owner approved, each run a background step with the web, delivered by the host.
+	const routines = new RoutineRunner({
+		db,
+		worker: background,
+		outbox,
+		mode: () => rhythm.mode(),
+		online: () => surroundings.network().online,
+		log,
 	});
 	// Plan 0.010 M0b: the extended self model (observe and record; owner-only facets).
 	const selfModel = new SelfModel({
@@ -1039,6 +1055,24 @@ async function main(): Promise<number> {
 		log,
 		mode: () => rhythm.mode(),
 		notifyOwner: (req) => outbox.notifyOwner(req),
+		// Plan 0.018 W6: a request the owner keeps making, as a routine in the chat it is made in.
+		routineIdea: (cluster) => {
+			const r = recurringRequests(db, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone).find(
+				(x) => x.cluster === cluster,
+			);
+			const event = r
+				? (db.prepare("SELECT * FROM events WHERE id = ?").get(r.eventId) as EventRow | undefined)
+				: null;
+			if (!r || !event || event.channel === "email") return null;
+			return {
+				task: r.task,
+				atMinute: r.atMinute,
+				schedule: r.schedule,
+				days: r.days,
+				route: Outbox.chatRouteFor(event),
+				eventId: r.eventId,
+			};
+		},
 		// Plan 0.018 W5: a follow-up goes out in an hour the person usually writes in (the host's local hours).
 		usualHour: (personId, hour) => {
 			const person = getContact(db, personId);
@@ -1125,6 +1159,8 @@ async function main(): Promise<number> {
 		sources: {
 			selfGaps: () => selfModel.gaps(),
 			healing: () => models.healingReport(),
+			// Plan 0.018 W6: when the owner usually asks for something, in the host's own hours.
+			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 			sleep: () => {
 				// Only a fresh reading: an old one (a probe that stopped, or another machine's, 2026-10-09) says nothing now.
 				const age = selfModel.ageMs("sleep", new Date());
@@ -1478,6 +1514,7 @@ async function main(): Promise<number> {
 				await investigations.stop();
 				await commitmentClock.stop();
 				await plans.stop();
+				await routines.stop();
 				await motivation.stop();
 				await selfModel.stop();
 				await upkeep.stop();
@@ -1547,6 +1584,7 @@ async function main(): Promise<number> {
 	investigations.start();
 	commitmentClock.start();
 	plans.start();
+	routines.start();
 	selfModel.start();
 	upkeep.start();
 	surroundings.start();

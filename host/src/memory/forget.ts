@@ -33,6 +33,7 @@ import { forgetReplyReviews } from "../decisions/reply-review.ts";
 import { forgetBeliefs, forgetEvidenceOf } from "../facts/beliefs.ts";
 import { factDocId, queueDocDeletions, queueFactDocDeletions } from "../facts/night.ts";
 import { forgetFacts } from "../facts/store.ts";
+import { forgetRoutineTexts } from "../kernel/routines.ts";
 import type { Logger } from "../log.ts";
 import { forgetMotivationRecords } from "../motivation/actor.ts";
 import { forgetHostLabels } from "../self/lan.ts";
@@ -365,6 +366,8 @@ export function forgetRecords(db: Db, t: ForgetTarget, by: string, at: string): 
 		forgetSelfFacts(db, [t.person.id]);
 		// The owner's names for hosts on the local network that name them (plan 0.018 W2: "Julia's phone").
 		forgetHostLabels(db, (label) => mentionsAny(label, t.names));
+		// What a routine sent that names them (plan 0.018 W6: a digest of the day's news may).
+		forgetRoutineTexts(db, (text) => mentionsAny(text, t.names));
 		// The owner's notes about them (plan 0.005 Stage 2).
 		forgetNotes(db, [t.person.id]);
 		// The voice's shadow samples of messages to them and their labels, and their conversation's mood (plan 0.009).

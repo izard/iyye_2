@@ -55,6 +55,7 @@ export interface CommandContext {
 		approve(ref: string, by: string): string;
 		cancel(ref: string, by: string): string;
 		markTaskDone?(ref: string, step: number, by: string, scope: string | null): string;
+		setRoutineTime?(ref: string, time: string): string;
 	} | null;
 	/** /sent: messages sent for the owner (plan 0.008). */
 	sentReport?: (() => string) | null;
@@ -132,6 +133,7 @@ const HELP = [
 	"/reminders — your coming reminders; /commitments — everyone's, with their states",
 	"/cancel <id> — cancel a reminder (yours or a contact's)",
 	"/plans — plans and their states; /plan <id> — its steps and evidence",
+	"/plan time <id> HH:MM — another time of day for a routine (something Iyye does every day on its own, once you approved it)",
 	"/sent — messages Iyye sent to people for you, with their delivery",
 	"/email — mail Iyye received, and whether it answered",
 	"/self — what Iyye knows about itself (hardware, power, sleep, versions, place, people) and its gaps; /self set place|expected-hardware <text>, /self relation <contact> <text>",
@@ -341,9 +343,13 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 				};
 			if (sub === "done" && ref && args.length === 3 && /^\d$/.test(args[2]!) && ctx.plans.markTaskDone)
 				return { handled: true, reply: ctx.plans.markTaskDone(ref, Number(args[2]), ctx.issuer, null) };
-			if (sub && args.length === 1 && sub !== "approve" && sub !== "cancel" && sub !== "done")
+			if (sub === "time" && ref && args.length === 3 && ctx.plans.setRoutineTime)
+				return { handled: true, reply: ctx.plans.setRoutineTime(ref, args[2]!) };
+			if (sub && args.length === 1 && !["approve", "cancel", "done", "time"].includes(sub))
 				return { handled: true, reply: ctx.plans.detail(sub) };
-			return usage("/plan <id> | /plan approve <id> | /plan cancel <id> | /plan done <id> <step>");
+			return usage(
+				"/plan <id> | /plan approve <id> | /plan cancel <id> | /plan done <id> <step> | /plan time <id> HH:MM",
+			);
 		}
 		case "/opportunities":
 			return {

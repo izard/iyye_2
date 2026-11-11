@@ -1,6 +1,6 @@
 # Iyye 2.0.018 — A Coherent Model of Itself and Its Surroundings, and More Initiative: Implementation Plan
 
-2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done. W3 is built; its exit check (a week of its journal against the owner's judgement) is open. W4 and W5 are done, and so is decision 8; W6 is next.
+2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done. W3 is built; its exit check (a week of its journal against the owner's judgement) is open. W4, W5 and W6 are done, and so is decision 8; W7 is next.
 
 Owner's direction (2026-11-09): Iyye should do more work on its own. The top priority is to build and keep a coherent model of itself and its surroundings: CPU, GPU, memory, disk, hardware, the LAN, and the people it talks with.
 
@@ -182,7 +182,7 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 | **W3** (built 2026-11-10; the week's check open) | Baselines, regularities and forecasts; their signals journal-only for a week, then acting; the confirming question. | The week's journal against the owner's judgement: no more than one unwanted signal a day. |
 | **W4** (done 2026-11-10) | Investigations of surprises; `disk_usage`; `self_model`; the about-me note for Iyye's own work. | A staged memory drop is explained with cited readings. |
 | **W5** (done 2026-11-11) | People cards; follow-ups in a person's usual hours. | `/person` shows the card; `/forget` leaves nothing of it. |
-| **W6** | Routines. | The news request is proposed, approved, run and delivered; a skipped run is reported. |
+| **W6** (done 2026-11-11; its first live run is the owner's) | Routines. | The news request is proposed, approved, run and delivered; a skipped run is reported. |
 | **W7** | Maintenance, report-only, then allowed actions. | `/maintain` figures match the disk; an allowed action is recorded with what it removed. |
 
 **Exit gate for the plan:** over two weeks, every surprise in the records has a cited explanation or a question to the owner; the three cases in §1 are handled; notices stay under their caps; the owner marks more of Iyye's own work useful than not (`/motivation useful`).
@@ -249,6 +249,18 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 - **Not in W5:** gaps on a card are shown, not asked about (the relation is asked already, plan 0.010 M1; nobody is asked for an email address).
 - `actor.ts` changed: a new M4 trial period starts with this.
 
+### W6 as built (2026-11-11)
+
+- **The detector** (`motivation/detectors.ts`, `recurringRequests`): the owner's turns of the last 14 days that were answered with read-only tools alone, grouped by likeness (chained), on at least 4 different local days. On a copy of the live records it finds one: 11 days of 14, on Telegram. It is the agency signal `request_recurring`; a routine alike that is proposed, running, or was dropped in the last 30 days silences it.
+- **The proposal** (`MotivationActor.proposeRoutine`, no model call): a plan of Iyye's with one `routine` step: the owner's latest wording as the task, the first quartile of the days' first asks rounded down to the quarter hour as the time (08:45 on the live records), daily (weekdays or weekends when every day was one), and the chat the request was last made in as the route. It waits for `/plan approve` like every plan of Iyye's, lapses unapproved after 3 days, and `/plan time <id> HH:MM` moves it. Only Iyye can propose one (`plan_propose` cannot name it), and at most `IYYE2_ROUTINES_MAX` (3) are approved at a time.
+- **A run** (`kernel/routines.ts`, `RoutineRunner`; `routine_runs`, migration 047): one background step a day at its time, in a session under the web investigations' scope (the read-only toolkits and the web on Iyye's own daily web budget; never `messaging`). Its answer is accepted only when it cites at least one URL and every URL it cites was returned by the web tools in that session; up to 3 tries, then the day has failed.
+- **Delivery** is the host's: `Outbox.sendOwn` on the plan's route, labelled "Your routine, HH:MM (…)". A reply in that chat finds what was sent in a request-local `<routine>` note for 12 hours; the text is not stored in memory.
+- **A day that cannot run** (asleep, the network away, the host not running) waits up to 3 hours past its time, then is a `skipped` row with its reason; the next delivery says which days were not done and why, once.
+- **Silence:** after 7 deliveries in a row with no message from the owner in that chat within 3 hours of each, Iyye asks once whether to keep it.
+- A routine never completes its plan; `/plan cancel` ends it. `/forget <person>` removes what a routine sent that names the person.
+- **Not in W6:** a run with the real model and the real web has not been made here; the first one after the owner's approval is the live check. The routine's message is not rephrased by the voice.
+- `detectors.ts`, `signals.ts` and `actor.ts` changed: a new M4 trial period starts with this.
+
 ## 7. Owner decisions (accepted 2026-11-09)
 
 The owner accepted every recommendation below, except decision 2: the LAN may be probed actively as well, rarely. Decision 9: this plan goes ahead now. Decision 10: the owner moved the host into `tmux` on 2026-11-09.
@@ -283,5 +295,5 @@ The owner accepted every recommendation below, except decision 2: the LAN may be
 | `IYYE2_SELF_LAN` | `active` | `off`, `passive`, `active` (passive plus the rare probes; built, W2) |
 | `IYYE2_SELF_LAN_SWEEPS_DAILY` | `3` | active probes of the subnet a day (built, W2) |
 | `IYYE2_SELF_SIGNALS` | `journal` | `journal`: W3's new reasons are recorded only; `act`: they count and notify (built, W3) |
-| `IYYE2_ROUTINES_MAX` | `3` | active routines |
+| `IYYE2_ROUTINES_MAX` | `3` | routines approved at a time (built, W6) |
 | `IYYE2_MAINTAIN` | `report` | `off`, `report`, `allowed` |

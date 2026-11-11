@@ -29,6 +29,12 @@
  *   every step is done. A plan of tasks only, proposed by the owner on any
  *   of their own channels, is authorized at once: it arranges nothing.
  *
+ * - **routine** (plan 0.018 W6): the owner's own recurring request, done by
+ *   Iyye every day at a time (`kernel/routines.ts` runs it). Only Iyye
+ *   proposes one, from the owner's requests, so it always waits for the
+ *   owner's approval; it never completes, and `/plan cancel` ends it. At most
+ *   `routinesMax` are approved at a time.
+ *
  * **Authorization** (HLD §3, security invariants): a plan runs only once
  * authorized. It is authorized at once only when the owner proposed it in
  * the local web chat and every step is internal or reminds that web chat.
@@ -76,7 +82,9 @@ export type ProposedStep =
 	| { kind: "investigate"; question: string }
 	| { kind: "remind"; text: string; when: string }
 	| { kind: "other"; description: string }
-	| { kind: "task"; description: string };
+	| { kind: "task"; description: string }
+	/** Only in Iyye's own proposals: `plan_propose` cannot name it. */
+	| { kind: "routine"; task: string; atMinute: number; days: "daily" | "weekdays" | "weekends" };
 
 export interface Proposal {
 	intent: string;
@@ -111,6 +119,8 @@ export interface PlanRunnerDeps {
 	 */
 	staleAfterMs?: number;
 	staleGraceMs?: number;
+	/** Routines approved at a time (IYYE2_ROUTINES_MAX). */
+	routinesMax?: number;
 	timezone?: string;
 }
 
@@ -131,6 +141,7 @@ export class PlanRunner {
 			ownProposalTtlMs: 3 * 86_400_000,
 			staleAfterMs: 3 * 86_400_000,
 			staleGraceMs: 2 * 86_400_000,
+			routinesMax: 3,
 			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 			...deps,
 		};
@@ -187,6 +198,15 @@ export class PlanRunner {
 				const question = s.question.trim();
 				if (!question) return no(`Not proposed: step ${i + 1} has no question.`);
 				steps.push({ kind: "investigate", question, status: "pending" });
+			} else if (s.kind === "routine") {
+				const task = s.task.replace(/\s+/g, " ").trim().slice(0, 400);
+				if (p.principal !== "iyye" || p.steps.length !== 1)
+					return no(
+						"Not proposed: a routine is proposed only by Iyye, from the owner's own requests, as a plan of its own.",
+					);
+				if (!task || !Number.isInteger(s.atMinute) || s.atMinute < 0 || s.atMinute > 1439)
+					return no(`Not proposed: step ${i + 1} is not a routine with a task and a time.`);
+				steps.push({ kind: "routine", task, at_minute: s.atMinute, days: s.days, status: "pending" });
 			} else if (s.kind === "remind") {
 				const text = s.text.trim();
 				if (!text) return no(`Not proposed: step ${i + 1} says nothing to remind about.`);
@@ -237,6 +257,15 @@ export class PlanRunner {
 					: `Plan ${id.slice(0, 8)} is authorized and starts now. Reminders go out at their times; the other steps run one at a time, in order:\n${list}\nEach step is done only with its evidence (a grounded answer, a delivered reminder, the person's word for their own tasks); tell the person exactly these steps and times.`,
 			};
 		}
+		if (p.principal === "iyye" && steps[0]?.kind === "routine") {
+			const days = Math.round(this.d.ownProposalTtlMs / 86_400_000);
+			const ref = id.slice(0, 8);
+			this.notify(
+				`plan-proposed:${id}`,
+				`${intent}\n${list}\nShall I? /plan approve ${ref} to let it run, /plan time ${ref} HH:MM for another time, /plan cancel ${ref} if not. Unless you approve it, I drop it in ${days} day(s).`,
+			);
+			return { id, text: `Routine ${ref} proposed to the owner.` };
+		}
 		if (p.principal === "iyye") {
 			const days = Math.round(this.d.ownProposalTtlMs / 86_400_000);
 			this.notify(
@@ -263,6 +292,13 @@ export class PlanRunner {
 		const p = this.find(ref);
 		if (typeof p === "string") return p;
 		if (p.state !== "proposed") return `plan ${p.id.slice(0, 8)} is ${p.state}, not waiting for approval`;
+		if (stepsOf(p).some((s) => s.kind === "routine")) {
+			const running = plansIn(this.d.db, ["authorized", "active", "suspended"]).filter((x) =>
+				stepsOf(x).some((s) => s.kind === "routine"),
+			).length;
+			if (running >= this.d.routinesMax)
+				return `not approved: ${running} routines run already (at most ${this.d.routinesMax}); cancel one first (/plans)`;
+		}
 		const ok = updatePlan(this.d.db, p.id, this.iso(), { state: "authorized", authorization: `owner:${by}` }, [
 			"proposed",
 		]);
@@ -293,6 +329,23 @@ export class PlanRunner {
 		queueMicrotask(() => void this.tick());
 		const left = steps.filter((x) => x.status !== "done").length;
 		return `done: step ${stepNo} of plan ${p.id.slice(0, 8)} (${quote(s.description, 120)}); ${left ? `${left} step(s) left` : "every step is done"}`;
+	}
+
+	/** `/plan time <id> HH:MM`: another time of day for a routine, proposed or running. */
+	setRoutineTime(ref: string, time: string): string {
+		const p = this.find(ref);
+		if (typeof p === "string") return p;
+		const steps = stepsOf(p);
+		const i = steps.findIndex((s) => s.kind === "routine");
+		const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time);
+		if (i < 0) return `plan ${p.id.slice(0, 8)} is not a routine`;
+		if (!m) return "give the time as HH:MM, for example 08:30";
+		if (!OPEN_PLAN_STATES.includes(p.state)) return `plan ${p.id.slice(0, 8)} is ${p.state}`;
+		const s = steps[i] as Extract<PlanStep, { kind: "routine" }>;
+		steps[i] = { ...s, at_minute: Number(m[1]) * 60 + Number(m[2]) };
+		if (!updatePlan(this.d.db, p.id, this.iso(), { steps }, [p.state]))
+			return `plan ${p.id.slice(0, 8)} changed meanwhile; look again`;
+		return `the routine ${p.id.slice(0, 8)} is now at ${minuteText(steps[i].at_minute)}${p.state === "proposed" ? ` (still waiting for /plan approve ${p.id.slice(0, 8)})` : ""}`;
 	}
 
 	/** `/plan cancel <id>`: abandoned; its coming reminders are cancelled and its queued steps dropped. */
@@ -443,8 +496,11 @@ export class PlanRunner {
 			updatePlan(this.d.db, p.id, this.iso(), { state: "active", reason: null });
 			p = getPlan(this.d.db, p.id)!;
 		}
-		// Reminders run on their own clocks and tasks wait for the person: neither holds the others back.
-		const i = steps.findIndex((s) => s.kind !== "remind" && s.kind !== "task" && s.status !== "done");
+		// Reminders run on their own clocks and tasks wait for the person: neither holds the others back. A routine
+		// has its own runner and is never done, so a plan with one never completes.
+		const i = steps.findIndex(
+			(s) => s.kind !== "remind" && s.kind !== "task" && s.kind !== "routine" && s.status !== "done",
+		);
 		if (i < 0) {
 			if (steps.every((s) => s.status === "done")) this.complete(p, steps);
 			return;
@@ -471,6 +527,8 @@ export class PlanRunner {
 		const steps = stepsOf(p);
 		this.d.db.transaction(() => {
 			for (const [k, s] of steps.entries()) {
+				// A routine runs from now on, on its own clock (`kernel/routines.ts`).
+				if (s.kind === "routine" && s.status === "pending") steps[k] = { ...s, status: "running" };
 				if (s.kind !== "remind" || s.status !== "pending") continue;
 				const id = this.d.newId();
 				insertCommitment(this.d.db, {
@@ -703,9 +761,16 @@ function investigatePrompt(p: PlanRow, question: string): string {
 function stepText(s: PlanStep): string {
 	if (s.kind === "investigate") return `look into: ${quote(s.question, 200)}`;
 	if (s.kind === "remind") return `remind at ${describeAt(new Date(s.due_at))}: ${quote(s.text, 200)}`;
+	if (s.kind === "routine")
+		return `${s.days === "daily" ? "every day" : `on ${s.days}`} at ${minuteText(s.at_minute)}, on my own: ${quote(s.task, 300)}`;
 	if (s.kind === "task")
 		return `the person does: ${quote(s.description, 200)}${s.status === "done" && s.done_at ? ` (done ${s.done_at.slice(0, 10)})` : ""}`;
 	return `${quote(s.description, 200)} (no tool can do this)`;
+}
+
+/** "09:15" for minutes after midnight. */
+export function minuteText(minute: number): string {
+	return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 }
 
 /** Words a person or the model wrote: quoted and clipped, so they read as data. */

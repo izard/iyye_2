@@ -112,6 +112,8 @@ export interface Config {
 		 * The question about a regularity is asked either way.
 		 */
 		signals: "journal" | "act";
+		/** Plan 0.018 W6: routines approved at a time. */
+		routinesMax: number;
 	};
 	/**
 	 * The fact ledger (plan 0.011): extraction during the day, the nightly merge into beliefs (and structured
@@ -381,6 +383,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			lan: oneOf(env, "IYYE2_SELF_LAN", ["off", "passive", "active"] as const, "active"),
 			lanSweepsDaily: int(env, "IYYE2_SELF_LAN_SWEEPS_DAILY", 3, 0, 24),
 			signals: oneOf(env, "IYYE2_SELF_SIGNALS", ["journal", "act"] as const, "journal"),
+			routinesMax: int(env, "IYYE2_ROUTINES_MAX", 3, 0, 20),
 		},
 		facts: {
 			extract: env.IYYE2_FACTS_EXTRACT !== "0",

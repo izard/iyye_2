@@ -18,6 +18,12 @@
  *   to a proposed plan, so suggestions to Iyye ("let's …", "we should …")
  *   and requests the turn itself handled (a tool call, a reminder, a plan)
  *   are not intentions.
+ * - **A recurring request** (agency, plan 0.018 W6; the owner only): the
+ *   owner asked for the same thing on four different days of the last
+ *   fourteen, and each of those turns was answered with read-only tools
+ *   alone. Likeness chains (a run of alike turns is one request). A greeting
+ *   that needed no tool, and a turn that changed something, are no routine.
+ *   A routine comes of it, proposed for the owner's approval.
  * - **A dated event** (social): a message naming an event on a clear date
  *   ("today", "tomorrow", "on Monday", "12 October", «завтра»), now past.
  *   Since M3 a follow-up message comes of it, so a date in the past or a
@@ -25,8 +31,10 @@
  *   event with no time of day is over only in the evening.
  */
 
+import { createHash } from "node:crypto";
 import { contentStems } from "../facts/disclosure.ts";
 import { parseWhen } from "../kernel/when.ts";
+import { localParts } from "../self/normal.ts";
 import type { Db } from "../state/db.ts";
 
 /** Iyye's reply admits it did not know or could not find the answer (English and Russian). */
@@ -159,6 +167,120 @@ export function recurringQuestions(
 			evidence: [`event:${a.event_id}`, `event:${b.event_id}`],
 			topic: a.user_text.replace(/\s+/g, " ").slice(0, 300),
 			at: a.said_at > b.said_at ? a.said_at : b.said_at,
+		});
+	}
+	return out;
+}
+
+/** Toolkits whose tools only read (plan 0.004): a request answered with these alone could be done on a schedule. */
+const READ_ONLY_TOOLKITS = new Set(["core", "machine", "monitor", "web", "project", "vision", "self"]);
+
+export interface RecurringRequest {
+	cluster: string;
+	evidence: string[];
+	/** The request as the owner last made it. */
+	task: string;
+	/** Its latest turn: the chat it was made in. */
+	eventId: string;
+	days: number;
+	turns: number;
+	/** When the owner usually asks first (the first quartile of the days' first asks), to the quarter hour before. */
+	atMinute: number;
+	schedule: "daily" | "weekdays" | "weekends";
+	at: string;
+}
+
+/**
+ * The owner's requests that recur (plan 0.018 W6): groups of alike turns, each answered with read-only tools
+ * alone, on at least `minDays` different local days of the last `days`. None when a routine alike is already
+ * proposed, running or was declined in the last 30 days, or an opportunity for it exists.
+ */
+export function recurringRequests(
+	db: Db,
+	now: Date,
+	timeZone: string,
+	o: { days?: number; minDays?: number } = {},
+): RecurringRequest[] {
+	const since = new Date(now.getTime() - (o.days ?? 14) * 86_400_000).toISOString();
+	const minDays = o.minDays ?? 4;
+	const rows = db
+		.prepare(
+			`SELECT e.event_id, e.user_text, e.said_at FROM stm_episodes e
+			 WHERE e.scope = 'owner' AND e.kind = 'turn' AND e.said_at >= ? AND e.user_text IS NOT NULL
+			 AND EXISTS (SELECT 1 FROM tool_calls t WHERE t.event_id = e.event_id AND t.outcome = 'ok')
+			 ORDER BY e.said_at`,
+		)
+		.all(since) as { event_id: string; user_text: string; said_at: string }[];
+	const turns = rows
+		.filter((r) => {
+			const kits = (
+				db.prepare("SELECT DISTINCT toolkit FROM tool_calls WHERE event_id = ?").all(r.event_id) as {
+					toolkit: string | null;
+				}[]
+			).map((k) => k.toolkit ?? "");
+			return kits.every((k) => READ_ONLY_TOOLKITS.has(k));
+		})
+		.map((r) => ({ ...r, stems: contentStems(r.user_text) }))
+		.filter((r) => r.stems.length >= 2);
+	const alike = (a: string[], b: string[]) => {
+		const other = new Set(b);
+		return a.filter((s) => other.has(s)).length >= Math.max(2, Math.ceil(Math.min(a.length, b.length) / 2));
+	};
+	// Linked groups: a turn joins every group it is alike to, and so joins them to each other.
+	const group = new Map<(typeof turns)[number], (typeof turns)[number][]>();
+	for (const t of turns) {
+		const linked = [
+			...new Set(turns.filter((x) => group.has(x) && alike(x.stems, t.stems)).map((x) => group.get(x)!)),
+		];
+		const merged = [...linked.flat(), t];
+		for (const m of merged) group.set(m, merged);
+	}
+	// A routine that exists (in any state but one dropped long ago) already answers a request alike to its task.
+	const cutoff = new Date(now.getTime() - 30 * 86_400_000).toISOString();
+	const routines = (
+		db
+			.prepare('SELECT steps_json, state, updated_at FROM plans WHERE steps_json LIKE \'%"kind":"routine"%\'')
+			.all() as {
+			steps_json: string;
+			state: string;
+			updated_at: string;
+		}[]
+	)
+		.filter((p) => !["abandoned", "failed"].includes(p.state) || p.updated_at >= cutoff)
+		.flatMap((p) =>
+			(JSON.parse(p.steps_json) as { kind: string; task?: string }[]).filter((s) => s.kind === "routine"),
+		)
+		.map((s) => contentStems(s.task ?? ""));
+	const out: RecurringRequest[] = [];
+	for (const members of new Set(group.values())) {
+		const days = new Map<string, number>();
+		for (const m of members) {
+			const p = localParts(new Date(m.said_at), timeZone);
+			if (!days.has(p.day)) days.set(p.day, p.minute);
+		}
+		if (days.size < minDays) continue;
+		const count = new Map<string, number>();
+		for (const m of members) for (const s of m.stems) count.set(s, (count.get(s) ?? 0) + 1);
+		const common = [...count]
+			.filter(([, n]) => n >= members.length / 2)
+			.map(([s]) => s)
+			.sort();
+		if (routines.some((r) => alike(r, common))) continue;
+		const cluster = `routine:${createHash("sha256").update(common.join(" ")).digest("hex").slice(0, 12)}`;
+		if (db.prepare("SELECT 1 FROM opportunities WHERE cluster = ? AND status = 'settled'").get(cluster)) continue;
+		const minutes = [...days.values()].sort((a, b) => a - b);
+		const weekend = [...days.keys()].filter((d) => [0, 6].includes(new Date(`${d}T12:00:00Z`).getUTCDay())).length;
+		const latest = members.at(-1)!;
+		out.push({
+			cluster,
+			evidence: members.slice(-5).map((m) => `event:${m.event_id}`),
+			task: latest.user_text.replace(/\s+/g, " ").trim().slice(0, 400),
+			eventId: latest.event_id,
+			days: days.size,
+			turns: members.length,
+			atMinute: Math.floor(minutes[Math.floor(minutes.length / 4)]! / 15) * 15,
+			schedule: weekend === 0 && days.size >= 5 ? "weekdays" : weekend === days.size ? "weekends" : "daily",
+			at: latest.said_at,
 		});
 	}
 	return out;

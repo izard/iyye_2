@@ -18,7 +18,7 @@ import { IYYE_PROPOSED_VIA } from "../kernel/plans.ts";
 import type { Gap } from "../self/model.ts";
 import type { Db } from "../state/db.ts";
 import { getKv } from "../state/kv.ts";
-import { pastEvents, recurringQuestions, unplannedIntentions } from "./detectors.ts";
+import { pastEvents, recurringQuestions, recurringRequests, unplannedIntentions } from "./detectors.ts";
 import { OK_SERVICE_STATES, serviceStatuses } from "./services.ts";
 
 export const MOTIVATIONS = ["self_preservation", "curiosity", "agency", "social"] as const;
@@ -58,6 +58,8 @@ export interface SignalSources {
 	 * owner has answered about. Then it is not a signal of its own.
 	 */
 	usual?: (subject: string) => boolean;
+	/** Plan 0.018 W6: the host's time zone, for when the owner usually asks for something; absent: no routines. */
+	timezone?: string;
 	/** Plan 0.018 W3: reasons from what is normal for Iyye (surprises, regularities, forecasts). */
 	expectations?: () => (Omit<Signal, "observedAt"> & { observedAt?: string })[];
 }
@@ -299,6 +301,18 @@ export function collectSignals(s: SignalSources): Signal[] {
 			observedAt: i.at,
 			text: `the owner said: ${i.text.slice(0, 120)}`,
 		});
+	// A request the owner keeps making (plan 0.018 W6; the actor proposes a routine for it). The owner's own
+	// turns are the evidence.
+	if (s.timezone)
+		for (const r of recurringRequests(db, s.now, s.timezone))
+			add({
+				motivation: "agency",
+				kind: "request_recurring",
+				cluster: r.cluster,
+				evidence: r.evidence,
+				weight: 0.7,
+				text: `the owner asked for the same thing on ${r.days} of the last 14 days: ${r.task.slice(0, 120)}`,
+			});
 	for (const p of db
 		.prepare(
 			"SELECT id, intent, state, steps_json, updated_at, proposed_via FROM plans WHERE state IN ('suspended', 'active', 'proposed')",

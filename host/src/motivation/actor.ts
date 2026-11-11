@@ -100,6 +100,20 @@ export interface ActorDeps {
 	 */
 	byCommand?: ((cluster: string) => { question: string; answer: string } | null) | null;
 	/**
+	 * Plan 0.018 W6: what a recurring request (by its cluster) would be as a routine: the owner's own words,
+	 * the time they usually ask, and the chat they ask in. Null when it no longer stands.
+	 */
+	routineIdea?:
+		| ((cluster: string) => {
+				task: string;
+				atMinute: number;
+				schedule: "daily" | "weekdays" | "weekends";
+				days: number;
+				route: Proposal["route"];
+				eventId: string;
+		  } | null)
+		| null;
+	/**
 	 * Plan 0.018 W5: whether a local hour is one the person usually writes in; null when too little is known
 	 * of them. A follow-up waits for such an hour, inside the social hours.
 	 */
@@ -195,6 +209,8 @@ export interface SelfQuestion {
 export function actionFor(motivation: Motivation, kind: string): ActionKind | null {
 	if (motivation === "social") return kind === "event_followup" ? "follow_up" : null;
 	if (motivation === "agency" && kind === "intention_unplanned") return "propose";
+	// Plan 0.018 W6: a request the owner keeps making becomes a routine, proposed for their approval.
+	if (motivation === "agency" && kind === "request_recurring") return "propose";
 	if (motivation === "curiosity") {
 		if (kind === "self_missing" || kind === "self_contradicted" || kind === "belief_uncertain") return "ask";
 		// Plan 0.018 W3, W4: what only the owner can say (a regularity, a machine silent for days, a new host).
@@ -217,6 +233,7 @@ export class MotivationActor {
 			ownerFactsAbout: null,
 			byCommand: null,
 			usualHour: null,
+			routineIdea: null,
 			machineInvestigationsPerDay: 2,
 			retryModel: null,
 			now: () => new Date(),
@@ -580,6 +597,10 @@ export class MotivationActor {
 			this.event(row, "withheld", "daily cap");
 			return false;
 		}
+		if (row.signal_kind === "request_recurring") {
+			this.proposeRoutine(row);
+			return false; // no model call: the proposal is the owner's own words and the host's arithmetic
+		}
 		const ep = this.episode(row.cluster);
 		if (!ep) {
 			this.settle(row.id, "gone", "its message is gone");
@@ -643,6 +664,38 @@ export class MotivationActor {
 			.run(r.id, `proposed plan ${r.id.slice(0, 8)}`, this.iso(), row.id);
 		this.d.log.info("motivation: proposed a plan", { id: row.id, plan: r.id });
 		return true;
+	}
+
+	/**
+	 * A routine for a request the owner keeps making (plan 0.018 W6): their own words as the task, the time
+	 * they usually ask, the chat they ask in. Proposed like any plan of Iyye's: it runs only once approved.
+	 */
+	private proposeRoutine(row: ActingRow): void {
+		const idea = this.d.routineIdea?.(row.cluster) ?? null;
+		if (!idea) {
+			this.settle(row.id, "gone", "the request no longer recurs");
+			return;
+		}
+		const time = `${String(Math.floor(idea.atMinute / 60)).padStart(2, "0")}:${String(idea.atMinute % 60).padStart(2, "0")}`;
+		const r = this.d.proposePlan!({
+			intent: `You asked me for this on ${idea.days} of the last 14 days. I could do it on my own ${idea.schedule === "daily" ? "every day" : `on ${idea.schedule}`} at ${time} and send it to you where you ask`,
+			steps: [{ kind: "routine", task: idea.task, atMinute: idea.atMinute, days: idea.schedule }],
+			proposer: OWNER_CONTACT_ID,
+			principal: "iyye",
+			scope: "owner",
+			route: idea.route,
+			eventId: idea.eventId,
+			via: IYYE_PROPOSED_VIA,
+		});
+		if (!r.id) {
+			this.settle(row.id, "failed", r.text.slice(0, 300));
+			return;
+		}
+		this.d.db
+			.prepare("UPDATE opportunities SET status = 'running', ref = ?, answer = ?, updated_at = ? WHERE id = ?")
+			.run(r.id, `proposed routine ${r.id.slice(0, 8)}`, this.iso(), row.id);
+		this.event(row, "attempted", "routine proposed", `plan:${r.id}`);
+		this.d.log.info("motivation: proposed a routine", { id: row.id, plan: r.id });
 	}
 
 	/** Social: ask a person how the event they mentioned went. Returns true if a model call was made. */
@@ -779,6 +832,9 @@ export class MotivationActor {
 				const plan = row.ref ? getPlan(this.d.db, row.ref) : undefined;
 				if (!plan) this.settle(row.id, "gone", "its plan is gone");
 				else if (plan.state === "completed") this.settle(row.id, "resolved", "plan completed", true);
+				// A routine never completes: the owner's approval is what Iyye's proposal was for.
+				else if (plan.state === "active" && row.signal_kind === "request_recurring")
+					this.settle(row.id, "resolved", "approved: the routine runs", true);
 				else if (plan.state === "failed") this.settle(row.id, "failed", "plan failed");
 				else if (plan.state === "abandoned")
 					this.settle(

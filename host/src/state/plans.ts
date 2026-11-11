@@ -30,6 +30,20 @@ export type PlanStep =
 			reason?: string;
 	  }
 	| { kind: "other"; description: string; status: StepStatus; reason?: string }
+	/**
+	 * Something Iyye does on its own every day at a time (plan 0.018 W6): the owner's own recurring request,
+	 * approved once. It runs for as long as the plan is active (`kernel/routines.ts`); it is never "done".
+	 */
+	| {
+			kind: "routine";
+			/** The request, in the owner's own words. */
+			task: string;
+			/** Minutes after local midnight. */
+			at_minute: number;
+			days: "daily" | "weekdays" | "weekends";
+			status: StepStatus;
+			reason?: string;
+	  }
 	/** Something the person does themselves (2026-10-13): Iyye only keeps it on the list; done when they say so. */
 	| { kind: "task"; description: string; status: StepStatus; done_by?: string; done_at?: string; reason?: string };
 
