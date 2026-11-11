@@ -8,6 +8,7 @@ import { handleOwnerCommand } from "../src/kernel/commands.ts";
 import { silentLogger } from "../src/log.ts";
 import { MemoryControl } from "../src/memory/control.ts";
 import { formatRecalled, MemoryGateway } from "../src/memory/gateway.ts";
+import { cardLines, cardSummary, inUsualHours, personCard, scriptOf, usualHoursFor } from "../src/people/card.ts";
 import {
 	NEW_CONTACT_NOTICES_DAILY,
 	newContactKey,
@@ -65,7 +66,7 @@ describe("people before they write", () => {
 		assert.match(await r.cmd("/contacts"), /Jacob — not trusted · no account yet · id \w{8} · 1 note/);
 		assert.match(
 			await r.cmd(`/person ${jacob.id.slice(0, 8)}`),
-			/^Jacob — id \w{8} · not trusted · no account yet\n\nYour notes:\n {2}- \w{8} \[yours only · \d{4}-\d\d-\d\d\] my son, 12/,
+			/^Jacob — id \w{8} · not trusted · no account yet\n\nWho they are to you: not said\nWrites: has not written yet\nBetween them and Iyye: nothing open\nWhat Iyye holds about them: nothing yet\nMissing: who they are to you \(\/self relation\); an email address \(\/person email\)\n\nYour notes:\n {2}- \w{8} \[yours only · \d{4}-\d\d-\d\d\] my son, 12/,
 		);
 	});
 
@@ -239,6 +240,117 @@ describe("owner notes", () => {
 		assert.match(control.preview(getContact(r.db, r.id("Julia"))!), /your notes about them: deleted/);
 		await control.forget(getContact(r.db, r.id("Julia"))!, "owner_web");
 		assert.deepEqual(notesAbout(r.db, r.id("Julia")), []);
+	});
+});
+
+describe("a person's card (plan 0.018 W5)", () => {
+	const NOW = new Date("2026-11-23T12:00:00Z");
+	const HOUR = 3_600_000;
+	const DAY = 24 * HOUR;
+	function known() {
+		const db = openDb(":memory:");
+		db.prepare(
+			"INSERT INTO contacts (id, display_name, kind, trusted, created_at) VALUES ('jul', 'Julia', 'contact', 1, 't')",
+		).run();
+		db.prepare(
+			"INSERT INTO contacts (id, display_name, kind, created_at) VALUES ('bob', 'Bob', 'contact', 't')",
+		).run();
+		let n = 0;
+		const says = (who: string, at: Date, text: string) =>
+			db
+				.prepare(
+					"INSERT INTO events (id, dedup_key, channel, principal_contact_id, scope, received_at, payload_json, status) VALUES (?, ?, 'telegram', ?, ?, ?, ?, 'answered')",
+				)
+				.run(`e${++n}`, `e${n}`, who, `contact:${who}`, at.toISOString(), JSON.stringify({ message: { text } }));
+		// Julia: twelve messages on six evenings (17:00 and 20:00 UTC), mostly in Russian; one stray at 02:00.
+		for (let d = 1; d <= 6; d++) {
+			says("jul", new Date(NOW.getTime() - d * DAY + 5 * HOUR), d === 1 ? "see you tomorrow" : "привет, как дела?");
+			says("jul", new Date(NOW.getTime() - d * DAY + 8 * HOUR), "хорошо, спасибо");
+		}
+		says("jul", new Date(NOW.getTime() - 3 * DAY - 10 * HOUR), "не спится");
+		says("bob", new Date(NOW.getTime() - DAY), "hi");
+		return { db, says };
+	}
+
+	test("when and how they write, what is open, what is held and what is missing: from records only", () => {
+		const { db } = known();
+		db.prepare(
+			"INSERT INTO self_facts (facet, field, value_json, source, observed_at) VALUES ('social', 'relation:jul', '\"my wife\"', 'owner', 't')",
+		).run();
+		db.prepare(
+			`INSERT INTO commitments (id, kind, scope, recipient_contact_id, route_json, text, due_at, timezone, series_id, state, created_by, created_at)
+			 VALUES ('c1', 'reminder', 'contact:jul', 'jul', '{}', 'call the dentist', '2026-11-24T08:00:00.000Z', 'UTC', 'c1', 'scheduled', 'x', ?)`,
+		).run(NOW.toISOString());
+		db.prepare(
+			`INSERT INTO plans (id, intent, proposer_contact_id, scope, route_json, proposed_via, steps_json, state, created_at, updated_at)
+			 VALUES ('p1', 'x', 'jul', 'contact:jul', '{}', 'Telegram', '[]', 'proposed', ?, ?)`,
+		).run(NOW.toISOString(), NOW.toISOString());
+		const c = personCard(db, getContact(db, "jul")!, NOW, "UTC");
+		assert.equal(c.relation, "my wife");
+		assert.equal(c.messages30, 13);
+		assert.equal(c.daysActive30, 6);
+		assert.deepEqual(c.usualHours, { from: 17, to: 20 }, "the stray message at night does not widen it");
+		assert.deepEqual(c.scripts, [
+			{ script: "Cyrillic", messages: 12 },
+			{ script: "Latin", messages: 1 },
+		]);
+		assert.deepEqual(c.reminders, { waiting: 1, next: "2026-11-24T08:00:00.000Z" });
+		assert.deepEqual(c.plans, { proposed: 1 });
+		assert.deepEqual(c.missing, [
+			"an email address (/person email)",
+			"their name in Cyrillic script (it is known in Latin only)",
+		]);
+		const text = cardLines(c, NOW).join("\n");
+		assert.match(
+			text,
+			/^Who they are to you: "my wife"\nWrites: 13 message\(s\) on 6 day\(s\) in the last 30; last 16 h ago; first 2026-11-17\nUsually writes between 17:00 and 20:59 \(local time here\)\nWrites in: Cyrillic script \(12 message\(s\)\), Latin script \(1 message\(s\)\)\nBetween them and Iyye: 1 reminder\(s\) waiting, the next 2026-11-24 08:00 UTC; 1 plan\(s\) proposed/,
+		);
+		assert.equal(inUsualHours(c.usualHours!, 18), true);
+		assert.equal(inUsualHours(c.usualHours!, 10), false);
+		assert.equal(inUsualHours({ from: 22, to: 1 }, 23), true, "across midnight");
+		assert.equal(inUsualHours({ from: 22, to: 1 }, 12), false);
+		assert.equal(
+			cardSummary("Julia", true, c, NOW),
+			'"Julia" ("my wife"), trusted: 13 message(s) in 30 days, last 16 h ago; usually writes between 17:00 and 20:59; 1 reminder(s) waiting; 1 open plan(s)',
+		);
+		// One message says nothing about when someone writes.
+		const bob = personCard(db, getContact(db, "bob")!, NOW, "UTC");
+		assert.equal(bob.usualHours, null);
+		assert.equal(usualHoursFor(db, getContact(db, "bob")!, NOW, "UTC"), null);
+		assert.equal(scriptOf("12345 !!"), null);
+	});
+
+	test("/person shows it, and after /forget nothing of it is left", async () => {
+		const { db, says } = known();
+		const people = new People({ db, now: () => NOW, timezone: "UTC" });
+		const before = people.person("Julia", "owner_web");
+		assert.match(before, /Usually writes between 17:00 and 20:59/);
+		assert.match(before, /Writes in: Cyrillic script/);
+		db.prepare("UPDATE jobs SET status = 'settled'").run();
+		const control = new MemoryControl({
+			db,
+			ltm: null,
+			log: silentLogger,
+			mode: () => "awake",
+			forgetConversations: async () => 0,
+			now: () => NOW,
+		});
+		await control.forget(getContact(db, "jul")!, "owner_web");
+		const after = people.person("Julia", "owner_web");
+		assert.match(
+			after,
+			/Writes: has not written yet\nBetween them and Iyye: nothing open\nWhat Iyye holds about them: nothing yet/,
+		);
+		assert.doesNotMatch(after, /Usually writes|Cyrillic|17:00/);
+		// What they write from then on is theirs again.
+		says("jul", new Date(NOW.getTime() + HOUR), "hello again");
+		assert.match(
+			new People({ db, now: () => new Date(NOW.getTime() + 2 * HOUR), timezone: "UTC" }).person(
+				"Julia",
+				"owner_web",
+			),
+			/Writes: 1 message\(s\) on 1 day\(s\)/,
+		);
 	});
 });
 

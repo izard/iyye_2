@@ -38,6 +38,7 @@ export type EventKind =
 export type WithheldReason =
 	| "paused"
 	| "quiet hours"
+	| "not their usual hours"
 	| "owner busy"
 	| "person busy"
 	| "daily cap"

@@ -16,6 +16,10 @@
  *   Revisable evidence, never established identity or trust, and never a
  *   diagnosis: only relations are shown.
  *
+ * - **The card** (plan 0.018 W5, `card.ts`): when and how they write, what is
+ *   open between them and Iyye, what the ledger holds, what is missing. From
+ *   records, worked out when read; never stored.
+ *
  * Every write here is an owner command from the local web chat or the
  * terminal; nothing arriving over Telegram reaches it.
  */
@@ -43,6 +47,7 @@ import {
 	type PersonNote,
 	setNoteVisibility,
 } from "../state/notes.ts";
+import { cardLines, personCard } from "./card.ts";
 
 const OWNER_READER = { principal: "owner" as const, personId: OWNER_CONTACT_ID, ownScopes: ["owner"], trusted: true };
 /** New-contact notices a day: a flood of new accounts must not flood the owner's chat. */
@@ -52,6 +57,8 @@ export interface PeopleDeps {
 	db: Db;
 	now?: () => Date;
 	newId?: () => string;
+	/** The local time zone a person's usual hours are told in. */
+	timezone?: string;
 }
 
 /** `"Mary Ann" rest` or `Jacob rest`: the first reference and what follows. */
@@ -90,7 +97,12 @@ export class People {
 	private readonly d: Required<PeopleDeps>;
 
 	constructor(deps: PeopleDeps) {
-		this.d = { now: () => new Date(), newId: () => crypto.randomUUID(), ...deps };
+		this.d = {
+			now: () => new Date(),
+			newId: () => crypto.randomUUID(),
+			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+			...deps,
+		};
 	}
 
 	/** `/person add <name> ["note"]`, `/person <person>`. */
@@ -229,6 +241,8 @@ export class People {
 							.join(", ")}`,
 					]
 				: []),
+			"",
+			...cardLines(personCard(db, p, this.d.now(), this.d.timezone), this.d.now()),
 			"",
 			notes.length ? "Your notes:" : "Your notes: none (/note <person> <text>)",
 			...notes.map(noteLine),

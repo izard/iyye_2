@@ -99,6 +99,11 @@ export interface ActorDeps {
 	 * commands that answer it; null when it no longer stands.
 	 */
 	byCommand?: ((cluster: string) => { question: string; answer: string } | null) | null;
+	/**
+	 * Plan 0.018 W5: whether a local hour is one the person usually writes in; null when too little is known
+	 * of them. A follow-up waits for such an hour, inside the social hours.
+	 */
+	usualHour?: ((personId: string, hour: number) => boolean | null) | null;
 	/** Plan 0.018 W4: investigations of surprising readings opened a day. */
 	machineInvestigationsPerDay?: number;
 	/** Load a selected model again after self-healing gave up; false when it should not (the owner unloaded it). */
@@ -211,6 +216,7 @@ export class MotivationActor {
 		this.d = {
 			ownerFactsAbout: null,
 			byCommand: null,
+			usualHour: null,
 			machineInvestigationsPerDay: 2,
 			retryModel: null,
 			now: () => new Date(),
@@ -651,6 +657,10 @@ export class MotivationActor {
 			this.settle(row.id, "gone", "its message or its person is gone");
 			return false;
 		}
+		if (!this.theirHour(person.id, now)) {
+			this.event(row, "withheld", "not their usual hours");
+			return false;
+		}
 		const scopes = scopesOf(this.d.db, person);
 		const inConversation = () =>
 			person.kind === "owner" ? this.ownerBusy(this.d.now()) : this.busy(scopes, this.d.now());
@@ -709,7 +719,11 @@ export class MotivationActor {
 		}
 		// Right before the effect: the hour, the pause, the mode and the person's activity as they are now
 		// (a composition started at 20:59 may finish after 21:00). Changed: nothing is sent, it stays pending.
-		const held = this.socialHour(this.d.now()) ? this.heldNow(row, inConversation, busyReason) : "quiet hours";
+		const held = !this.socialHour(this.d.now())
+			? "quiet hours"
+			: !this.theirHour(person.id, this.d.now())
+				? "not their usual hours"
+				: this.heldNow(row, inConversation, busyReason);
 		if (held) {
 			this.event(row, "withheld", held);
 			return true;
@@ -835,6 +849,18 @@ export class MotivationActor {
 		if (actionState === "unknown") return { state: "unconfirmed", why: "the delivery was not confirmed" };
 		if (actionState === "terminal_failure" || actionState === null) return { state: "failed", why: "not delivered" };
 		return { state: "pending", why: "never delivered" };
+	}
+
+	/**
+	 * The local hour is one this person usually writes in (plan 0.018 W5). True when too little is known of
+	 * them, and when none of their usual hours falls in the social hours at all: then those alone decide.
+	 */
+	private theirHour(personId: string, at: Date): boolean {
+		const usual = this.d.usualHour;
+		if (!usual || usual(personId, at.getHours()) !== false) return true;
+		const [from, to] = this.d.socialHours;
+		for (let h = from; h < to; h++) if (usual(personId, h) === true) return false;
+		return true;
 	}
 
 	/** The local hour lets Iyye start a conversation. */

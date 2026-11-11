@@ -118,7 +118,7 @@ const HELP = [
 	"/trust <contact> — mark a contact as trusted (name, Telegram user id, or id): they may then ask Iyye to message anyone it knows",
 	"/link <account> owner|<person> — this account is you (owner) or that person: shared conversation and memory",
 	"/unlink <account> — the account is its own contact again",
-	'/person <person> — what Iyye knows about someone: accounts, trust, your notes, relationship hypotheses; /person add <name> ["note"] — someone who has not written yet; /person email <person|me> <address|none> — the address email_send uses',
+	'/person <person> — what Iyye knows about someone: accounts, trust, when and how they write, what is open with them, what it holds about them, your notes, relationship hypotheses; /person add <name> ["note"] — someone who has not written yet; /person email <person|me> <address|none> — the address email_send uses',
 	"/note <person> <text> — a note about someone, for your conversations only; /note share|private|delete <id> — let them see it too (Iyye may repeat it to them), or not",
 	"/untrust <contact> — remove a contact's trust",
 	"/tools — toolkits, who may use them, and the latest tool calls",

@@ -95,6 +95,7 @@ import { Investigations } from "./observe/investigations.ts";
 import { Observer } from "./observe/observer.ts";
 import { ensureWorkspace } from "./observe/workspace.ts";
 import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
+import { inUsualHours, usualHoursFor } from "./people/card.ts";
 import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./people/people.ts";
 import { guardClientRequests } from "./process/client-requests.ts";
 import { Sandbox } from "./sandbox/sandbox.ts";
@@ -103,6 +104,7 @@ import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { type Need, privateAddressOf, SelfSurroundings } from "./self/surroundings.ts";
 import { SelfUpkeep } from "./self/upkeep.ts";
 import { recentReminderNote, remindersChip, remindersToday } from "./state/commitments.ts";
+import { getContact } from "./state/contacts.ts";
 import { type Db, openDb } from "./state/db.ts";
 import { emailInboxReport, spoofNoticesToday } from "./state/email-inbox.ts";
 import { getJob } from "./state/jobs.ts";
@@ -1037,6 +1039,14 @@ async function main(): Promise<number> {
 		log,
 		mode: () => rhythm.mode(),
 		notifyOwner: (req) => outbox.notifyOwner(req),
+		// Plan 0.018 W5: a follow-up goes out in an hour the person usually writes in (the host's local hours).
+		usualHour: (personId, hour) => {
+			const person = getContact(db, personId);
+			const usual = person
+				? usualHoursFor(db, person, new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone)
+				: null;
+			return usual ? inUsualHours(usual, hour) : null;
+		},
 		// Plan 0.018 W3, W4: questions the owner answers by command (a regularity, a silent machine, a new host).
 		byCommand: (cluster) => {
 			if (!cluster.startsWith("regularity:")) return surroundings.question(cluster);

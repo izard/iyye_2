@@ -376,7 +376,10 @@ describe("the self model", () => {
 			about,
 			/- Place: The owner says Iyye is at Hamburg, at home\. The network places it in Munich, Bavaria, DE\. Sunrise \d\d:\d\d, sunset \d\d:\d\d/,
 		);
-		assert.match(about, /- People who wrote in the last 30 days: "Jacob" \("my son"\), 1 message\(s\)/);
+		assert.match(
+			about,
+			/- People who wrote in the last 30 days:\n {2}- "Jacob" \("my son"\): 1 message\(s\) in 30 days, last \d+ min ago\n/,
+		);
 		assert.match(
 			about,
 			/Models loaded \(one copy each\): gemma-4-26B \(web chat and Telegram\), gemma-4-E4B \(background work\)\. Day 7, awake\./,

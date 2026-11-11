@@ -1,6 +1,6 @@
 # Iyye 2.0.018 — A Coherent Model of Itself and Its Surroundings, and More Initiative: Implementation Plan
 
-2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done. W3 is built; its exit check (a week of its journal against the owner's judgement) is open. W4 is done, and so is decision 8; W5 is next.
+2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done. W3 is built; its exit check (a week of its journal against the owner's judgement) is open. W4 and W5 are done, and so is decision 8; W6 is next.
 
 Owner's direction (2026-11-09): Iyye should do more work on its own. The top priority is to build and keep a coherent model of itself and its surroundings: CPU, GPU, memory, disk, hardware, the LAN, and the people it talks with.
 
@@ -181,7 +181,7 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 | **W2** (done 2026-11-10) | The link, lan and peers facets; the dependency map; causes in service signals and notices. | A simulated network loss gives one finding that names it. The MBP's state says which of the two cases it is. |
 | **W3** (built 2026-11-10; the week's check open) | Baselines, regularities and forecasts; their signals journal-only for a week, then acting; the confirming question. | The week's journal against the owner's judgement: no more than one unwanted signal a day. |
 | **W4** (done 2026-11-10) | Investigations of surprises; `disk_usage`; `self_model`; the about-me note for Iyye's own work. | A staged memory drop is explained with cited readings. |
-| **W5** | People cards; follow-ups in a person's usual hours. | `/person` shows the card; `/forget` leaves nothing of it. |
+| **W5** (done 2026-11-11) | People cards; follow-ups in a person's usual hours. | `/person` shows the card; `/forget` leaves nothing of it. |
 | **W6** | Routines. | The news request is proposed, approved, run and delivered; a skipped run is reported. |
 | **W7** | Maintenance, report-only, then allowed actions. | `/maintain` figures match the disk; an allowed action is recorded with what it removed. |
 
@@ -237,6 +237,17 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 - **The note for Iyye's own work** (`SelfModel.aboutOwnWork`, `PiConversations.backgroundNotes`): hardware, what its processes hold, this run, what is unusual and usual, the link. No place, no people, no host of the local network, no other machine; not in a plan's steps.
 - **Decision 8** (`kernel/plans.ts`): a plan a person proposed that nobody approved, three days past its first dated step, is asked about once ("… /plan approve <id> … otherwise I will drop it in 2 days") and lapses two days later as abandoned, "not approved, and its date passed". Plans with no dated step wait as before.
 - `actor.ts` and `investigations.ts` changed: a new M4 trial period starts with this.
+
+### W5 as built (2026-11-11)
+
+- `people/card.ts`: `personCard` works a card out from records each time it is read (13 ms for the three people on a copy of the live records); nothing is stored.
+- **On a card:** who they are to the owner (the owner's statement only); messages and days in the last 30, first and last; when they usually write (the hours between the tenth and ninetieth percentile of 60 days of messages, the day counted from 04:00; nothing under 8 messages on 3 days); weekdays or weekends when four fifths fall there; the scripts they write in, by message; reminders waiting, open plans, the last follow-up and how it ended, Iyye's own messages to them; the surest six beliefs the ledger holds about them, as the owner reads them; and what is missing (no stated relation, no email address, a name known only in another script than they write in).
+- **`/person <person>`** shows the card above the notes and the relationship hypotheses. The owner's about-me note has one line a person for the six most recent.
+- **A follow-up waits for an hour the person usually writes in** (`ActorDeps.usualHour`), inside `IYYE2_SOCIAL_HOURS`. When too little is known of them, or none of their usual hours is a social hour, the social hours alone decide. Checked again right before sending.
+- **`/forget`:** a card reads nothing from before the person's last forgetting, so the times of redacted messages do not come back as "usually writes …".
+- Hours are the host's local hours: where a person is, Iyye does not know.
+- **Not in W5:** gaps on a card are shown, not asked about (the relation is asked already, plan 0.010 M1; nobody is asked for an email address).
+- `actor.ts` changed: a new M4 trial period starts with this.
 
 ## 7. Owner decisions (accepted 2026-11-09)
 

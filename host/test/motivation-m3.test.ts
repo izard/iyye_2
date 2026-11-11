@@ -455,6 +455,48 @@ describe("M3 social: follow-ups", () => {
 		assert.equal(opp(busy.db, "event:j1")!.status, "open");
 	});
 
+	test("a follow-up waits for an hour the person usually writes in; with none in the social hours, those alone decide", async () => {
+		const db = freshDb();
+		turn(db, {
+			id: "j1",
+			who: "jacob",
+			text: "I have my maths test tomorrow, wish me luck",
+			reply: "Good luck!",
+			at: new Date(NOON.getTime() - DAY),
+		});
+		const clock = { t: new Date(NOON.getTime() + 7 * HOUR) }; // 19:00
+		// Jacob usually writes at 20 and 21.
+		const { actor, calls } = rig(db, clock, {
+			answers: [ok("How did your maths test go?")],
+			extra: { usualHour: (_id, hour) => hour === 20 || hour === 21 },
+		});
+		await openAll(actor, db, clock.t, "event_followup");
+		assert.equal(calls.compose.length, 0, "19:00 is in the social hours, but not his");
+		assert.ok(
+			db
+				.prepare("SELECT 1 FROM motivation_events WHERE kind = 'withheld' AND reason = 'not their usual hours'")
+				.get(),
+		);
+		clock.t = new Date(NOON.getTime() + 8 * HOUR + 10 * 60_000); // 20:10
+		await openAll(actor, db, clock.t, "event_followup");
+		assert.deepEqual(calls.sends, [{ personId: "jacob", text: "How did your maths test go?" }]);
+		// A night owl (23:00 to 02:00): none of those hours is a social hour, so the social hours decide.
+		const db2 = freshDb();
+		turn(db2, {
+			id: "j1",
+			who: "jacob",
+			text: "I have my maths test tomorrow, wish me luck",
+			reply: "Good luck!",
+			at: new Date(NOON.getTime() - DAY),
+		});
+		const late = rig(db2, clock, {
+			answers: [ok("How did it go?")],
+			extra: { usualHour: (_id, hour) => hour >= 23 || hour <= 2 },
+		});
+		await openAll(late.actor, db2, clock.t, "event_followup");
+		assert.equal(late.calls.sends.length, 1);
+	});
+
 	test("no reply in three days: settled with no credit, and the next follow-up to them is held", async () => {
 		const { db, clock, actor, calls } = setup();
 		await openAll(actor, db, clock.t, "event_followup");
