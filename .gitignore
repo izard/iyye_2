@@ -15,3 +15,7 @@ node_modules/
 *.db-shm
 .DS_Store
 __pycache__/
+
+# Markdown stays local; only the root README is published.
+*.md
+!/README.md
