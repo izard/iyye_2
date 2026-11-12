@@ -1,6 +1,6 @@
 # Iyye 2.0.018 — A Coherent Model of Itself and Its Surroundings, and More Initiative: Implementation Plan
 
-2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done. W3 is built; its exit check (a week of its journal against the owner's judgement) is open. W4, W5 and W6 are done, and so is decision 8; W7 is next.
+2026-11-09. The owner accepted §7 the same day, with one change (decision 2: the LAN may also be probed actively, rarely). W0 (the spike, `host/SPIKE-0.018.md`), W1 and W2 are done. W3 is built; its exit check (a week of its journal against the owner's judgement) is open. W4, W5, W6 and W7 are done, and so is decision 8. What stays open is the owner's: W3's exit check, and decision 6 (which maintenance actions may run on their own).
 
 Owner's direction (2026-11-09): Iyye should do more work on its own. The top priority is to build and keep a coherent model of itself and its surroundings: CPU, GPU, memory, disk, hardware, the LAN, and the people it talks with.
 
@@ -158,7 +158,7 @@ Knowledge also changes behaviour that exists, with no new permission: background
 ### 4.2 Maintenance
 
 - A fixed list of typed actions inside `~/.iyye2` only: delete Iyye's own logs older than N days, sandbox and spike leftovers, model-cache entries no configured model uses; compact the SQLite database at night.
-- **Report first** (§7 decision 6): each action measures what it would free and does nothing. `/maintain` shows the list; `/maintain allow <action>` lets Iyye run that one on its own when a forecast asks for it. Each run is an `actions` row with what it removed.
+- **Report first** (§7 decision 6): each action measures what it would free and does nothing. `/maintain` shows the list; `/maintain allow <action>` lets Iyye run that one on its own when a forecast asks for it. Each run is recorded with what it removed (as built: a `maintenance_runs` row; `actions` holds outward messages only, and the owner's notice about a run is one).
 - Never: anything outside `~/.iyye2`, anything in a repository, a restart of the host itself, a package install.
 
 ## 5. Rules kept
@@ -261,6 +261,22 @@ Each one changes the files the M4 trial fingerprints, so each starts a new trial
 - **Not in W6:** a run with the real model and the real web has not been made here; the first one after the owner's approval is the live check. The routine's message is not rephrased by the voice.
 - `detectors.ts`, `signals.ts` and `actor.ts` changed: a new M4 trial period starts with this.
 
+### W7 as built (2026-11-11)
+
+- **The actions** (`host/src/self/maintain.ts`, `Maintenance`), each confined to its own directories of the state directory:
+  - `logs`: `.log` files in the four log directories of the host's supervisors older than `IYYE2_MAINTAIN_LOG_DAYS` (14), never the newest log of a service (it may still be written), never `postgres.log`.
+  - `spikes`: entries of `spikes/` that nothing wrote to for `IYYE2_MAINTAIN_LEFTOVER_DAYS` (30); an entry that is a repository is left alone.
+  - `sandbox`: what provisioning left behind (the downloaded archive once the root is provisioned, unfinished attempts), after the same 30 days. The sandbox already clears its own runs and workspaces; its root and `work/` are never touched.
+  - `model-cache`: an entry of a Hugging Face cache (`memory/hf`, `decisions/hf`, `voice/hf`) that nothing names: the memory models of the configuration, the decision model and its base from `decisions/provisioned.json`, the sources in `voice/provisioned.json`. A cache without its record is not judged. An entry must go unnamed for 30 days from when it was first seen so (kept in `kv`; a model switched back starts the wait again), so the model just replaced stays for a rollback. With it go the files of the hub's shared store that nothing staying links to.
+  - `database`: the free pages of `iyye.db`; `VACUUM`, only at the end of a night, only when at least 8 MB and a tenth of the file are free.
+- **Sizes** are allocated blocks as `du` counts them (directories included, a hard-linked file once, a link never followed).
+- **Removing** is one function, which checks again for every path: the action's directory is a real directory inside the state directory (one reached through a link is left alone and said so), the path lies inside it, nothing on the way is a repository; a link is removed, never followed. Nothing else in the host's maintenance deletes a file.
+- **Who removes.** `IYYE2_MAINTAIN=report` (the default): Iyye measures at the end of each night and removes nothing; the owner may run an action by hand, `/maintain run <action>` (shows the list) then `confirm`. `allowed`: also, at the end of a night, the actions the owner allowed with `/maintain allow <action>` run, files only while the disk forecast asks for room (full within 30 days, W3's own rule), the database by its own rule; Iyye then tells the owner what went (one web notice). `off`: nothing is measured.
+- **The record:** `maintenance_runs` (migration 048: action, by the owner or Iyye, why, when, each thing removed with its size, what failed); `/maintain runs` shows it. `maintenance_allowed` holds the owner's allowances.
+- **In the model:** the disk report (`/self disk`, `self_model("disk")`, `disk_usage`) ends with what maintenance could remove, and the `disk_filling` reason says it too.
+- **Checked on the Spark** (2026-11-11): the measure, read-only on the live state directory, matched `du` for every item. On a scratch copy of its real caches and spikes, 31 days ahead, the four file actions removed 1,423,732,736 bytes by their own count and `du` fell by exactly that; the two configured memory models were whole afterwards (no broken link). Live today: 104 MB of spike leftovers are removable now, 445 MB more from 2026-11-26, the replaced reranker's 805 MB 30 days after the first measure, the sandbox archive (4 MB) within a day.
+- **Not in W7:** the services' own caches (`decisions/home/.nv`, `decisions/training`), `memory/pgdata-0.10.2` (the upgrade's way back; the owner's to delete), old session transcripts and files of the shared stores that no entry links to are not on the list. The day summary does not mention maintenance. No fingerprinted file changed: no new M4 trial period.
+
 ## 7. Owner decisions (accepted 2026-11-09)
 
 The owner accepted every recommendation below, except decision 2: the LAN may be probed actively as well, rarely. Decision 9: this plan goes ahead now. Decision 10: the owner moved the host into `tmux` on 2026-11-09.
@@ -296,4 +312,6 @@ The owner accepted every recommendation below, except decision 2: the LAN may be
 | `IYYE2_SELF_LAN_SWEEPS_DAILY` | `3` | active probes of the subnet a day (built, W2) |
 | `IYYE2_SELF_SIGNALS` | `journal` | `journal`: W3's new reasons are recorded only; `act`: they count and notify (built, W3) |
 | `IYYE2_ROUTINES_MAX` | `3` | routines approved at a time (built, W6) |
-| `IYYE2_MAINTAIN` | `report` | `off`, `report`, `allowed` |
+| `IYYE2_MAINTAIN` | `report` | `off`; `report`: measured, removed only by the owner's `/maintain run`; `allowed`: the actions the owner allowed also run on their own (built, W7) |
+| `IYYE2_MAINTAIN_LOG_DAYS` | `14` | Iyye's own logs older than this are leftovers (built, W7) |
+| `IYYE2_MAINTAIN_LEFTOVER_DAYS` | `30` | spike, sandbox and model-cache leftovers wait this long (built, W7) |

@@ -87,6 +87,8 @@ export interface UpkeepDeps {
 	now?: () => Date;
 	newId?: () => string;
 	timezone?: string;
+	/** Plan 0.018 W7: what maintenance could remove, as one line of the disk report; null: nothing, or off. */
+	removable?: () => string | null;
 }
 
 /** Disk and memory as the machine observation and `system_status` report them. */
@@ -117,6 +119,7 @@ export class SelfUpkeep {
 			now: () => new Date(),
 			newId: () => crypto.randomUUID(),
 			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+			removable: () => null,
 			...deps,
 		};
 	}
@@ -538,6 +541,7 @@ export class SelfUpkeep {
 				? `Iyye's own directories [${this.ago(this.factAt("storage", "sizes"), now)}], GB:`
 				: "Iyye's own directories have not been measured yet (once a day)",
 			...(sizes ?? []).filter((s) => s.gb >= 0.1).map((s) => `  ${s.name} — ${s.gb.toFixed(1)}`),
+			...[this.d.removable()].filter((line) => line !== null),
 		].join("\n");
 	}
 

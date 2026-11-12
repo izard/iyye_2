@@ -114,6 +114,15 @@ export interface Config {
 		signals: "journal" | "act";
 		/** Plan 0.018 W6: routines approved at a time. */
 		routinesMax: number;
+		/**
+		 * Plan 0.018 W7: maintenance inside the state directory. `report` measures what each action would remove
+		 * and removes nothing unless the owner runs it; `allowed` also lets Iyye run the actions the owner allowed
+		 * (`/maintain allow`) at the end of a night; `off` measures nothing.
+		 */
+		maintain: "off" | "report" | "allowed";
+		/** Iyye's own logs are leftovers after this many days; spike, sandbox and model-cache leftovers after `maintainLeftoverDays`. */
+		maintainLogDays: number;
+		maintainLeftoverDays: number;
 	};
 	/**
 	 * The fact ledger (plan 0.011): extraction during the day, the nightly merge into beliefs (and structured
@@ -384,6 +393,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			lanSweepsDaily: int(env, "IYYE2_SELF_LAN_SWEEPS_DAILY", 3, 0, 24),
 			signals: oneOf(env, "IYYE2_SELF_SIGNALS", ["journal", "act"] as const, "journal"),
 			routinesMax: int(env, "IYYE2_ROUTINES_MAX", 3, 0, 20),
+			maintain: oneOf(env, "IYYE2_MAINTAIN", ["off", "report", "allowed"] as const, "report"),
+			maintainLogDays: int(env, "IYYE2_MAINTAIN_LOG_DAYS", 14, 1, 3650),
+			maintainLeftoverDays: int(env, "IYYE2_MAINTAIN_LEFTOVER_DAYS", 30, 1, 3650),
 		},
 		facts: {
 			extract: env.IYYE2_FACTS_EXTRACT !== "0",

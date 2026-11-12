@@ -197,6 +197,8 @@ export interface ExpectationsDeps {
 	baselineDays?: number;
 	/** A regularity not found for this long is no longer in force. */
 	lapseDays?: number;
+	/** Plan 0.018 W7: what maintenance could remove, said beside the disk forecast; null: nothing, or off. */
+	removable?: () => string | null;
 }
 
 /** In words: "the network goes away", for a subject and its usual hours. */
@@ -234,6 +236,7 @@ export class SelfExpectations {
 			minDays: 5,
 			baselineDays: 28,
 			lapseDays: 4,
+			removable: () => null,
 			...deps,
 		};
 	}
@@ -519,6 +522,16 @@ export class SelfExpectations {
 
 	// ---------------------------------------------------------------- forecasts and reasons
 
+	/** The disk forecast when it asks for room (full within 30 days), in words; else null. Maintenance acts on it. */
+	diskAsks(now: Date = this.d.now()): { text: string; daysLeft: number } | null {
+		const disk = this.diskForecast(now);
+		if (!disk || disk.daysLeft === null || disk.daysLeft >= 30) return null;
+		return {
+			daysLeft: disk.daysLeft,
+			text: `free disk falls by ${Math.abs(disk.gbPerDay)} GB a day: about ${Math.round(disk.daysLeft)} days until it is full (${round(disk.freeGb)} GB free)`,
+		};
+	}
+
 	/** Free disk on the filesystem that holds the home folder: how fast it changes, and when it would be gone. */
 	diskForecast(now: Date): { gbPerDay: number; daysLeft: number | null; freeGb: number } | null {
 		const field = (
@@ -602,16 +615,18 @@ export class SelfExpectations {
 					text: `usually ${describe(r)}; this time it did not happen`,
 				});
 		}
-		const disk = this.diskForecast(now);
-		if (disk && disk.daysLeft !== null && disk.daysLeft < 30)
+		const asks = this.diskAsks(now);
+		if (asks) {
+			const removable = this.d.removable();
 			out.push({
 				motivation: "self_preservation",
 				kind: "disk_filling",
 				cluster: "disk-forecast",
 				evidence: ["self_readings:storage"],
-				weight: disk.daysLeft < 7 ? 0.8 : 0.6,
-				text: `free disk falls by ${Math.abs(disk.gbPerDay)} GB a day: about ${Math.round(disk.daysLeft)} days until it is full (${round(disk.freeGb)} GB free)`,
+				weight: asks.daysLeft < 7 ? 0.8 : 0.6,
+				text: removable ? `${asks.text}; ${removable} (/maintain)` : asks.text,
 			});
+		}
 		const nights = this.nights(now);
 		const outside = nights.filter((n) => n.in_window === 0);
 		if (nights.length >= 3 && outside.length * 2 > nights.length)

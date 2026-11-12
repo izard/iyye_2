@@ -279,12 +279,15 @@ function rig(
 	});
 	self.setFacet("hardware", { machine: "NVIDIA DGX Spark", chip: "GB10", memoryGb: 122 }, "probe", null, T0);
 	let seq = 0;
+	/** What maintenance says it could remove (plan 0.018 W7). */
+	const room = { line: null as string | null };
 	const make = () => {
 		const u = new SelfUpkeep({
 			db,
 			log: silentLogger,
 			self,
 			mode: () => mode.m,
+			removable: () => room.line,
 			processes: () => ROOTS,
 			paths: { home: dir, state: dir },
 			dirs: () => ({ "state/voice": join(dir, "voice"), "state/logs": join(dir, "logs") }),
@@ -321,7 +324,7 @@ function rig(
 		self.attach(u);
 		return u;
 	};
-	return { db, clock, mode, rhythm, self, make, calls, dir };
+	return { db, clock, mode, rhythm, self, make, calls, dir, room };
 }
 
 describe("the upkeep", () => {
@@ -407,6 +410,9 @@ describe("the upkeep", () => {
 		assert.match(disk, /home, state — [\d.]+ GB free of [\d.]+ GB/);
 		assert.match(disk, /state\/voice — 20\.0\n {2}state\/logs — 0\.5/);
 		assert.ok(!disk.includes(r.dir), "no path");
+		assert.ok(!disk.includes("maintenance"));
+		r.room.line = "maintenance could remove 3.20 GB (spikes 3.20 GB)";
+		assert.match(r.self.command(["disk"], "owner_web"), /\nmaintenance could remove 3\.20 GB \(spikes 3\.20 GB\)$/);
 		assert.match(r.self.command(["history"], "owner_web"), /memory\.availableGb/);
 		assert.match(
 			r.self.command(["history", "memory.availableGb"], "owner_web"),

@@ -63,6 +63,8 @@ export interface CommandContext {
 	emailReport?: (() => string) | null;
 	/** /self, /motivation (plan 0.010 M0b, M0). */
 	self?: { command(args: string[], by: string): string } | null;
+	/** /maintain: what could be removed from the state directory, and the owner's say over it (plan 0.018 W7). */
+	maintain?: { command(args: string[]): string } | null;
 	/** /pause|/resume <motivation>, /self questions|accept|dismiss (plan 0.010 M1). */
 	motivations?: {
 		pause(m: string, by: string): string | null;
@@ -141,6 +143,7 @@ const HELP = [
 	"/self network — the link, its last changes and the machines Iyye uses; /self hosts — who is on the local network; /self host <id> <name> | forget",
 	"/self normal — what is usual for each reading, what is unusual now, the regularities and the forecast; /self expected <id>, /self unexpected <id> — say whether a regularity is intended",
 	"/self peer <name> away | back — say that a machine Iyye uses is expected to be away (its silence is then no trouble), or should be there",
+	"/maintain — what Iyye could remove from its own state directory (old logs, spike and sandbox leftovers, unused model downloads, free database pages), measured, with nothing removed; /maintain <action> — what exactly; /maintain run <action> confirm — remove it now; /maintain allow | disallow <action> — whether Iyye may run it on its own; /maintain runs — what was removed",
 	"/motivation — the four needs (self-preservation, curiosity, agency, social), their evidence, and what would be opened",
 	"/motivation report [days] — what each motivation opened, tried, resolved and was held back from (the trial period by default); /motivation trace <id>; /motivation useful <id> yes|no",
 	"/facts — facts extracted today; /facts <words> — beliefs about them, with sources; /facts compare — last night's structured facts; /facts confirm <id>, /facts correct <id> <text>, /facts wrong <id>; /facts private|share <id>; /facts why <id>; /facts report; /facts orphans [restore | delete [confirm]]",
@@ -192,6 +195,7 @@ const COMMANDS = new Set([
 	"/sent",
 	"/email",
 	"/self",
+	"/maintain",
 	"/motivation",
 	"/facts",
 	"/character",
@@ -351,6 +355,11 @@ export async function handleOwnerCommand(text: string, ctx: CommandContext): Pro
 				"/plan <id> | /plan approve <id> | /plan cancel <id> | /plan done <id> <step> | /plan time <id> HH:MM",
 			);
 		}
+		case "/maintain":
+			return {
+				handled: true,
+				reply: ctx.maintain ? ctx.maintain.command(args) : "maintenance is not available here",
+			};
 		case "/opportunities":
 			return {
 				handled: true,

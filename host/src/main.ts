@@ -102,6 +102,7 @@ import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./p
 import { guardClientRequests } from "./process/client-requests.ts";
 import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfExpectations } from "./self/expectations.ts";
+import { Maintenance } from "./self/maintain.ts";
 import { SelfModel, selfNoteFor, WINDOWS_MS } from "./self/model.ts";
 import { type Need, privateAddressOf, SelfSurroundings } from "./self/surroundings.ts";
 import { SelfUpkeep } from "./self/upkeep.ts";
@@ -785,6 +786,12 @@ async function main(): Promise<number> {
 			// The sandbox's workspaces last the day, like the conversations that wrote them.
 			sandbox?.wipeAll();
 			log.info("rhythm: conversations start afresh", { retired: n });
+			// Plan 0.018 W7: what could be removed is measured; with `allowed`, the actions the owner allowed run.
+			try {
+				maintenance.nightly();
+			} catch (err) {
+				log.warn("maintenance: the night's pass failed", { error: String(err) });
+			}
 		},
 		notify: (text) => appendFeed(db, { kind: "notice", text, at: new Date().toISOString() }),
 		energy: adenosine,
@@ -937,11 +944,30 @@ async function main(): Promise<number> {
 			day: Number(getKv(db, "rhythm.day")) || null,
 		}),
 	});
+	// Plan 0.018 W7: maintenance inside the state directory. Report first: something is removed only by the
+	// owner's own command, or (with IYYE2_MAINTAIN=allowed) by an action the owner allowed, at the end of a night.
+	const maintenance = new Maintenance({
+		db,
+		log,
+		stateDir: config.stateDir,
+		dbPath: join(config.stateDir, "iyye.db"),
+		mode: config.self.maintain,
+		logDays: config.self.maintainLogDays,
+		leftoverDays: config.self.maintainLeftoverDays,
+		memoryModels: () => [config.memory.embeddingsModel, config.memory.rerankerModel],
+		decisionsModel: () => config.decisions.model,
+		forecast: () => expectations.diskAsks()?.text ?? null,
+		notifyOwner: (n) =>
+			void outbox
+				.notifyOwner(n)
+				.catch((err: unknown) => log.warn("maintenance: notice failed", { error: String(err) })),
+	});
 	// Plan 0.018 W1: the machine's vitals, what uses memory and disk, the host's runs and the nights (records only).
 	const upkeep = new SelfUpkeep({
 		db,
 		log,
 		self: selfModel,
+		removable: () => maintenance.line(),
 		mode: () => rhythm.mode(),
 		vitalsMs: config.self.vitalsS * 1000,
 		processes: () => {
@@ -1046,6 +1072,7 @@ async function main(): Promise<number> {
 		mode: () => rhythm.mode(),
 		needs,
 		restWindowMinutes: (window.endMin - window.startMin + 1440) % 1440,
+		removable: () => maintenance.line(),
 	});
 	selfModel.attach(expectations);
 	// Plan 0.010 M0: the four motivations' needs, in shadow (journaled, nothing acts on them).
@@ -1235,6 +1262,7 @@ async function main(): Promise<number> {
 	});
 	const commandExtras = {
 		character,
+		maintain: maintenance,
 		moodReport: () =>
 			moodReport(db, new Date(), (scope) => {
 				if (scope === "owner") return "you";

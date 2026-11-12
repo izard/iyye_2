@@ -44,6 +44,8 @@ function rig() {
 	self.setFacet("hardware", { machine: "NVIDIA DGX Spark", chip: "GB10", memoryGb: 122 }, "probe", null, NOW);
 	self.setFacet("compute", { cores: 20 }, "probe", null, NOW);
 	let seq = 0;
+	/** What maintenance says it could remove (plan 0.018 W7). */
+	const room = { line: null as string | null };
 	const exp = new SelfExpectations({
 		db,
 		log: silentLogger,
@@ -51,6 +53,7 @@ function rig() {
 		mode: () => mode.m,
 		needs: { Telegram: "internet", "web search": "internet", "the thinking model on mbp": { peer: "mbp" } },
 		restWindowMinutes: 240,
+		removable: () => room.line,
 		timezone: "UTC",
 		now: () => clock.now,
 		newId: () => `${String(++seq).padStart(6, "0")}aa-0000-0000-0000-000000000000`,
@@ -64,7 +67,7 @@ function rig() {
 				"INSERT INTO self_changes (id, facet, field, old_json, new_json, source, at) VALUES (?, ?, ?, 'null', ?, 'probe', ?)",
 			)
 			.run(crypto.randomUUID(), facet, field, JSON.stringify(value), when.toISOString());
-	return { db, clock, mode, self, exp, machine, change };
+	return { db, clock, mode, self, exp, machine, change, room };
 }
 
 /** The network goes at about 23:15 and is back at about 07:10 the next morning, on the nights starting these days. */
@@ -348,10 +351,19 @@ describe("forecasts and the host's own record", () => {
 			r.self.command(["normal"], "owner_web"),
 			/forecast: free disk falls by 20 GB a day, about 10 days until it is full/,
 		);
+		// Plan 0.018 W7: the reason also says what maintenance could remove, and maintenance acts on the same words.
+		assert.equal(r.exp.diskAsks()!.text, sig!.text);
+		r.room.line = "maintenance could remove 3.20 GB (spikes 3.20 GB)";
+		assert.equal(
+			r.exp.signals()[0]!.text,
+			"free disk falls by 20 GB a day: about 10 days until it is full (200 GB free); maintenance could remove 3.20 GB (spikes 3.20 GB) (/maintain)",
+		);
+		r.room.line = null;
 		fill(40, 10, 600); // 200 GB left, 40 GB a day: five days
 		assert.equal(r.exp.signals()[0]!.weight, 0.8);
 		fill(2, 10); // 190 days
 		assert.deepEqual(r.exp.signals(), []);
+		assert.equal(r.exp.diskAsks(), null);
 		fill(-5, 10);
 		assert.deepEqual(r.exp.signals(), []);
 		assert.match(r.self.command(["normal"], "owner_web"), /forecast: free disk grows by 5 GB a day/);
