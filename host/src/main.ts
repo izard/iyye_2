@@ -33,6 +33,7 @@ import { controlsDigest } from "./character/policy.ts";
 import { bindTurnProfile, liveControlsDigest } from "./character/profile.ts";
 import { ConfigError, loadConfig, PROJECT_ROOT } from "./config.ts";
 import { DecisionClient } from "./decisions/client.ts";
+import { datasetPolicy, describeDataset, planDataset } from "./decisions/dataset.ts";
 import { FactRelation } from "./decisions/fact-relation.ts";
 import { InitiativeShadow } from "./decisions/initiative.ts";
 import { labelDecision, queueReport } from "./decisions/labels.ts";
@@ -1372,6 +1373,11 @@ async function main(): Promise<number> {
 				if (!Number.isInteger(n) || n < 1) return "usage: /decisions queue [n]";
 				return queueReport(db, n, config.decisions.labelsDaily, new Date());
 			}
+			// Plan 0.017 N2: what a dataset cut now would hold, in counts. Nothing is frozen and no test row is read out.
+			if (args[0] === "dataset")
+				return describeDataset(
+					planDataset(db, { policy: datasetPolicy({ testLooks: config.decisions.testLooks }), now: new Date() }),
+				);
 			if (args[0]) return roleReport(db, args[0]);
 			return decisionsReport(
 				db,

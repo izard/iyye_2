@@ -207,6 +207,8 @@ export interface Config {
 		toolkitSelection: "act" | "shadow";
 		/** Plan 0.017 N1: how many decision questions `/decisions queue` offers the owner a day (IYYE2_LABELS_DAILY). */
 		labelsDaily: number;
+		/** Plan 0.017 N2: how often a sealed test set may be looked at before it is retired (IYYE2_TEST_LOOKS). */
+		testLooks: number;
 	};
 }
 
@@ -466,6 +468,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			timeoutMs: int(env, "IYYE2_DECISIONS_TIMEOUT_MS", 5000, 100, 600_000),
 			toolkitSelection: oneOf(env, "IYYE2_TOOLKIT_SELECTION", ["act", "shadow"], "act"),
 			labelsDaily: int(env, "IYYE2_LABELS_DAILY", 15, 0, 200),
+			testLooks: int(env, "IYYE2_TEST_LOOKS", 5, 1, 100),
 		},
 	};
 }

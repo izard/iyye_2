@@ -35,7 +35,7 @@ export interface CommandContext {
 	/** The /memory report (plan 0.002). */
 	memoryReport?: (() => string) | null;
 	/**
-	 * /decisions [<role> | queue [n] | label <id> [question] yes|no|skip]: the decision service and its
+	 * /decisions [<role> | queue [n] | label <id> [question] yes|no|skip | dataset]: the decision service and its
 	 * shadow roles (plans 0.003, 0.004 T4). `args` are the words after the command.
 	 */
 	decisionsReport?: ((args?: string[], issuer?: string) => string) | null;
@@ -127,6 +127,7 @@ const HELP = [
 	"/tools — toolkits, who may use them, and the latest tool calls",
 	"/decisions — the local decision model's shadow answers and how they compared with what happened",
 	"/decisions <role> — a role's recent answers; /decisions queue [n] — today's decisions for you to label; /decisions label <id> [question] yes|no|skip — your answer to one of them",
+	"/decisions dataset — what a training dataset cut now would hold: your labels per role and class, the splits, the sealed test set, what is left out (counts only; nothing is frozen)",
 	"/focus — what Iyye is doing now and why, and its background work",
 	"/energy — adenosine: the energy level, what it allows, and where it went today",
 	"/domains — what Iyye looks at on its own; /domain enable|disable <name>",
