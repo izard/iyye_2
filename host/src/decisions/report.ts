@@ -15,6 +15,7 @@ import { labelCountLines } from "./labels.ts";
 import { MEMORY_SALIENCE, SALIENCE_QUESTION } from "./memory-salience.ts";
 import { OBSERVATION_IMPORTANCE } from "./observation-importance.ts";
 import { CLAIM_QUESTION, commitmentsOfReply, PROMISE_QUESTION, REPLY_REVIEW } from "./reply-review.ts";
+import { NEED_QUESTION, NEED_QUESTIONS, THINKING_NEED, type ThinkingNeedOutcome } from "./thinking-need.ts";
 import { INCLUDE_AT, TOOLKIT_SELECTION, TOOLKIT_SELECTION_ACTING } from "./toolkit-selection.ts";
 
 /** Every role this host asks, in report order. */
@@ -24,6 +25,7 @@ export const ROLES: readonly Role[] = [
 	REPLY_REVIEW,
 	OBSERVATION_IMPORTANCE,
 	INITIATIVE,
+	THINKING_NEED,
 ];
 
 interface Row {
@@ -57,6 +59,7 @@ export function decisionsReport(
 	service: { state: string; detail: string },
 	pendingSelection = 0,
 	pendingReplies = 0,
+	pendingThinking = 0,
 ): string {
 	const rows = db.prepare("SELECT * FROM decisions ORDER BY created_at, rowid").all() as Row[];
 	const lines = [`decision service: ${service.state}: ${service.detail}`];
@@ -90,6 +93,7 @@ export function decisionsReport(
 		}
 		if (role === MEMORY_SALIENCE.name) lines.push(...salienceLines(ok));
 		if (role === REPLY_REVIEW.name) lines.push(...reviewLines(db, ok, pendingReplies));
+		if (role === THINKING_NEED.name) lines.push(...thinkingNeedLines(db, ok, pendingThinking));
 	}
 	lines.push("", ...labelCountLines(db));
 	lines.push(
@@ -221,6 +225,72 @@ function reviewLines(db: Db, rows: Row[], pending: number): string[] {
 		out.push(`  your labels: ${owner.length}, Kev agrees on ${agree}`);
 	} else out.push("  no labels from you yet");
 	if (pending) out.push(`  ${pending} delivered repl${pending === 1 ? "y" : "ies"} waiting to be reviewed`);
+	return out;
+}
+
+/**
+ * The thinking need (shadow) against what the chat model did and, where the
+ * owner labelled a turn, against the owner. The chat model's own choice is the
+ * weak label, so agreeing with it is imitation; only the owner's labels say
+ * which judges better, and Kev's wordings and the chat model are all scored on
+ * them. The owner's label is stored under the role's first question.
+ */
+function thinkingNeedLines(db: Db, rows: Row[], pending: number): string[] {
+	const turns = rows
+		.filter((r) => r.outcome_json)
+		.map((r) => ({
+			r,
+			v: JSON.parse(r.verdicts_json ?? "{}") as Record<string, string>,
+			called: (JSON.parse(r.outcome_json!) as ThinkingNeedOutcome).called === true,
+		}));
+	const out: string[] = [];
+	if (turns.length === 0) out.push("  no turns yet (asked after each turn that had the thinking model on offer)");
+	else {
+		const mean = (ps: number[]) => (ps.length ? (ps.reduce((a, b) => a + b, 0) / ps.length).toFixed(2) : "-");
+		const labels = new Map(
+			(
+				db
+					.prepare(
+						`SELECT l.decision_id, l.value FROM decision_labels l JOIN decisions d ON d.id = l.decision_id
+						 WHERE d.role = ? AND l.question = ? AND l.value IS NOT NULL`,
+					)
+					.all(THINKING_NEED.name, NEED_QUESTION.id) as { decision_id: string; value: number }[]
+			).map((l) => [l.decision_id, l.value === 1]),
+		);
+		const labelled = turns.filter((x) => labels.has(x.r.id)).map((x) => ({ ...x, needed: labels.get(x.r.id)! }));
+		out.push(
+			`  ${turns.length} turns with the thinking model on offer: the chat model asked it in ${turns.filter((x) => x.called).length}`,
+			labelled.length
+				? `  your labels: ${labelled.length} (needed in ${labelled.filter((x) => x.needed).length}); the chat model's choice agrees on ${labelled.filter((x) => x.called === x.needed).length}`
+				: "  no labels from you yet (/decisions queue, or /decisions label <id> yes|no): only they say which judges better",
+		);
+		for (const q of NEED_QUESTIONS) {
+			const xs = turns
+				.map((x) => ({ ...x, p: noul(x.r, q.id) }))
+				.filter((x): x is typeof x & { p: number } => x.p !== null);
+			if (xs.length === 0) continue;
+			const called = xs.filter((x) => x.called);
+			const not = xs.filter((x) => !x.called);
+			const best = bestThreshold(xs.map((x) => ({ p: x.p, yes: x.called })));
+			out.push(
+				`  ${q.id}: ${xs.filter((x) => x.v[q.id] === "yes").length} yes · ${xs.filter((x) => x.v[q.id] === "abstain").length} unsure · ${xs.filter((x) => x.v[q.id] === "no").length} no; mean p ${mean(called.map((x) => x.p))} where asked, ${mean(not.map((x) => x.p))} where not`,
+				`    yes where it was not asked ${not.filter((x) => x.v[q.id] === "yes").length} · no where it was asked ${called.filter((x) => x.v[q.id] === "no").length} · best threshold p ≥ ${best.t.toFixed(2)} → ${best.correct}/${xs.length} agree with the chat model's own choice (imitation, not being right)`,
+			);
+			const mine = xs.filter((x) => labels.has(x.r.id) && x.v[q.id] !== "abstain");
+			if (labelled.length)
+				out.push(
+					`    against your labels: agrees on ${mine.filter((x) => (x.v[q.id] === "yes") === labels.get(x.r.id)).length} of ${mine.length} it decided (${labelled.length - mine.length} unsure)`,
+				);
+		}
+		const first = NEED_QUESTION.id;
+		const line = (x: { r: Row }) =>
+			`    ${x.r.id.slice(0, 8)} p=${noul(x.r, first)?.toFixed(2)}${labels.has(x.r.id) ? " (labelled)" : ""}: ${preview(x.r.state_json)}`;
+		const yesNoCall = turns.filter((x) => !x.called && x.v[first] === "yes");
+		const noCalled = turns.filter((x) => x.called && x.v[first] === "no");
+		if (yesNoCall.length) out.push(`  ${first} yes, the thinking model not asked:`, ...yesNoCall.slice(-5).map(line));
+		if (noCalled.length) out.push(`  ${first} no, the thinking model asked:`, ...noCalled.slice(-5).map(line));
+	}
+	if (pending) out.push(`  ${pending} turn(s) waiting to be asked`);
 	return out;
 }
 

@@ -78,17 +78,43 @@ const RU_WEEKDAYS: Record<string, string> = {
 /** The hour an event with no time of day is taken to be over ("how did the exam go?" not before the evening). */
 export const EVENING_HOUR = 18;
 
+const EN_ASIDE = /^(?:(?:yes|yeah|yep|ok|okay|sure|and|then|so|well|also|now|hi|hello|hey|iyye)[\s,.!]+)+/;
+const EN_IMPERATIVE =
+	/^(?:send|tell|check|look|find|show|give|make|prepare|write|search|get|let|read|summari[sz]e|translate|explain|list|do|try|keep|use|call|ask|remember|note|schedule|set|add|create|compare|proofread|help)\b/;
+const RU_IMPERATIVE =
+	/(?<![\p{L}])(?:пришли|отправь|напиши|расскажи|скажи|проверь|посмотри|найди|сделай|подготовь|покажи|дай|объясни|переведи|составь|запомни|поищи|узнай|помоги|прочитай|сравни)(?:те)?(?![\p{L}])/u;
+
+/**
+ * A sentence that asks Iyye something, or asks it to do something: "can you send it today or tomorrow",
+ * «Ты можешь прислать даже сегодня…», "check tomorrow morning please". Its day is when Iyye may act, not an
+ * event of the speaker's (2026-11-14: such a sentence was followed up with "how did it go?").
+ */
+export function addressedToIyye(sentence: string): boolean {
+	const t = sentence.toLowerCase().trim();
+	if (t.includes("?")) return true;
+	if (/\b(?:you|please|pls|plz)\b/.test(t) || EN_IMPERATIVE.test(t.replace(EN_ASIDE, ""))) return true;
+	if (/(?<![\p{L}])(?:ты|тебе|тебя|тобой|вы|вам|вас|пожалуйста|плиз|давай|давайте)(?![\p{L}])/u.test(t)) return true;
+	if (RU_IMPERATIVE.test(t)) return true;
+	// A verb in the second person: «можешь», «пришлёшь», «сделаешь».
+	return (t.match(/\p{L}+/gu) ?? []).some((w) => w !== "лишь" && /\p{L}{2}(?:ешь|ёшь|ишь)$/u.test(w));
+}
+
 /**
  * The first clear date phrase in a message, resolved against when it was said, as the time the event is
- * over; null when none.
+ * over; null when none. Only sentences that tell of something count: a question or a request to Iyye that
+ * names a day is not an event.
  */
 export function eventDate(text: string, saidAt: Date): { phrase: string; at: Date } | null {
-	const t = text.toLowerCase();
-	if (t.trim().endsWith("?") || /\bremind|напомни/.test(t)) return null; // a question; a reminder request is a commitment
+	const whole = text.toLowerCase();
+	if (whole.trim().endsWith("?") || /\bremind|напомни/.test(whole)) return null; // a question; a reminder request is a commitment
+	const t = whole
+		.split(/(?<=[.!?…])\s+|\n+/)
+		.filter((sentence) => !addressedToIyye(sentence))
+		.join(" ");
 	// Past or recurring: "last Monday", "every Friday", "two days ago", «в прошлую пятницу», «каждый день».
 	if (
 		/\b(last|every|each|ago|yesterday|previous|past|used to)\b|(?<![\p{L}])(прошл\p{L}*|кажд\p{L}*|вчера|назад)(?![\p{L}])/iu.test(
-			t,
+			whole,
 		)
 	)
 		return null;

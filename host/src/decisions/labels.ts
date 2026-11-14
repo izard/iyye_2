@@ -26,7 +26,8 @@
  * For roles whose outcome is a single owner answer, the owner's yes/no labels
  * of a row are also joined as its outcome (owner strength), which the
  * `/decisions` reports read. Toolkit selection's outcome stays the weak record
- * of the tools used; its owner labels live only here.
+ * of the tools used, and the thinking need's the record of whether the chat
+ * model asked the thinking model; their owner labels live only here.
  */
 
 import { createHash } from "node:crypto";
@@ -38,6 +39,7 @@ import { INITIATIVE } from "./initiative.ts";
 import { MEMORY_SALIENCE } from "./memory-salience.ts";
 import { OBSERVATION_IMPORTANCE } from "./observation-importance.ts";
 import { REPLY_REVIEW } from "./reply-review.ts";
+import { NEED_QUESTION, THINKING_NEED } from "./thinking-need.ts";
 import { TOOLKIT_SELECTION } from "./toolkit-selection.ts";
 
 export type Via = "uncertain" | "disagree" | "random" | "direct";
@@ -68,6 +70,15 @@ const SINGLE: Record<string, OwnerQuestion> = {
 	},
 };
 
+const NEEDS_THINKING: OwnerQuestion = {
+	field: NEED_QUESTION.id,
+	yes: "the message needed the thinking model",
+	no: "the message did not need the thinking model",
+};
+
+/** Roles whose outcome is the record of what happened: an owner label is kept beside it, never in its place. */
+const RECORD_OUTCOME: readonly string[] = [TOOLKIT_SELECTION.name, THINKING_NEED.name];
+
 const CLAIMS: OwnerQuestion = {
 	field: "claims_arranged",
 	yes: "the reply claimed something was set up",
@@ -82,12 +93,16 @@ const PROMISES: OwnerQuestion = {
 /** Short names the owner may type for a reply review's questions. */
 const REVIEW_ALIASES: Record<string, string> = { claims: CLAIMS.field, promises: PROMISES.field };
 
-/** The roles the queue offers (decision 8: the first adapter's roles). */
+/**
+ * The roles the queue offers (decision 8: the first adapter's roles), and since 2026-11-14 the thinking need,
+ * whose only real labels are the owner's.
+ */
 export const QUEUE_ROLES: readonly string[] = [
 	MEMORY_SALIENCE.name,
 	OBSERVATION_IMPORTANCE.name,
 	REPLY_REVIEW.name,
 	TOOLKIT_SELECTION.name,
+	THINKING_NEED.name,
 ];
 
 /** Decision 1: only these scopes' decisions train, so only theirs are queued. */
@@ -126,6 +141,7 @@ export function ownerQuestions(row: { role: string; schema_version: number; ques
 			no: `the message did not need the ${kit} toolkit`,
 		}));
 	}
+	if (row.role === THINKING_NEED.name) return asked.has(NEEDS_THINKING.field) ? [NEEDS_THINKING] : [];
 	const q = SINGLE[row.role];
 	// Labelled even when the call failed: the label is about the state, not about Kev's answer.
 	return q ? [q] : [];
@@ -185,7 +201,7 @@ export function labelDecision(db: Db, args: readonly string[], issuer: string, a
 			 ON CONFLICT (decision_id, question) DO UPDATE SET value = excluded.value,
 				labelled_by = excluded.labelled_by, labelled_at = excluded.labelled_at`,
 		).run(row.id, q.field, value, issuer, at, offer?.via ?? "direct");
-		if (value !== null && row.role !== TOOLKIT_SELECTION.name) {
+		if (value !== null && !RECORD_OUTCOME.includes(row.role)) {
 			// The reports' view: every yes/no the owner gave this row, as its outcome.
 			const all = db
 				.prepare("SELECT question, value FROM decision_labels WHERE decision_id = ? AND value IS NOT NULL")
@@ -226,6 +242,8 @@ function disagrees(row: LabelRow, question: string, verdict: string | undefined)
 		return (verdict === "yes") !== o.worth_remembering;
 	if (row.role === TOOLKIT_SELECTION.name && Array.isArray(o.used))
 		return verdict === "no" && (o.used as string[]).includes(question);
+	// Either way round: Kev says it was needed and the chat model did not ask, or the reverse.
+	if (row.role === THINKING_NEED.name && typeof o.called === "boolean") return (verdict === "yes") !== o.called;
 	// The ledger fact is not a claims label (plan 0.006 C2), only a hint where to look: a claim with no
 	// reminder made, or no claim where one was made.
 	if (row.role === REPLY_REVIEW.name && question === CLAIMS.field && typeof o.commitment_created === "boolean")

@@ -41,6 +41,7 @@ import { ObservationImportance } from "./decisions/observation-importance.ts";
 import { ReplyReviewShadow } from "./decisions/reply-review.ts";
 import { decisionsReport, roleReport } from "./decisions/report.ts";
 import { DecisionService } from "./decisions/service.ts";
+import { ThinkingNeedShadow } from "./decisions/thinking-need.ts";
 import { ToolkitSelectionShadow, ToolkitSelector } from "./decisions/toolkit-selection.ts";
 import { auditUntracedCitations, ensureBeliefTimelines } from "./facts/beliefs.ts";
 import { FactsCommand } from "./facts/commands.ts";
@@ -499,7 +500,12 @@ async function main(): Promise<number> {
 		toolkitSelection: selectionActs
 			? { alwaysOn: (name) => selector.alwaysOn(name), choose: (req) => selector.choose(req) }
 			: null,
-		afterTurn: (turn) => (selectionActs ? selector.observe(turn) : selectionShadow.observe(turn)),
+		afterTurn: (turn) => {
+			if (selectionActs) selector.observe(turn);
+			else selectionShadow.observe(turn);
+			// Shadow (2026-11-14): would Kev have asked the thinking model? Asked later, when the device is free.
+			thinkingNeed.observe(turn);
+		},
 	});
 
 	// Without a token the Telegram route has no adapter: such actions fail at once (no fallback to web).
@@ -896,6 +902,7 @@ async function main(): Promise<number> {
 			sandbox?.wipeAll();
 			selectionShadow.forgetScopes(scopes);
 			selector.forgetScopes(scopes);
+			thinkingNeed.forgetScopes(scopes);
 		},
 		purgeTraces: (bank) => memory.purgeTraces(bank),
 		mediaDir: join(config.stateDir, "media"),
@@ -1364,7 +1371,13 @@ async function main(): Promise<number> {
 				return queueReport(db, n, config.decisions.labelsDaily, new Date());
 			}
 			if (args[0]) return roleReport(db, args[0]);
-			return decisionsReport(db, decisions.status, selectionShadow.pending, replyReview.pending);
+			return decisionsReport(
+				db,
+				decisions.status,
+				selectionShadow.pending,
+				replyReview.pending,
+				thinkingNeed.pending,
+			);
 		},
 		rhythmReport: {
 			day: () => rhythm.describeDay(stmCount("'day'"), stmCount("'backlog'")),
@@ -1459,6 +1472,16 @@ async function main(): Promise<number> {
 		chatPending: () => scheduler.hasRunnableJobs(),
 		log,
 	});
+	// Shadow (owner decision 2026-11-14): after each turn that had the thinking model on offer, whether Kev would
+	// have asked it, beside whether the chat model did.
+	const thinkingNeed = new ThinkingNeedShadow({
+		db,
+		client: decisionClient,
+		device,
+		chatPending: () => scheduler.hasRunnableJobs(),
+		ready: () => decisions.checkpoint !== null,
+		log,
+	});
 	// Plan 0.003 K3, both shadow: memory salience inside the night loop; reply review after delivery, when idle.
 	const memorySalience = new MemorySalience({ db, client: decisionClient, device, log });
 	// Plan 0.011 F3, shadow: how a new fact relates to a stored belief of another key.
@@ -1532,6 +1555,7 @@ async function main(): Promise<number> {
 				await outbox.stop();
 				await memory.stop();
 				await selectionShadow.stop();
+				await thinkingNeed.stop();
 				await replyReview.stop();
 				await voiceShadow?.stop();
 				clearInterval(moodTimer);
@@ -1604,6 +1628,7 @@ async function main(): Promise<number> {
 	}
 	decisions.start(); // in the background too
 	selectionShadow.start();
+	thinkingNeed.start();
 	replyReview.start();
 	voiceShadow?.start();
 	background.start();

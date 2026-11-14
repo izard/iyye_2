@@ -12,9 +12,22 @@ import { describe, test } from "node:test";
 import { PlanRunner } from "../src/kernel/plans.ts";
 import { silentLogger } from "../src/log.ts";
 import { forgetRecords, forgetTarget } from "../src/memory/forget.ts";
-import { type ActorDeps, checkFollowUp, MotivationActor, parseDraft } from "../src/motivation/actor.ts";
+import {
+	type ActorDeps,
+	checkFollowUp,
+	followUpSystem,
+	MotivationActor,
+	parseDraft,
+	ungroundedWord,
+} from "../src/motivation/actor.ts";
 import type { Composed } from "../src/motivation/compose.ts";
-import { EVENING_HOUR, eventDate, statesIntention, unplannedIntentions } from "../src/motivation/detectors.ts";
+import {
+	addressedToIyye,
+	EVENING_HOUR,
+	eventDate,
+	statesIntention,
+	unplannedIntentions,
+} from "../src/motivation/detectors.ts";
 import { collectSignals } from "../src/motivation/signals.ts";
 import { MotivationTracker } from "../src/motivation/tracker.ts";
 import { getContact, linkAccount, OWNER_CONTACT_ID } from "../src/state/contacts.ts";
@@ -165,11 +178,12 @@ async function openAll(actor: MotivationActor, db: Db, now: Date, kind: string) 
 }
 
 const opp = (db: Db, cluster: string) =>
-	db.prepare("SELECT status, answer, ref, attempts FROM opportunities WHERE cluster = ?").get(cluster) as
-		| { status: string; answer: string | null; ref: string | null; attempts: number }
+	db.prepare("SELECT status, answer, ref, attempts, outcome FROM opportunities WHERE cluster = ?").get(cluster) as
+		| { status: string; answer: string | null; ref: string | null; attempts: number; outcome: string | null }
 		| undefined;
 
 const ok = (text: string): Composed => ({ ok: true, text });
+const okText = ok;
 
 describe("M3 detectors", () => {
 	test("a day with no time is over in the evening; past and recurring dates are not events; today counts", () => {
@@ -185,6 +199,41 @@ describe("M3 detectors", () => {
 		assert.equal(today.at.getDate(), 8);
 		assert.equal(today.at.getHours(), EVENING_HOUR);
 		assert.ok(eventDate("Сегодня у меня собеседование", morning));
+	});
+
+	test("a day named in a question or a request to Iyye is when Iyye may act, not an event (2026-11-14)", () => {
+		const said = new Date(2026, 10, 13, 20, 29);
+		// What was followed up with "how did your date go?".
+		assert.equal(eventDate("Можешь прислать хоть сегодня, когда сможешь, или завтра.", said), null);
+		assert.equal(eventDate("Good morning Iyye, what are news today? And localllama reddit", said), null);
+		assert.equal(eventDate("AI news today? Generic, not in depth.", said), null);
+		assert.equal(eventDate("yes, check tomorrow morning please.", said), null);
+		assert.equal(eventDate("Check this email which I am going to send tomorrow", said), null);
+		assert.equal(eventDate("Пришли мне это завтра", said), null);
+		assert.equal(
+			eventDate("Сделаешь к пятнице? Я в пятницу уезжаю", said)?.phrase,
+			"friday",
+			"the second sentence is theirs",
+		);
+		for (const s of [
+			"Can you send it today?",
+			"you can do it tomorrow",
+			"Ok, then send it on Friday",
+			"Напишите в субботу",
+		])
+			assert.equal(addressedToIyye(s), true, s);
+		for (const s of ["I have my driving exam tomorrow", "Сегодня у меня собеседование", "Лишь завтра придёт посылка"])
+			assert.equal(addressedToIyye(s), false, s);
+		// An event told beside a request still counts, by its own sentence.
+		assert.equal(
+			eventDate("Thanks, send it when you can. I have my driving exam tomorrow.", said)?.phrase,
+			"tomorrow",
+		);
+		assert.equal(eventDate("Спасибо, пришли когда сможешь. У меня завтра экзамен.", said)?.phrase, "tomorrow");
+		assert.equal(
+			eventDate("Your new DGX Spark is with the courier, it should be delivered today", said)?.phrase,
+			"today",
+		);
 	});
 
 	test("suggestions and look-up requests are not intentions; a turn that used a tool did what was asked", () => {
@@ -539,6 +588,81 @@ describe("M3 social: follow-ups", () => {
 		});
 		assert.deepEqual(checkFollowUp("See https://example.com", []), { why: "a link" });
 		assert.equal(checkFollowUp('"How did it go?"', ["Julia"]), "How did it go?");
+	});
+
+	test("a follow-up may name only what the person said; with no event the model says so and nothing is sent", async () => {
+		// The prompt has no word a small model could take for the event (it took "date" for a romantic one).
+		assert.doesNotMatch(followUpSystem("Julia"), /\bdate\b/i);
+		assert.match(followUpSystem("Julia"), /write only NONE/);
+		const julia = "Можешь прислать хоть сегодня, когда сможешь, или завтра.";
+		assert.deepEqual(
+			checkFollowUp(
+				"Привет, Джулия! Как прошло свидание? Ты упомянула: «Можешь прислать хоть сегодня, когда сможешь, или завтра». 😊",
+				[],
+				julia,
+				["Julia"],
+			),
+			{ why: "asks about something they did not say (свидание)" },
+		);
+		assert.deepEqual(
+			checkFollowUp(
+				"Hi Jacob, just checking in about your date—how did it go? You mentioned earlier that nothing had changed.",
+				[],
+				"Nothing has changed today",
+				["Jacob"],
+			),
+			{ why: "asks about something they did not say (date)" },
+		);
+		assert.deepEqual(checkFollowUp("NONE", [], julia), { why: "no event", none: true });
+		assert.deepEqual(checkFollowUp(" none. ", [], julia), { why: "no event", none: true });
+		// Their own words in another form, a greeting by name, and the usual words of asking are fine.
+		const passes = (text: string, said: string, own: string[] = []) =>
+			assert.equal(checkFollowUp(text, [], said, own), text);
+		passes(
+			"How did it go with the DGX Spark delivery? You mentioned it was delayed by a day.",
+			"Alas, DGX Spark delivery is delayed by the carrier for one day, should arrive tomorrow now",
+		);
+		passes(
+			"Hi Jacob! How did your maths test go? I hope it went well.",
+			"I have my maths test tomorrow, wish me luck",
+			["Jacob"],
+		);
+		passes("Привет, Джулия! Как прошло собеседование? Надеюсь, всё хорошо.", "Сегодня у меня собеседование", [
+			"Julia",
+		]);
+		passes("Как прошла презентация?", "Завтра показываю презентацию начальству");
+		passes("Jacob, how was the concert?", "Concert tomorrow!", ["Jacob"]);
+		assert.equal(ungroundedWord("How was the exam?", "Concert tomorrow!"), "exam");
+		assert.equal(ungroundedWord("How was the contract signing?", "I will contact them tomorrow"), "contract");
+
+		const none = setup({ answers: [okText("NONE")] });
+		await openAll(none.actor, none.db, none.clock.t, "event_followup");
+		assert.equal(none.calls.sends.length, 0);
+		assert.deepEqual(
+			[opp(none.db, "event:j1")!.status, opp(none.db, "event:j1")!.outcome, opp(none.db, "event:j1")!.attempts],
+			["settled", "nothing", 0],
+		);
+		await none.actor.act([], new Set());
+		assert.equal(none.calls.compose.length, 1, "not tried again");
+
+		// A message that asks about something else is tried again, and after three such answers given up.
+		const stray = setup({
+			answers: [
+				okText("How did your date go?"),
+				okText("How was the party?"),
+				okText("How did your maths test go?"),
+			],
+		});
+		await openAll(stray.actor, stray.db, stray.clock.t, "event_followup");
+		assert.equal(stray.calls.sends.length, 0);
+		assert.match(opp(stray.db, "event:j1")!.answer!, /did not say \(date\)/);
+		await stray.actor.act([], new Set());
+		assert.equal(stray.calls.sends.length, 0);
+		await stray.actor.act([], new Set());
+		assert.deepEqual(stray.calls.sends, [{ personId: "jacob", text: "How did your maths test go?" }]);
+	});
+
+	test("the composed message is checked in the act too", async () => {
 		const { db, clock, actor, calls } = setup({
 			answers: [ok("Julia says hi! How did it go?"), ok("How did it go?")],
 		});

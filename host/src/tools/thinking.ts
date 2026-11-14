@@ -164,6 +164,20 @@ function answeredToday(db: Db, now: Date): number {
 	).n;
 }
 
+/**
+ * A turn's questions to the thinking model, from the records: how many the session asked (any outcome: asking
+ * is the session's own judgement that it was needed) and how many were answered.
+ */
+export function thinkingCalls(db: Db, scope: string, from: string, to: string): { calls: number; answered: number } {
+	const r = db
+		.prepare(
+			`SELECT count(*) AS calls, coalesce(sum(outcome = 'ok' AND result LIKE ?), 0) AS answered
+			 FROM tool_calls WHERE scope = ? AND tool = ? AND started_at >= ? AND started_at <= ?`,
+		)
+		.get(`%${ANSWERED} after%`, scope, ASK_THINKING_TOOL, from, to) as { calls: number; answered: number };
+	return { calls: r.calls, answered: r.answered };
+}
+
 /** The completion: streamed (`streamChat`), thinking on at the chosen effort, the server's own sampling. */
 export function thinkComplete(url: (model: string) => string, maxTokens: number): ThinkComplete {
 	return (model, question, signal, effort) =>
