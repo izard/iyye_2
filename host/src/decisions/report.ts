@@ -236,15 +236,22 @@ function reviewLines(db: Db, rows: Row[], pending: number): string[] {
  * them. The owner's label is stored under the role's first question.
  */
 function thinkingNeedLines(db: Db, rows: Row[], pending: number): string[] {
-	const turns = rows
+	const every = rows
 		.filter((r) => r.outcome_json)
-		.map((r) => ({
-			r,
-			v: JSON.parse(r.verdicts_json ?? "{}") as Record<string, string>,
-			called: (JSON.parse(r.outcome_json!) as ThinkingNeedOutcome).called === true,
-		}));
+		.map((r) => {
+			const o = JSON.parse(r.outcome_json!) as Partial<ThinkingNeedOutcome>;
+			return {
+				r,
+				v: JSON.parse(r.verdicts_json ?? "{}") as Record<string, string>,
+				called: o.called === true,
+				away: o.away === true,
+			};
+		});
+	// A turn told the thinking model was away: not calling it was no judgement of the chat model's.
+	const turns = every.filter((x) => !x.away);
+	const away = every.length - turns.length;
 	const out: string[] = [];
-	if (turns.length === 0) out.push("  no turns yet (asked after each turn that had the thinking model on offer)");
+	if (every.length === 0) out.push("  no turns yet (asked after each turn that had the thinking model on offer)");
 	else {
 		const mean = (ps: number[]) => (ps.length ? (ps.reduce((a, b) => a + b, 0) / ps.length).toFixed(2) : "-");
 		const labels = new Map(
@@ -257,11 +264,15 @@ function thinkingNeedLines(db: Db, rows: Row[], pending: number): string[] {
 					.all(THINKING_NEED.name, NEED_QUESTION.id) as { decision_id: string; value: number }[]
 			).map((l) => [l.decision_id, l.value === 1]),
 		);
-		const labelled = turns.filter((x) => labels.has(x.r.id)).map((x) => ({ ...x, needed: labels.get(x.r.id)! }));
+		const labelled = every.filter((x) => labels.has(x.r.id)).map((x) => ({ ...x, needed: labels.get(x.r.id)! }));
+		const chose = labelled.filter((x) => !x.away);
 		out.push(
-			`  ${turns.length} turns with the thinking model on offer: the chat model asked it in ${turns.filter((x) => x.called).length}`,
+			`  ${turns.length} turns with the thinking model on offer: the chat model asked it in ${turns.filter((x) => x.called).length}` +
+				(away
+					? ` (and ${away} more while it could not be reached: the chat model was told, so they are not compared with it)`
+					: ""),
 			labelled.length
-				? `  your labels: ${labelled.length} (needed in ${labelled.filter((x) => x.needed).length}); the chat model's choice agrees on ${labelled.filter((x) => x.called === x.needed).length}`
+				? `  your labels: ${labelled.length} (needed in ${labelled.filter((x) => x.needed).length}); the chat model's choice agrees on ${chose.filter((x) => x.called === x.needed).length} of ${chose.length}`
 				: "  no labels from you yet (/decisions queue, or /decisions label <id> yes|no): only they say which judges better",
 		);
 		for (const q of NEED_QUESTIONS) {
@@ -276,7 +287,8 @@ function thinkingNeedLines(db: Db, rows: Row[], pending: number): string[] {
 				`  ${q.id}: ${xs.filter((x) => x.v[q.id] === "yes").length} yes · ${xs.filter((x) => x.v[q.id] === "abstain").length} unsure · ${xs.filter((x) => x.v[q.id] === "no").length} no; mean p ${mean(called.map((x) => x.p))} where asked, ${mean(not.map((x) => x.p))} where not`,
 				`    yes where it was not asked ${not.filter((x) => x.v[q.id] === "yes").length} · no where it was asked ${called.filter((x) => x.v[q.id] === "no").length} · best threshold p ≥ ${best.t.toFixed(2)} → ${best.correct}/${xs.length} agree with the chat model's own choice (imitation, not being right)`,
 			);
-			const mine = xs.filter((x) => labels.has(x.r.id) && x.v[q.id] !== "abstain");
+			// Against the owner, every labelled turn counts: Kev judged the message, whatever the other machine did.
+			const mine = every.filter((x) => labels.has(x.r.id) && noul(x.r, q.id) !== null && x.v[q.id] !== "abstain");
 			if (labelled.length)
 				out.push(
 					`    against your labels: agrees on ${mine.filter((x) => (x.v[q.id] === "yes") === labels.get(x.r.id)).length} of ${mine.length} it decided (${labelled.length - mine.length} unsure)`,

@@ -243,7 +243,9 @@ function disagrees(row: LabelRow, question: string, verdict: string | undefined)
 	if (row.role === TOOLKIT_SELECTION.name && Array.isArray(o.used))
 		return verdict === "no" && (o.used as string[]).includes(question);
 	// Either way round: Kev says it was needed and the chat model did not ask, or the reverse.
-	if (row.role === THINKING_NEED.name && typeof o.called === "boolean") return (verdict === "yes") !== o.called;
+	// (Not a turn told the thinking model was away: the chat model had no choice to disagree with.)
+	if (row.role === THINKING_NEED.name && typeof o.called === "boolean")
+		return o.away !== true && (verdict === "yes") !== o.called;
 	// The ledger fact is not a claims label (plan 0.006 C2), only a hint where to look: a claim with no
 	// reminder made, or no claim where one was made.
 	if (row.role === REPLY_REVIEW.name && question === CLAIMS.field && typeof o.commitment_created === "boolean")

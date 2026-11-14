@@ -129,6 +129,11 @@ export class RemoteModels {
 		return this.current;
 	}
 
+	/** Why a lease would be refused right now, in a word; null while the endpoint is up. */
+	get away(): string | null {
+		return this.current.state === "up" ? null : this.current.state;
+	}
+
 	async start(): Promise<void> {
 		this.server = createServer((req, res) => {
 			this.handle(req, res).catch((err: unknown) => {

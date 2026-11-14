@@ -242,6 +242,7 @@ describe("the pass-through to another machine", () => {
 	test("forwards a leased call with the key added and the endpoint's own model name, streaming", async () => {
 		await start(await fakeEndpoint());
 		assert.equal(remote.status.state, "up");
+		assert.equal(remote.away, null);
 		const lease = remote.acquire("tak@mbp");
 		assert.ok("release" in lease);
 		const r = await post(port, { model: "tak@mbp", stream: true, messages: [{ role: "user", content: "hi" }] });
@@ -267,6 +268,7 @@ describe("the pass-through to another machine", () => {
 		await start(await fakeEndpoint("other"));
 		assert.equal(remote.status.state, "unreachable");
 		assert.match(remote.status.detail, /certificate/i);
+		assert.equal(remote.away, "unreachable", "a word for the turn's note: exactly when a lease is refused");
 		const lease = remote.acquire("tak@mbp");
 		assert.ok(!("release" in lease) && lease.busy, "not now: callers wait");
 	});

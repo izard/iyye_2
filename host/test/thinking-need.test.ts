@@ -129,7 +129,7 @@ describe("thinking need (shadow)", () => {
 			[NEED_QUESTION.id, ASKS_QUESTION.id],
 		);
 		assert.deepEqual(JSON.parse(r!.verdicts_json!), { [NEED_QUESTION.id]: "yes", [ASKS_QUESTION.id]: "no" });
-		assert.deepEqual(JSON.parse(r!.outcome_json!), { called: true, calls: 2, answered: 1 });
+		assert.deepEqual(JSON.parse(r!.outcome_json!), { called: true, calls: 2, answered: 1, away: false });
 		assert.equal(r!.outcome_source, "tool_calls");
 		assert.equal(r!.label_strength, "weak");
 		// Kev was sent the message and the two questions, nothing else.
@@ -158,7 +158,12 @@ describe("thinking need (shadow)", () => {
 			assert.equal(await shadow.drainOnce(), 1);
 			assert.deepEqual(counts(), beforeCounts);
 			assert.equal(rows(db).length, 1);
-			assert.deepEqual(JSON.parse(rows(db)[0]!.outcome_json!), { called: false, calls: 0, answered: 0 });
+			assert.deepEqual(JSON.parse(rows(db)[0]!.outcome_json!), {
+				called: false,
+				calls: 0,
+				answered: 0,
+				away: false,
+			});
 		}
 	});
 
@@ -207,13 +212,52 @@ describe("thinking need (shadow)", () => {
 		const after = rows(db)[0]!;
 		assert.deepEqual(
 			JSON.parse(after.outcome_json!),
-			{ called: false, calls: 0, answered: 0 },
+			{ called: false, calls: 0, answered: 0, away: false },
 			"what happened stays",
 		);
 		assert.equal(after.label_strength, "weak");
 		assert.deepEqual(db.prepare("SELECT decision_id, question, value, via FROM decision_labels").all(), [
 			{ decision_id: hard!.id, question: NEED_QUESTION.id, value: 1, via: "disagree" },
 		]);
+	});
+
+	test("a turn told the thinking model was away is no judgement of the chat model's: marked, and left out of that comparison", async () => {
+		const db = openDb(":memory:");
+		const { shadow } = make(db);
+		kev.answer = () => 0.9;
+		shadow.observe(
+			turn("prove there are infinitely many primes", "2026-11-14T10:00:00.000Z", { noted: ["thinking"] }),
+		);
+		shadow.observe(turn("and that the square root of 2 is irrational", "2026-11-14T10:05:00.000Z", { noted: [] }));
+		assert.equal(await shadow.drainOnce(), 2);
+		const [told, free] = rows(db);
+		assert.deepEqual(JSON.parse(told!.outcome_json!), { called: false, calls: 0, answered: 0, away: true });
+		assert.deepEqual(JSON.parse(free!.outcome_json!), { called: false, calls: 0, answered: 0, away: false });
+
+		// Kev said yes and nothing was asked in both; only the turn that had the choice is a disagreement.
+		const q = labelQueue(db, { n: 5, daily: 15, now: new Date("2026-11-14T13:00:00Z") });
+		assert.deepEqual(
+			q.items.map((i) => [i.id, i.via]),
+			[
+				[free!.id, "disagree"],
+				[told!.id, "random"],
+			],
+		);
+		labelDecision(db, [told!.id!, "yes"], "owner_web", "t");
+		const report = decisionsReport(db, { state: "up", detail: "kev" });
+		assert.match(
+			report,
+			/ {2}1 turns with the thinking model on offer: the chat model asked it in 0 \(and 1 more while it could not be reached: the chat model was told, so they are not compared with it\)\n/,
+		);
+		assert.match(report, / {2}your labels: 1 \(needed in 1\); the chat model's choice agrees on 0 of 0\n/);
+		assert.match(report, / {2}needs_thinking_model: 1 yes · 0 unsure · 0 no;/);
+		assert.match(
+			report,
+			/ {4}against your labels: agrees on 1 of 1 it decided \(0 unsure\)\n/,
+			"Kev is still scored on it",
+		);
+		assert.match(report, new RegExp(`yes, the thinking model not asked:\\n {4}${free!.id!.slice(0, 8)} `));
+		assert.doesNotMatch(report, new RegExp(`${told!.id!.slice(0, 8)} p=`), "not listed as the chat model's miss");
 	});
 
 	test("/decisions scores Kev's two wordings and the chat model's own choice, the latter two on the owner's labels", async () => {
@@ -239,7 +283,7 @@ describe("thinking need (shadow)", () => {
 		assert.match(report, /mode: shadow \(nothing acts on these answers\)/);
 		assert.match(report, /thinking_need: 4 asked · 4 ok · 0 errors · 0 skipped/);
 		assert.match(report, / {2}4 turns with the thinking model on offer: the chat model asked it in 2\n/);
-		assert.match(report, / {2}your labels: 3 \(needed in 2\); the chat model's choice agrees on 1\n/);
+		assert.match(report, / {2}your labels: 3 \(needed in 2\); the chat model's choice agrees on 1 of 3\n/);
 		assert.match(
 			report,
 			/ {2}needs_thinking_model: 2 yes · 0 unsure · 2 no; mean p 0\.50 where asked, 0\.40 where not\n {4}yes where it was not asked 1 · no where it was asked 1 · best threshold p ≥ 0\.20 → 3\/4 agree with the chat model's own choice/,
@@ -271,7 +315,7 @@ describe("thinking need (shadow)", () => {
 		);
 		assert.match(
 			role,
-			/needs_thinking_model=0\.80 yes, asks_for_careful_answer=0\.70 yes → \{"called":true,"calls":1,"answered":1\}/,
+			/needs_thinking_model=0\.80 yes, asks_for_careful_answer=0\.70 yes → \{"called":true,"calls":1,"answered":1,"away":false\}/,
 		);
 	});
 });

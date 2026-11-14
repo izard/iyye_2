@@ -20,6 +20,8 @@
  *   answer is streamed, so a long think never looks like a hang. The turn's
  *   own cancellation stops it.
  * - Bounded by a daily number of answered questions.
+ * - While the other machine is away, the turn is told so before it starts (`Toolkit.note`, 2026-11-14): the
+ *   tool stays declared (a change in the declared tools reprocesses the conversation), a call is still refused.
  * - The session picks the reasoning effort per question (owner decision
  *   2026-10-20): `low`, `medium` or `xhigh`, the levels Qwen3.8's template
  *   knows, sent as `chat_template_kwargs.reasoning_effort`. Left out, it is
@@ -68,6 +70,11 @@ export interface ThinkingDeps {
 	device: { acquire(label: string): Promise<() => void> };
 	complete: ThinkComplete;
 	dailyMax: number;
+	/**
+	 * Why the model cannot be asked right now, in a word or two ("unreachable"); null while it can. It must say
+	 * so exactly when `models.acquire` would refuse: the turn is then told before it calls or promises anything.
+	 */
+	away?: () => string | null;
 	energy?: { deviceTime(kind: "chat", ms: number, ref: string): void } | null;
 	now?: () => Date;
 }
@@ -148,7 +155,23 @@ export function thinkingToolkit(d: ThinkingDeps): Toolkit {
 		description: `a stronger reasoning model on ${d.machine} for hard questions`,
 		effect: "act",
 		tools: [tool],
+		note: () => {
+			const why = d.away?.() ?? null;
+			return why ? thinkingAwayNote(d.machine, why) : null;
+		},
 	};
+}
+
+/**
+ * What a turn is told while the thinking model cannot be asked (2026-11-14: 8 of 35 calls in five weeks found
+ * the other machine away only by calling, some after the reply had been built around its answer).
+ */
+export function thinkingAwayNote(machine: string, why: string): string {
+	return [
+		"<thinking_model>",
+		`The thinking model on ${machine} cannot be asked right now (${machine} is ${why}): a call to ${ASK_THINKING_TOOL} would be refused. Do not call it, and do not say you asked it or that its answer will follow. Answer yourself. If the person asked for the thinking model, tell them it is not available at the moment.`,
+		"</thinking_model>",
+	].join("\n");
 }
 
 /** Questions the thinking model answered since local midnight. */

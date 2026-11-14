@@ -365,6 +365,7 @@ async function main(): Promise<number> {
 							config.remote.thinkingMaxTokens ?? THINKING_MODEL_MAX_TOKENS,
 						),
 						dailyMax: config.remote.thinkingDailyMax,
+						away: () => thinkingRemote.away,
 						energy: thinkingEnergy,
 					})
 				: remote && remoteSpec
@@ -379,6 +380,7 @@ async function main(): Promise<number> {
 								config.remote.thinkingMaxTokens ?? outputCap(registry.defaults, remoteSpec),
 							),
 							dailyMax: config.remote.thinkingDailyMax,
+							away: () => remote.away,
 							energy: thinkingEnergy,
 						})
 					: null;

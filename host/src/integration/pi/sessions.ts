@@ -314,8 +314,20 @@ export class PiConversations {
 			req.view.kind === "background"
 				? (this.d.backgroundNotes?.(req.scope) ?? null)
 				: (this.d.turnNotes?.(req.scope) ?? null);
+		// What a declared toolkit says about itself right now (2026-11-14: the thinking model cannot be reached).
+		let kitNotes: { toolkit: string; text: string }[] = [];
+		try {
+			kitNotes = live.tools?.notes(live.active) ?? [];
+		} catch (err) {
+			this.d.log.warn("pi: a toolkit's note failed", { error: (err as Error).message });
+		}
 		live.recall.block =
-			[await this.recallFor(req), notes, this.d.clockNote ? nowNote(this.d.now()) : null]
+			[
+				await this.recallFor(req),
+				notes,
+				...kitNotes.map((n) => n.text),
+				this.d.clockNote ? nowNote(this.d.now()) : null,
+			]
 				.filter(Boolean)
 				.join("\n\n") || null;
 		const startedAt = this.d.now().toISOString();
@@ -366,6 +378,7 @@ export class PiConversations {
 					principal: req.view.kind,
 					text: req.text,
 					toolkits: (live.tools?.toolkits ?? []).filter((k) => live.active.includes(k.name)),
+					noted: kitNotes.map((n) => n.toolkit),
 					startedAt,
 					endedAt: this.d.now().toISOString(),
 					ok: result.ok,

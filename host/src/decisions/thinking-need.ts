@@ -22,6 +22,10 @@
  *   very thing in question. Who is right is said only by the owner's labels
  *   (`/decisions queue`, `/decisions label`), which live in `decision_labels`
  *   and never replace the record of what happened.
+ * - **A turn told the thinking model was away says nothing about the chat
+ *   model's judgement** (`Toolkit.note`): its outcome is marked `away`, and
+ *   the comparison with the chat model leaves it out. Kev's answer about the
+ *   message still stands, and the owner can still label it.
  * - **Two wordings, one call:** Kev answers each question on its own, so a
  *   second wording costs nothing and the owner's labels can later say which
  *   predicts better. Both were fixed by `scripts/thinking-need-spike.ts` on
@@ -74,6 +78,8 @@ export interface ThinkingNeedOutcome {
 	calls: number;
 	/** How many of the calls the thinking model answered (it may have been away). */
 	answered: number;
+	/** The turn was told beforehand that the thinking model could not be asked: not calling it was no judgement. */
+	away: boolean;
 }
 
 export class ThinkingNeedShadow {
@@ -165,7 +171,12 @@ export class ThinkingNeedShadow {
 			questions: [...NEED_QUESTIONS],
 		});
 		const { calls, answered } = thinkingCalls(this.d.db, turn.scope, turn.startedAt, turn.endedAt);
-		const outcome: ThinkingNeedOutcome = { called: calls > 0, calls, answered };
+		const outcome: ThinkingNeedOutcome = {
+			called: calls > 0,
+			calls,
+			answered,
+			away: turn.noted?.includes(THINKING_TOOLKIT) === true,
+		};
 		this.d.client.recordOutcome(decision.id, outcome, "tool_calls");
 	}
 }

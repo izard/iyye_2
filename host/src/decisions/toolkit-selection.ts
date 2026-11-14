@@ -84,6 +84,8 @@ export interface TurnInfo {
 	text: string;
 	/** The toolkits the session had, in declaration order. */
 	toolkits: ToolkitSummary[];
+	/** The toolkits that told the turn something about themselves (`Toolkit.note`), e.g. that one was unavailable. */
+	noted?: string[];
 	startedAt: string;
 	endedAt: string;
 	ok: boolean;

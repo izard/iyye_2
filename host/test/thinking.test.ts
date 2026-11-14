@@ -208,6 +208,24 @@ describe("ask_thinking_model", () => {
 		);
 	});
 
+	test("while the other machine is away, the sessions that have the tool are told before the turn (2026-11-14)", async () => {
+		let why: string | null = "unreachable";
+		const r = rig({ away: () => why });
+		const [note] = r.tools.notes(["thinking"]);
+		assert.equal(note!.toolkit, "thinking");
+		assert.match(
+			note!.text,
+			/^<thinking_model>\nThe thinking model on mbp cannot be asked right now \(mbp is unreachable\): a call to ask_thinking_model would be refused\. Do not call it, and do not say you asked it or that its answer will follow\. Answer yourself\. If the person asked for the thinking model, tell them it is not available at the moment\.\n<\/thinking_model>$/,
+		);
+		assert.doesNotMatch(note!.text, /\d+\.\d+\.\d+|ECONN/, "a word, never an address or an error text");
+		assert.deepEqual(r.tools.notes([]), [], "only while the toolkit is declared to the model");
+		why = null;
+		assert.deepEqual(r.tools.notes(["thinking"]), [], "nothing to say while it can be asked");
+		assert.deepEqual(rig().tools.notes(["thinking"]), [], "nor when the host cannot tell");
+		// The tool itself is unchanged: still declared, and a call is refused by the lease as before.
+		assert.deepEqual(r.tools.names, ["ask_thinking_model"]);
+	});
+
 	test("the turn's cancellation stops the call", async () => {
 		const ac = new AbortController();
 		const r = rig({

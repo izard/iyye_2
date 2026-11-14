@@ -130,6 +130,12 @@ export interface Toolkit {
 	 * check (investigations, plan steps, the fact ledger's `tool_ref`) can ever be satisfied by it.
 	 */
 	evidence?: boolean;
+	/**
+	 * Something a session that declares this toolkit must know before this turn, such as "it cannot be used
+	 * right now" (2026-11-14); null when there is nothing to say. Read by the host before each turn and shown
+	 * to the model with that request only: never part of the conversation, and never from a model.
+	 */
+	note?: () => string | null;
 }
 
 /** What `tool_calls.result` holds for a toolkit that is not evidence (the full output is kept elsewhere). */
@@ -149,6 +155,8 @@ export interface SessionTools {
 	names: string[];
 	/** The toolkits this session has, in declaration order. */
 	toolkits: ToolkitSummary[];
+	/** What these toolkits (the ones declared to the model) have to say before this turn, in declaration order. */
+	notes(active: readonly string[]): { toolkit: string; text: string }[];
 	/** Called at the start of every turn: resets the per-turn call budget and sets who asked and where. */
 	beginTurn(turn?: TurnContext): void;
 	/** Refuse every further call this turn (a recovery step must answer, not research). */
@@ -238,6 +246,11 @@ export class ToolBroker {
 				effect: k.effect,
 				tools: k.tools.map((t) => `${t.name}: ${t.summary}`),
 			})),
+			notes: (active) =>
+				kits.flatMap((k) => {
+					const text = active.includes(k.name) ? (k.note?.() ?? null) : null;
+					return text ? [{ toolkit: k.name, text }] : [];
+				}),
 			beginTurn: (turn?: TurnContext) => {
 				budget.used = 0;
 				budget.closed = false;
