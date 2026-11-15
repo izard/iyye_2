@@ -95,16 +95,14 @@ interface Rig {
  * A state directory with twelve days of labels: memory salience 4 yes · 4 no a day, and reply review one
  * of each, so the sealed test set is the last four days and memory salience has 24 · 24 in training.
  */
-function rig(days = 12): Rig {
+function rig(days = 12, yes = 4, no = 4): Rig {
 	const stateDir = mkdtempSync(join(tmpdir(), "iyye-train-"));
 	dirs.push(stateDir);
 	const dbPath = join(stateDir, "iyye.db");
 	const db = openDb(dbPath);
 	for (let d = 1; d <= days; d++) {
-		for (let i = 0; i < 4; i++) {
-			labelled(db, d, true);
-			labelled(db, d, false);
-		}
+		for (let i = 0; i < yes; i++) labelled(db, d, true);
+		for (let i = 0; i < no; i++) labelled(db, d, false);
 		labelled(db, d, d % 2 === 0, "reply_review", "claims_arranged");
 	}
 	db.close();
@@ -313,17 +311,20 @@ test("a session: the dataset frozen, only the questions with enough labels train
 		"serving",
 		"scored within what the served model accepts, not the training limit",
 	);
-	const validation = manifest.rows.filter((x) => x.split === "validation");
+	// …on the trained question's validation labels only: reply review's are the released model's business.
+	const validation = manifest.rows.filter((x) => x.split === "validation" && x.role === "memory_salience");
+	assert.ok(manifest.rows.some((x) => x.split === "validation" && x.role === "reply_review"));
 	const labels = validation.map(
 		(x) =>
 			(db.prepare("SELECT value FROM decision_labels WHERE decision_id = ?").get(x.id) as { value: number })
 				.value === 1,
 	);
 	const expected = fitTemperature(labels.map((label) => ({ margin: 2, label })))!;
-	assert.equal(a!.temperature, expected.temperature);
-	assert.deepEqual(JSON.parse(String(a!.calibration_json)), expected);
+	assert.deepEqual(JSON.parse(String(a!.calibration_json)), expected, "the fit is kept as it came out");
 	assert.equal(expected.n, validation.length);
-	assert.ok(expected.temperature > 1, "an overconfident scorer is cooled");
+	// Sixteen labels, and a scorer that says "yes" to all of them: the fit runs to the top of the range.
+	assert.deepEqual([expected.n, expected.at_bound, expected.reliable], [16, true, false]);
+	assert.equal(a!.temperature, null, "a fit that cannot be relied on registers no temperature");
 	assert.doesNotMatch(manifestText, /temperature/, "never written into the candidate");
 
 	// The sealed test set was created, and not read: no look.
@@ -334,7 +335,7 @@ test("a session: the dataset frozen, only the questions with enough labels train
 	assert.ok(unlocked(r));
 	assert.match(
 		r.lines.at(-1)!,
-		/^candidate \S+ registered: 54 step\(s\).*temperature \d\.\d\d fitted on \d+ validation label\(s\).*It is not evaluated, served or active\.$/,
+		/^candidate \S+ registered: 54 step\(s\) in [\d.]+ min; no temperature registered: the fit, 4\.00 on 16 validation label\(s\) of the trained question\(s\) \(mean NLL [\d.]+ → [\d.]+\), cannot be relied on \(only 16 validation label\(s\), 30 are needed and it sits at the edge of the range tried\)\. It is not evaluated, served or active\.$/,
 	);
 
 	const report = learningReport(db, r.deps().settings, at(12, 21));
@@ -343,7 +344,7 @@ test("a session: the dataset frozen, only the questions with enough labels train
 	assert.match(
 		report,
 		new RegExp(
-			`candidate ${a!.id}: trained on memory_salience worth_remembering \\(24 yes · 24 no\\); 54 step\\(s\\), [\\d.]+ min; temperature \\d\\.\\d\\d on ${expected.n} validation label\\(s\\)`,
+			`candidate ${a!.id}: trained on memory_salience worth_remembering \\(24 yes · 24 no\\); 54 step\\(s\\), [\\d.]+ min; no temperature registered: the fit, 4\\.00 on 16 validation label\\(s\\) of the trained question\\(s\\)`,
 		),
 	);
 	assert.match(report, /registry: 1 candidate\. A candidate is not evaluated, served or active/);
@@ -356,6 +357,48 @@ test("a session: the dataset frozen, only the questions with enough labels train
 		["skipped", "0 owner label(s) since the last candidate; 30 are needed"],
 	);
 	assert.equal(r.calls().length, 2);
+});
+
+test("with enough validation labels of the trained question and a fit inside the range, the temperature is registered", async () => {
+	// Forty days, memory salience 6 yes · 2 no a day: the validation days hold 30 or more of its labels.
+	const r = rig(40, 6, 2);
+	const res = await runTrainingSession(r.deps({ now: () => at(40, 20) }));
+	assert.equal(res.outcome, "candidate");
+	const db = r.db();
+	const [a] = artifacts(db);
+	const fit = JSON.parse(String(a!.calibration_json)) as {
+		temperature: number;
+		n: number;
+		at_bound: boolean;
+		reliable: boolean;
+	};
+	assert.ok(fit.n >= 30, `${fit.n} labels`);
+	// The scorer says "yes" at a raw margin of 2 to everything and three in four are yes: the temperature that
+	// makes 0.88 into 0.75 is 2 / ln 3, and the fit is the grid point next to it.
+	assert.ok(Math.abs(fit.temperature - 2 / Math.log(3)) < 0.03, String(fit.temperature));
+	assert.deepEqual([fit.at_bound, fit.reliable], [false, true]);
+	assert.equal(a!.temperature, fit.temperature);
+	assert.match(
+		r.lines.at(-1)!,
+		new RegExp(
+			`; temperature 1\\.8\\d on ${fit.n} validation label\\(s\\) of the trained question\\(s\\) \\(mean NLL`,
+		),
+	);
+	// A fit recorded the old way (every question, registered as it came) is shown as that.
+	db.prepare("UPDATE decision_training_sessions SET summary_json = ? WHERE artifact_id = ?").run(
+		JSON.stringify({
+			trained: [],
+			steps: 58,
+			minutes: 3.6,
+			calibration: { temperature: 4, n: 23, nll_raw: 0.94, nll_fitted: 0.661 },
+		}),
+		a!.id,
+	);
+	assert.match(
+		learningReport(db, r.deps().settings, at(40, 21)),
+		/temperature 4\.00 on 23 validation label\(s\) of every question, trained on or not \(mean NLL 0\.940 → 0\.661\): fitted the old way, do not rely on it/,
+	);
+	db.close();
 });
 
 test("long states: the training limit is passed on, and what the trainer still left out is recorded and said (2026-11-15)", async () => {
@@ -582,6 +625,11 @@ test("the temperature is Kev's fit: the grid point with the lowest mean NLL, fro
 	])!;
 	assert.ok(Math.abs(wrong.temperature - 4) < 1e-9);
 	assert.ok(wrong.nll_fitted < wrong.nll_raw);
+	assert.deepEqual(
+		[wrong.at_bound, wrong.reliable],
+		[true, false],
+		"at an end of the grid the best temperature may lie beyond it",
+	);
 	// In between: the fit is the best of the 121 grid points, checked by brute force.
 	const rows = [3, 2.5, 4, 1, -2, 3.5, -3, 2, 0.5, -1].map((margin, i) => ({ margin, label: i % 3 !== 0 }));
 	const fit = fitTemperature(rows)!;
@@ -590,6 +638,9 @@ test("the temperature is Kev's fit: the grid point with the lowest mean NLL, fro
 	assert.equal(fit.temperature, best);
 	assert.ok(fit.temperature > 0.25 && fit.temperature < 4);
 	assert.equal(fit.n, 10);
+	assert.deepEqual([fit.at_bound, fit.reliable], [false, false], "ten labels are too few, wherever the fit lands");
+	const many = fitTemperature([...rows, ...rows, ...rows])!;
+	assert.deepEqual([many.n, many.temperature, many.reliable], [30, fit.temperature, true]);
 	// A probability's margin is its log-odds, floored away from 0 and 1.
 	assert.ok(Math.abs(marginOf(1 / (1 + Math.exp(-2))) - 2) < 1e-9);
 	assert.ok(Number.isFinite(marginOf(0)) && Number.isFinite(marginOf(1)));

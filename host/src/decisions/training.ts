@@ -60,7 +60,7 @@ import {
 	planDataset,
 	writeDataset,
 } from "./dataset.ts";
-import { fitTemperature, marginOf, type RawAnswer, type TemperatureFit } from "./temperature.ts";
+import { fitTemperature, MIN_FIT_LABELS, marginOf, type RawAnswer, type TemperatureFit } from "./temperature.ts";
 
 export const TRAINING_HOLDER = "a decision training session";
 
@@ -367,15 +367,47 @@ interface Prediction {
 	logits?: Record<string, Record<string, number>> | null;
 }
 
-/** The validation labels joined to the candidate's raw answers, by record id and question. */
-export function rawAnswers(validationJsonl: string, predictions: readonly Prediction[]): RawAnswer[] {
+/** Why a fit is not one to serve with, in words. */
+function unreliable(fit: TemperatureFit): string {
+	return [
+		fit.n < MIN_FIT_LABELS ? `only ${fit.n} validation label(s), ${MIN_FIT_LABELS} are needed` : null,
+		fit.at_bound ? "it sits at the edge of the range tried" : null,
+	]
+		.filter(Boolean)
+		.join(" and ");
+}
+
+/** What the calibration came to, for the owner. */
+function calibrationText(fit: TemperatureFit | null): string {
+	if (!fit) return "no validation labels of the trained question(s), so no temperature was fitted";
+	const nll = `(mean NLL ${fit.nll_raw.toFixed(3)} → ${fit.nll_fitted.toFixed(3)})`;
+	// A fit recorded before 2026-11-15 used every validation question and was registered as it came.
+	if (fit.reliable === undefined)
+		return `temperature ${fit.temperature.toFixed(2)} on ${fit.n} validation label(s) of every question, trained on or not ${nll}: fitted the old way, do not rely on it`;
+	const figures = `${fit.temperature.toFixed(2)} on ${fit.n} validation label(s) of the trained question(s) ${nll}`;
+	return fit.reliable
+		? `temperature ${figures}`
+		: `no temperature registered: the fit, ${figures}, cannot be relied on (${unreliable(fit)})`;
+}
+
+/** The validation labels joined to the candidate's raw answers, by record id and question (some questions only, if asked). */
+export function rawAnswers(
+	validationJsonl: string,
+	predictions: readonly Prediction[],
+	keep: (role: string, question: string) => boolean = () => true,
+): RawAnswer[] {
 	const byId = new Map(predictions.map((p) => [p.id, p]));
 	const rows: RawAnswer[] = [];
 	for (const line of validationJsonl.split("\n").filter(Boolean)) {
-		const r = JSON.parse(line) as { _meta: { id: string }; questions: Record<string, { label: boolean }> };
+		const r = JSON.parse(line) as {
+			_meta: { id: string; source: string };
+			questions: Record<string, { label: boolean }>;
+		};
 		const p = byId.get(r._meta.id);
 		if (!p) throw new Failed(`the scorer gave no answer for a validation record`);
+		const role = r._meta.source.replace(/^iyye_/, "");
 		for (const [q, { label }] of Object.entries(r.questions)) {
+			if (!keep(role, q)) continue;
 			const z = p.logits?.[q];
 			const yes = p.probabilities[q]?.true;
 			if (z && typeof z.true === "number" && typeof z.false === "number")
@@ -553,7 +585,13 @@ export async function runTrainingSession(d: SessionDeps): Promise<SessionResult>
 			if (scored.code !== 0)
 				throw new Failed(`the scorer exited ${scored.code}: ${tail(scored.stderr) || "no message"}`);
 			const answers = JSON.parse(readFileSync(out, "utf8")) as { predictions: Prediction[] };
-			fit = fitTemperature(rawAnswers(readFileSync(files.files.validation!, "utf8"), answers.predictions));
+			// Only the questions it was trained on: what it answers about the others is the released model's
+			// doing, right or wrong, and must not set the temperature of what it learned (2026-11-15).
+			fit = fitTemperature(
+				rawAnswers(readFileSync(files.files.validation!, "utf8"), answers.predictions, (role, q) =>
+					wanted.has(`${role}|${q}`),
+				),
+			);
 		}
 		stopIfAsked();
 
@@ -588,7 +626,8 @@ export async function runTrainingSession(d: SessionDeps): Promise<SessionResult>
 					frozen.hash,
 					candidate.manifestSha256,
 					JSON.stringify(questions),
-					fit?.temperature ?? null,
+					// A temperature is registered only when the fit can be relied on; the fit itself is always kept.
+					fit?.reliable ? fit.temperature : null,
 					fit ? JSON.stringify(fit) : null,
 					JSON.stringify(training),
 					sessionId,
@@ -603,9 +642,7 @@ export async function runTrainingSession(d: SessionDeps): Promise<SessionResult>
 		candidateDir = null; // registered: it stays
 		say(
 			`candidate ${candidate.id} registered: ${steps} step(s) in ${training.minutes} min; ` +
-				(fit
-					? `temperature ${fit.temperature.toFixed(2)} fitted on ${fit.n} validation label(s) (mean NLL ${fit.nll_raw.toFixed(3)} → ${fit.nll_fitted.toFixed(3)})`
-					: "no validation labels, so no temperature was fitted") +
+				calibrationText(fit) +
 				". It is not evaluated, served or active.",
 		);
 		return { outcome: "candidate", reason: null, sessionId, artifactId: candidate.id, exitCode: 0 };
@@ -670,9 +707,7 @@ export function learningReport(
 			};
 			lines.push(
 				`  ${when}Z candidate ${r.artifact_id}: trained on ${named(sum.trained ?? [])}; ${sum.steps} step(s), ${sum.minutes} min; ` +
-					(sum.calibration
-						? `temperature ${sum.calibration.temperature.toFixed(2)} on ${sum.calibration.n} validation label(s)`
-						: "not calibrated"),
+					calibrationText(sum.calibration ?? null),
 			);
 		} else lines.push(`  ${when}Z ${r.outcome ?? "running, or killed"}${r.reason ? `: ${r.reason}` : ""}`);
 	}
