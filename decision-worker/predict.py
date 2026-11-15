@@ -75,7 +75,8 @@ def main() -> int:
     rows = []
     for r in load_records(a.records):
         p = predictor(r)
-        rows.append({"id": r["_meta"]["id"], "probabilities": p["probabilities"], "latency_ms": round(p["latency_ms"], 1)})
+        # The logits too: a temperature is fitted on raw logits (host/src/decisions/temperature.ts), exactly as Kev fits its own.
+        rows.append({"id": r["_meta"]["id"], "probabilities": p["probabilities"], "logits": p.get("logits"), "latency_ms": round(p["latency_ms"], 1)})
     out = {
         "run": path,
         "venv": str(Path(sys.executable).parent.parent),

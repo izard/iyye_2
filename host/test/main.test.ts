@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -75,6 +75,33 @@ test("a second host on the same state directory refuses to start", async () => {
 	assert.match(second.stderr(), /another Iyye host/);
 	first.child.kill("SIGTERM");
 	assert.equal(await first.exit, 0);
+});
+
+test("a host refuses to start while a decision training session holds the lock, and starts once it is gone (plan 0.017 N3)", async () => {
+	// The session's lock, as `process/host-lock.ts` writes it, held by a process that is alive.
+	const session = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+	writeFileSync(join(sb.stateDir, "host.lock"), String(session.pid));
+	writeFileSync(join(sb.stateDir, "host.lock.who"), "a decision training session\n");
+	const refused = await startHost(sb);
+	assert.equal(await refused.exit, 3);
+	assert.match(
+		refused.stderr(),
+		new RegExp(`a decision training session \\(pid ${session.pid}\\) holds .*: wait for it to finish, or stop it`),
+	);
+	assert.equal(
+		readFileSync(join(sb.stateDir, "host.lock"), "utf8"),
+		String(session.pid),
+		"the lock is the session's still",
+	);
+	session.kill("SIGKILL");
+	await new Promise((r) => session.once("exit", r));
+	const host = await startHost(sb);
+	await waitFor(() => host.stderr().includes("iyye host ready"), 15_000);
+	assert.equal(readFileSync(join(sb.stateDir, "host.lock.who"), "utf8").trim(), "the Iyye host");
+	host.child.kill("SIGTERM");
+	assert.equal(await host.exit, 0);
+	assert.equal(existsSync(join(sb.stateDir, "host.lock")), false);
+	assert.equal(existsSync(join(sb.stateDir, "host.lock.who")), false);
 });
 
 test("invalid configuration exits with code 2 and a clear message", async () => {

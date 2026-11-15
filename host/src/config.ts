@@ -209,6 +209,27 @@ export interface Config {
 		labelsDaily: number;
 		/** Plan 0.017 N2: how often a sealed test set may be looked at before it is retired (IYYE2_TEST_LOOKS). */
 		testLooks: number;
+		/**
+		 * Plan 0.017 N3: the offline training session (`scripts/decisions-train.ts`, run while the host is stopped).
+		 * `policy` off (IYYE2_DECISION_TRAINING): the session does nothing.
+		 */
+		training: {
+			policy: "off" | "on";
+			/** Owner labels that must have arrived since the last candidate (IYYE2_TRAIN_MIN_NEW_LABELS). */
+			minNewLabels: number;
+			/** Labels of each class a question needs in training to be trained on (IYYE2_TRAIN_MIN_PER_CLASS). */
+			minPerClass: number;
+			/** The trainer's wall-time budget in minutes (IYYE2_TRAIN_MAX_MIN). */
+			maxMinutes: number;
+			/** Memory that must be available before training starts, in GB (IYYE2_TRAIN_MIN_FREE_GB): N0's 54 GB peak plus a margin. */
+			minFreeGb: number;
+			/** Passes over the mix of own and replay records (IYYE2_TRAIN_EPOCHS). */
+			epochs: number;
+			/** Records of Kev's own suite mixed in per own example (IYYE2_TRAIN_REPLAY; 0: no replay). */
+			replayPerExample: number;
+			/** Drop records whose state is longer than this many tokens (IYYE2_TRAIN_MAX_STATE; 0: Kev's own limit). */
+			maxState: number;
+		};
 	};
 }
 
@@ -469,6 +490,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			toolkitSelection: oneOf(env, "IYYE2_TOOLKIT_SELECTION", ["act", "shadow"], "act"),
 			labelsDaily: int(env, "IYYE2_LABELS_DAILY", 15, 0, 200),
 			testLooks: int(env, "IYYE2_TEST_LOOKS", 5, 1, 100),
+			training: {
+				policy: oneOf(env, "IYYE2_DECISION_TRAINING", ["off", "on"] as const, "off"),
+				minNewLabels: int(env, "IYYE2_TRAIN_MIN_NEW_LABELS", 30, 0, 100_000),
+				minPerClass: int(env, "IYYE2_TRAIN_MIN_PER_CLASS", 20, 1, 100_000),
+				maxMinutes: int(env, "IYYE2_TRAIN_MAX_MIN", 30, 1, 600),
+				minFreeGb: int(env, "IYYE2_TRAIN_MIN_FREE_GB", 64, 1, 4096),
+				epochs: int(env, "IYYE2_TRAIN_EPOCHS", 3, 1, 100),
+				replayPerExample: int(env, "IYYE2_TRAIN_REPLAY", 2, 0, 100),
+				maxState: int(env, "IYYE2_TRAIN_MAX_STATE", 0, 0, 8192),
+			},
 		},
 	};
 }

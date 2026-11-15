@@ -13,7 +13,7 @@
  * console on the host's terminal.
  */
 
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -44,6 +44,7 @@ import { decisionsReport, roleReport } from "./decisions/report.ts";
 import { DecisionService } from "./decisions/service.ts";
 import { ThinkingNeedShadow } from "./decisions/thinking-need.ts";
 import { ToolkitSelectionShadow, ToolkitSelector } from "./decisions/toolkit-selection.ts";
+import { learningReport } from "./decisions/training.ts";
 import { auditUntracedCitations, ensureBeliefTimelines } from "./facts/beliefs.ts";
 import { FactsCommand } from "./facts/commands.ts";
 import { extractionComplete, FactExtractor, routerComplete } from "./facts/extractor.ts";
@@ -80,7 +81,7 @@ import { ModelManager } from "./models/manager.ts";
 import { systemMemoryProbe } from "./models/memory.ts";
 import { loadRegistry, RegistryError } from "./models/registry.ts";
 import { addRemoteModel, RemoteConfigError, RemoteModels, secretFile } from "./models/remote.ts";
-import { pidAlive, RouterProcess } from "./models/router.ts";
+import { RouterProcess } from "./models/router.ts";
 import { MotivationActor, motivationNamed } from "./motivation/actor.ts";
 import { InitiativeLedger, SHARES } from "./motivation/budget.ts";
 import { makeComposer } from "./motivation/compose.ts";
@@ -102,6 +103,7 @@ import { type ChannelAdapter, Outbox } from "./outbox/outbox.ts";
 import { inUsualHours, usualHoursFor } from "./people/card.ts";
 import { newContactKey, newContactNoticeToday, People, personNoteFor } from "./people/people.ts";
 import { guardClientRequests } from "./process/client-requests.ts";
+import { acquireHostLock, HOST, releaseHostLock } from "./process/host-lock.ts";
 import { Sandbox } from "./sandbox/sandbox.ts";
 import { SelfExpectations } from "./self/expectations.ts";
 import { Maintenance } from "./self/maintain.ts";
@@ -166,7 +168,16 @@ async function main(): Promise<number> {
 		throw err;
 	}
 	mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
-	if (!acquireHostLock(config.stateDir, log)) return 3;
+	const lock = acquireHostLock(config.stateDir);
+	if (!lock.ok) {
+		// A training session holds it too (plan 0.017 N3): never beside a host.
+		log.error(
+			lock.who === HOST
+				? `another Iyye host (pid ${lock.pid}) is using ${config.stateDir}`
+				: `${lock.who} (pid ${lock.pid}) holds ${config.stateDir}: wait for it to finish, or stop it (SIGTERM; its candidate is discarded), then start Iyye again`,
+		);
+		return 3;
+	}
 
 	const db = openDb(join(config.stateDir, "iyye.db"));
 	// Plan 0.013 E1: belief date ranges, rebuilt once from the evidence (migration 033 dated it).
@@ -1373,6 +1384,9 @@ async function main(): Promise<number> {
 				if (!Number.isInteger(n) || n < 1) return "usage: /decisions queue [n]";
 				return queueReport(db, n, config.decisions.labelsDaily, new Date());
 			}
+			// Plan 0.017 N3: the offline training sessions and what the registry holds (records only).
+			if (args[0] === "learning")
+				return learningReport(db, { ...config.decisions.training, testLooks: config.decisions.testLooks });
 			// Plan 0.017 N2: what a dataset cut now would hold, in counts. Nothing is frozen and no test row is read out.
 			if (args[0] === "dataset")
 				return describeDataset(
@@ -1729,28 +1743,6 @@ function startOwnerConsole(
 		rl.prompt();
 	});
 	rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"));
-}
-
-/** One host per state directory: two would fight over the router and the database. */
-function acquireHostLock(stateDir: string, log: Logger): boolean {
-	const lock = join(stateDir, "host.lock");
-	try {
-		writeFileSync(lock, String(process.pid), { flag: "wx" });
-		return true;
-	} catch {
-		const pid = Number(readFileSync(lock, "utf8"));
-		// pid <= 1 (e.g. an empty lock file) is stale: kill(0, 0) would "succeed" for our own group.
-		if (Number.isInteger(pid) && pid > 1 && pid !== process.pid && pidAlive(pid)) {
-			log.error(`another Iyye host (pid ${pid}) is using ${stateDir}`);
-			return false;
-		}
-		writeFileSync(lock, String(process.pid));
-		return true;
-	}
-}
-
-function releaseHostLock(stateDir: string): void {
-	rmSync(join(stateDir, "host.lock"), { force: true });
 }
 
 main().then(

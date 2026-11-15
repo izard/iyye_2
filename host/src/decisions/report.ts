@@ -98,7 +98,7 @@ export function decisionsReport(
 	lines.push("", ...labelCountLines(db));
 	lines.push(
 		"",
-		"more: /decisions <role> (recent answers) · /decisions queue [n] (today's questions for you) · /decisions label <id> [question] yes|no|skip · /decisions dataset (what a training set would hold)",
+		"more: /decisions <role> (recent answers) · /decisions queue [n] (today's questions for you) · /decisions label <id> [question] yes|no|skip · /decisions dataset (what a training set would hold) · /decisions learning (training sessions)",
 	);
 	return lines.join("\n");
 }

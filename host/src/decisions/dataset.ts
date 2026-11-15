@@ -718,7 +718,12 @@ export function writeDataset(
 	db: Db,
 	id: string,
 	dir: string,
-	opts: { test?: { by: string; purpose: string }; now?: Date } = {},
+	opts: {
+		test?: { by: string; purpose: string };
+		/** Which questions the training file holds (a session trains only the questions with enough labels). */
+		train?: (role: string, question: string) => boolean;
+		now?: Date;
+	} = {},
 ): { files: Partial<Record<Split, string>>; counts: Partial<Record<Split, number>> } {
 	const ds = getDataset(db, id);
 	if (!ds) throw new DatasetRefused(`no dataset ${id}`);
@@ -747,6 +752,20 @@ export function writeDataset(
 		splits.push("test");
 	}
 	const records = datasetRecords(db, manifest, splits);
+	const keep = opts.train;
+	if (keep)
+		records.set(
+			"train",
+			records
+				.get("train")!
+				.map((r) => ({
+					...r,
+					questions: Object.fromEntries(
+						Object.entries(r.questions).filter(([q]) => keep(r._meta.source.replace(/^iyye_/, ""), q)),
+					),
+				}))
+				.filter((r) => Object.keys(r.questions).length > 0),
+		);
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	chmodSync(dir, 0o700);
 	const files: Partial<Record<Split, string>> = {};
