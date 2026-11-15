@@ -55,11 +55,14 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--dtype", choices=["bf16", "fp32"], default="bf16", help="bf16: as kev.serve loads on CUDA; fp32: Kev's exact path")
     ap.add_argument("--raw", action="store_true", help="temperature 1 (raw logits): compares weights, not calibrations")
+    ap.add_argument("--context", choices=["training", "serving"], default="training",
+                    help="the limits a record must fit: training (384-token states, Kev's suites) or serving (what kev.serve accepts: Iyye's own states are often longer than 384 tokens)")
     a = ap.parse_args()
     import torch
     from kev.checkpoint import LoadOptions, resolve_run
     from kev.data import load_records
     from kev.predictors import LocalPredictor
+    from kev.suite import CONTEXT, SERVING_CONTEXT
 
     run = Path(a.run)
     if (run / "manifest.json").exists():
@@ -70,7 +73,8 @@ def main() -> int:
             return 4
     path = resolve_run(str(run))
     t0 = time.monotonic()
-    predictor = LocalPredictor(path, "cuda", LoadOptions(dtype=torch.bfloat16 if a.dtype == "bf16" else torch.float32, temperature=1.0 if a.raw else None))
+    predictor = LocalPredictor(path, "cuda", LoadOptions(dtype=torch.bfloat16 if a.dtype == "bf16" else torch.float32, temperature=1.0 if a.raw else None),
+                               context=SERVING_CONTEXT if a.context == "serving" else CONTEXT)
     load_s = time.monotonic() - t0
     rows = []
     for r in load_records(a.records):
@@ -81,6 +85,7 @@ def main() -> int:
         "run": path,
         "venv": str(Path(sys.executable).parent.parent),
         "dtype": a.dtype,
+        "context": a.context,
         "fla": importlib.util.find_spec("fla") is not None,
         "kernels": predictor.environment,
         "temperature": predictor.temperature,

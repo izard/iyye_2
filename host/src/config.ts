@@ -227,7 +227,11 @@ export interface Config {
 			epochs: number;
 			/** Records of Kev's own suite mixed in per own example (IYYE2_TRAIN_REPLAY; 0: no replay). */
 			replayPerExample: number;
-			/** Drop records whose state is longer than this many tokens (IYYE2_TRAIN_MAX_STATE; 0: Kev's own limit). */
+			/**
+			 * The longest state trained on, in tokens (IYYE2_TRAIN_MAX_STATE; 0: Kev's own 384). Kev's trainer silently
+			 * leaves out longer records; on 2026-11-15 the longest labelled state was 1,195 tokens (a reply review),
+			 * and 26 of 169 labelled examples were over 384.
+			 */
 			maxState: number;
 		};
 	};
@@ -498,7 +502,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 				minFreeGb: int(env, "IYYE2_TRAIN_MIN_FREE_GB", 64, 1, 4096),
 				epochs: int(env, "IYYE2_TRAIN_EPOCHS", 3, 1, 100),
 				replayPerExample: int(env, "IYYE2_TRAIN_REPLAY", 2, 0, 100),
-				maxState: int(env, "IYYE2_TRAIN_MAX_STATE", 0, 0, 8192),
+				maxState: int(env, "IYYE2_TRAIN_MAX_STATE", 2048, 0, 8192),
 			},
 		},
 	};

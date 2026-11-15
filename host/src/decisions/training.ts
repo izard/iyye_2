@@ -32,7 +32,7 @@
  *    (decision 6), within the time budget. A stop request (SIGTERM, Ctrl-C)
  *    is passed on at once; the trainer discards its work in under a second.
  * 8. **Calibration:** the candidate scores the validation file at temperature
- *    1 (`predict.py --raw`, the serving environment) and a temperature is
+ *    1 (`predict.py --raw --context serving`, the serving environment and its limits) and a temperature is
  *    fitted on that alone (`temperature.ts`). It is recorded in the registry,
  *    never written into the candidate (that would void its manifest).
  * 9. **Registration:** one transaction writes the candidate (`decision_artifacts`,
@@ -346,6 +346,21 @@ function checkCandidate(
 	return { id, dir, manifestSha256: createHash("sha256").update(text).digest("hex"), manifest };
 }
 
+/**
+ * How many records Kev's trainer left out because their state is longer than the training limit: it only
+ * says so in its log ("dropped 3 of 153 records that exceed the training context"). Null when the log is not there.
+ */
+function droppedRecords(candidateDir: string): number | null {
+	let log: string;
+	try {
+		log = readFileSync(join(candidateDir, "train.log"), "utf8");
+	} catch {
+		return null;
+	}
+	const m = /^dropped (\d+) of \d+ records that exceed the training context/m.exec(log);
+	return m ? Number(m[1]) : 0;
+}
+
 interface Prediction {
 	id: string;
 	probabilities: Record<string, Record<string, number>>;
@@ -518,7 +533,19 @@ export async function runTrainingSession(d: SessionDeps): Promise<SessionResult>
 			const out = join(exportDir, "validation-raw.json");
 			const scored = await run(
 				d.predictCommand,
-				["--run", candidate.dir, "--records", files.files.validation!, "--out", out, "--raw"],
+				// The serving limits, not the training ones: a temperature is for what the served model answers, and it
+				// answers states far longer than the 384 tokens a strict training-context scorer refuses (2026-11-15).
+				[
+					"--run",
+					candidate.dir,
+					"--records",
+					files.files.validation!,
+					"--out",
+					out,
+					"--raw",
+					"--context",
+					"serving",
+				],
 				d.env,
 				d.signal,
 			);
@@ -531,9 +558,15 @@ export async function runTrainingSession(d: SessionDeps): Promise<SessionResult>
 		stopIfAsked();
 
 		const at = now().toISOString();
+		const dropped = droppedRecords(candidate.dir);
+		if (dropped)
+			say(
+				`${dropped} record(s) were longer than the training limit and were not trained on (IYYE2_TRAIN_MAX_STATE, now ${s.maxState || "Kev's 384"} tokens)`,
+			);
 		const training = {
 			steps,
 			own_examples: own,
+			dropped_records: dropped,
 			replay_records: replay,
 			epochs: s.epochs,
 			max_state: s.maxState || null,

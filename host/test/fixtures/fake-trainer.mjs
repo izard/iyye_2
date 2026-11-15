@@ -47,6 +47,13 @@ if (mode === "hang") {
 	process.exit(0);
 } else {
 	writeFileSync(join(partial, "run", "head.pt"), "weights");
+	// kev.train says what it left out only in its log, which the wrapper keeps beside the run.
+	writeFileSync(
+		join(partial, "train.log"),
+		process.env.FAKE_DROPPED
+			? `loading\ndropped ${process.env.FAKE_DROPPED} of 147 records that exceed the training context (384 state / 1024 branch / 2048 packed tokens)\nstep 1\n`
+			: "loading\nstep 1\n",
+	);
 	const sha = createHash("sha256").update(readFileSync(data)).digest("hex");
 	const manifest = {
 		id,

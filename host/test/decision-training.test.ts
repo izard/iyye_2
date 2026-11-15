@@ -287,7 +287,8 @@ test("a session: the dataset frozen, only the questions with enough labels train
 		[arg(train!, "--replay"), arg(train!, "--steps"), arg(train!, "--max-minutes")],
 		["96", "54", "30"],
 	);
-	assert.equal(train!.args.includes("--max-state"), false);
+	assert.equal(train!.args.includes("--max-state"), false, "0: Kev's own limit");
+	assert.equal(JSON.parse(String(a!.training_json)).dropped_records, 0);
 	assert.deepEqual(JSON.parse(String(a!.training_json)).resources, {
 		status: "ok",
 		wall_s: 1.5,
@@ -307,6 +308,11 @@ test("a session: the dataset frozen, only the questions with enough labels train
 
 	// Calibration: the scorer saw the candidate and the validation file, raw; the fit is Kev's rule on its answers.
 	assert.deepEqual([predict!.tool, arg(predict!, "--run"), predict!.args.includes("--raw")], ["predict", dir, true]);
+	assert.equal(
+		arg(predict!, "--context"),
+		"serving",
+		"scored within what the served model accepts, not the training limit",
+	);
 	const validation = manifest.rows.filter((x) => x.split === "validation");
 	const labels = validation.map(
 		(x) =>
@@ -350,6 +356,28 @@ test("a session: the dataset frozen, only the questions with enough labels train
 		["skipped", "0 owner label(s) since the last candidate; 30 are needed"],
 	);
 	assert.equal(r.calls().length, 2);
+});
+
+test("long states: the training limit is passed on, and what the trainer still left out is recorded and said (2026-11-15)", async () => {
+	const r = rig();
+	const res = await runTrainingSession(r.deps({}, { maxState: 2048 }, { FAKE_DROPPED: "3" }));
+	assert.equal(res.outcome, "candidate");
+	const [train] = r.calls();
+	assert.equal(train!.args[train!.args.indexOf("--max-state") + 1], "2048");
+	const db = r.db();
+	const training = JSON.parse(String(artifacts(db)[0]!.training_json)) as {
+		dropped_records: number;
+		max_state: number;
+	};
+	assert.deepEqual([training.dropped_records, training.max_state], [3, 2048]);
+	db.close();
+	assert.ok(
+		r.lines.some((l) =>
+			/^3 record\(s\) were longer than the training limit and were not trained on \(IYYE2_TRAIN_MAX_STATE, now 2048 tokens\)$/.test(
+				l,
+			),
+		),
+	);
 });
 
 test("a stop during training ends the session within a second, with nothing registered and nothing left (§15 #19)", async () => {

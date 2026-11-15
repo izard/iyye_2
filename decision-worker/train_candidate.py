@@ -89,10 +89,10 @@ def main() -> int:
     ap.add_argument("--label", default="", help="a short note kept in the manifest")
     ap.add_argument("--suite", default="", help="a provisioned frozen suite (provision_suite.py) to draw --replay records from")
     ap.add_argument("--replay", type=int, default=0, help="mix in this many of the suite's training records (Kev's own recipe), so the delta does not forget it")
-    ap.add_argument("--max-state", type=int, default=0, help="drop records whose state is longer than this many tokens (bounds memory: the suite's long states peaked at 53 GB)")
+    ap.add_argument("--max-state", type=int, default=0, help="the longest state trained on, in tokens (0: Kev's 384); kev.train leaves longer records out and says so only in its log")
     a = ap.parse_args()
-    if a.max_state and not 256 <= a.max_state <= 8192:
-        ap.error("--max-state 256..8192")
+    if a.max_state and not 384 <= a.max_state <= 8192:
+        ap.error("--max-state 384..8192 (384 is Kev's own training limit)")
     if bool(a.suite) != bool(a.replay) or not 0 <= a.replay <= 20000:
         ap.error("--suite and --replay go together (--replay 1..20000)")
     if not 1 <= a.steps <= 2000 or not 0 < a.max_minutes <= 600 or not 0 < a.lr <= 1e-3:
