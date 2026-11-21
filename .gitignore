@@ -19,3 +19,11 @@ __pycache__/
 # Markdown stays local; only the root README is published.
 *.md
 !/README.md
+
+# Local only: 1.x reference snippets and the Spark's (Linux aarch64, CUDA) environment locks and builders.
+/iyye_legacy/
+/decision-worker/*-linux-aarch64.lock
+/decision-worker/train-env.sh
+/decision-worker/convert-env.sh
+/memory/*-linux-aarch64*.lock
+/memory/pg-linux-aarch64.lock
